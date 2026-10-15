@@ -218,3 +218,35 @@ export function fillEdit(layers: LayerView[], fill: number): EditRequest | null 
 export function styleEdit(id: number, style: LayerStyle | null): EditRequest {
   return { kind: "setLayerStyle", id, style: style && simplified(style) };
 }
+
+/** Whether `style`'s effects show (the eye of the layers panel's "Effects" row). */
+export function effectsShown(style: LayerStyle | null | undefined): boolean {
+  return style?.effectsVisible !== false;
+}
+
+/** `style` with its effects shown or hidden, each keeping its own setting. */
+export function withEffectsVisible(style: LayerStyle, visible: boolean): LayerStyle {
+  return { ...style, effectsVisible: visible };
+}
+
+/**
+ * What Layer > Layer Style offers for every layer's effects (`layers`, groups' included), as
+ * Photoshop's one command: Hide All Effects while some show, Show All Effects once they are all
+ * hidden, nothing when no layer has effects.
+ */
+export function allEffectsCommand(layers: LayerView[]): "hide" | "show" | null {
+  let hidden = false;
+  const visit = (list: LayerView[]): boolean =>
+    list.some((layer) => {
+      if (effectsOf(layer.style).length > 0) {
+        if (effectsShown(layer.style)) return true;
+        hidden = true;
+      }
+      return visit(layer.children);
+    });
+  if (visit(layers)) return "hide";
+  return hidden ? "show" : null;
+}
+
+/** Scale Effects' range, percent (Photoshop's; `MIN_EFFECTS_SCALE` in style.rs). */
+export const EFFECTS_SCALE = { min: 1, max: 1000 } as const;

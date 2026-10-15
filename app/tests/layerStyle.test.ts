@@ -3,14 +3,17 @@ import assert from "node:assert/strict";
 import type { LayerView } from "../src/lib/engine";
 import {
   PLAIN,
+  allEffectsCommand,
   defaultEffect,
   effectsOf,
+  effectsShown,
   fillEdit,
   hasEffects,
   simplified,
   styleEdit,
   usesFill,
   withEffect,
+  withEffectsVisible,
   withFill,
   withoutEffect,
   withPatternOverlay,
@@ -222,4 +225,30 @@ test("a Pattern Overlay is added with its pattern, its settings kept when it cha
   });
   // Turned off and on with its checkbox, as the others.
   expect(withEffect(style, "patternOverlay", false).patternOverlay?.enabled).toBe(false);
+});
+
+test("effects show unless hidden; hiding them keeps each effect's own setting", () => {
+  const style = withEffect(null, "stroke", true);
+  expect(effectsShown(style)).toBe(true);
+  expect(effectsShown(null)).toBe(true);
+  const hidden = withEffectsVisible(style, false);
+  expect(effectsShown(hidden)).toBe(false);
+  expect(hidden.stroke).toEqual(style.stroke);
+  expect(effectsOf(hidden)).toEqual([{ id: "stroke", enabled: true }]);
+  expect(effectsShown(withEffectsVisible(hidden, true))).toBe(true);
+});
+
+test("Hide All Effects while some show, Show All Effects once all are hidden, groups included", () => {
+  const style = withEffect(null, "dropShadow", true);
+  const hidden = withEffectsVisible(style, false);
+  // Fill alone is not an effect.
+  const fillOnly = { ...PLAIN, fillOpacity: 0.5 };
+  expect(allEffectsCommand([layer(1), layer(2, { style: fillOnly })])).toBe(null);
+  expect(allEffectsCommand([layer(1, { style }), layer(2, { style: hidden })])).toBe("hide");
+  expect(allEffectsCommand([layer(1, { style: hidden })])).toBe("show");
+  const group = layer(3, { kind: "group", children: [layer(4, { style })] });
+  expect(allEffectsCommand([layer(1, { style: hidden }), group])).toBe("hide");
+  // An effect turned off still counts: its layer has effects to show or hide.
+  const off = withEffect(null, "stroke", false);
+  expect(allEffectsCommand([layer(1, { style: off })])).toBe("hide");
 });

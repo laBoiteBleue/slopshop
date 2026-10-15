@@ -225,6 +225,14 @@ pub struct StyleDto {
     /// Absent from requests of before: none.
     #[serde(default)]
     pub bevel: Option<BevelDto>,
+    /// The effects shown (the eye of the panel's "Effects" row; Hide All Effects). Absent from
+    /// requests of before: shown.
+    #[serde(default = "shown")]
+    pub effects_visible: bool,
+}
+
+fn shown() -> bool {
+    true
 }
 
 /// A Pattern Overlay (ADR 0042): `source` is a source of the document (one of its layers', or a
@@ -384,6 +392,7 @@ impl StyleDto {
         };
         Self {
             fill_opacity: style.fill_opacity,
+            effects_visible: style.effects_visible,
             drop_shadow: style.drop_shadow.map(shadow),
             outer_glow: style.outer_glow.map(glow),
             inner_shadow: style.inner_shadow.map(shadow),
@@ -504,6 +513,7 @@ impl StyleDto {
         };
         Ok(LayerStyle {
             fill_opacity: self.fill_opacity,
+            effects_visible: self.effects_visible,
             drop_shadow: shadow(&self.drop_shadow)?,
             outer_glow: glow(&self.outer_glow)?,
             inner_shadow: shadow(&self.inner_shadow)?,
@@ -1195,6 +1205,18 @@ pub enum EditRequest {
     MakeUnique {
         ids: Vec<u64>,
     },
+    /// Layer > Layer Style > Scale Effects: the styles of `ids` with every size scaled by
+    /// `scale` percent (1–1000), those without one skipped. One undo entry; live, the whole
+    /// gesture (sent with `replace`).
+    ScaleLayerStyle {
+        ids: Vec<u64>,
+        scale: f64,
+    },
+    /// Layer > Layer Style > Hide All Effects (`visible` false) or Show All Effects: every
+    /// styled layer's, but those under Lock All. One undo entry.
+    SetAllEffectsVisible {
+        visible: bool,
+    },
     /// A new layer showing source `source` (`SourceView::id`; the Sources panel), at `index`
     /// among the layers of `parent` (absent: the top level).
     /// Delete source `source` (the Sources panel): the layers showing it go, a Pattern Overlay
@@ -1487,6 +1509,9 @@ impl EditRequest {
             Self::MoveLayers { .. } => HistoryLabel::new("arrange"),
             Self::DeletePaint { .. } => HistoryLabel::new("deletePaint"),
             Self::MakeUnique { .. } => HistoryLabel::new("makeUnique"),
+            Self::ScaleLayerStyle { .. } => HistoryLabel::new("scaleEffects"),
+            Self::SetAllEffectsVisible { visible: false } => HistoryLabel::new("hideAllEffects"),
+            Self::SetAllEffectsVisible { visible: true } => HistoryLabel::new("showAllEffects"),
             Self::AddSourceLayer { .. } => HistoryLabel::new("newLayer"),
             Self::DeleteSource { .. } => HistoryLabel::new("deleteSource"),
             Self::DeleteStackEntry { .. } => HistoryLabel::new("deleteEntry"),
@@ -1904,6 +1929,13 @@ impl EditRequest {
             EditRequest::MakeUnique { ids } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::make_unique(session.document(), &ids).map_err(|e| e.to_string())?
+            }
+            EditRequest::ScaleLayerStyle { ids, scale } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                Edit::scale_effects(session.document(), &ids, scale).map_err(|e| e.to_string())?
+            }
+            EditRequest::SetAllEffectsVisible { visible } => {
+                Edit::all_effects_visible(session.document(), visible).map_err(|e| e.to_string())?
             }
             EditRequest::DeleteSource { source } => {
                 let document = session.document();

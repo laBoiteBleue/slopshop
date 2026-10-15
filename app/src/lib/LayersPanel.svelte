@@ -60,11 +60,13 @@
   import { modeFromKeys } from "./selection";
   import {
     effectsOf,
+    effectsShown,
     fillEdit,
     hasEffects,
     styleEdit,
     usesFill,
     withEffect,
+    withEffectsVisible,
     withoutEffect,
   } from "./layerStyle";
   import type { StylePage } from "./LayerStyleDialog.svelte";
@@ -91,6 +93,7 @@
     onnudge,
     contextMenu = [],
     emptyContextMenu = [],
+    styleContextMenu = [],
     onlayerdrag,
     hidden = [],
     onfillcolor,
@@ -121,6 +124,8 @@
     contextMenu?: MenuItem[];
     /** The right-click menu of the empty area below the layers (built by the app). */
     emptyContextMenu?: MenuItem[];
+    /** The right-click menu of a layer's fx mark and "Effects" row: Layer > Layer Style's. */
+    styleContextMenu?: MenuItem[];
     /** Layers not listed: the preview of Image > Adjustments, while its dialog is open. */
     hidden?: number[];
     /**
@@ -436,16 +441,24 @@
     send(visibilityToggle(selection, selected));
   }
 
-  // The right-click menu: where it is open, if it is, and whether it is the empty area's.
-  let menuAt = $state<{ x: number; y: number; empty: boolean } | null>(null);
-  const menuItems = $derived(menuAt?.empty ? emptyContextMenu : contextMenu);
+  // The right-click menu: where it is open, if it is, and whose it is (the layers', the empty
+  // area's or a layer style's).
+  let menuAt = $state<{ x: number; y: number; menu: "layers" | "empty" | "style" } | null>(null);
+  const menuItems = $derived(
+    menuAt?.menu === "empty"
+      ? emptyContextMenu
+      : menuAt?.menu === "style"
+        ? styleContextMenu
+        : contextMenu,
+  );
 
-  function onRowContextMenu(e: MouseEvent, layer: LayerView) {
+  function onRowContextMenu(e: MouseEvent, layer: LayerView, menu: "layers" | "style" = "layers") {
     e.preventDefault();
+    e.stopPropagation();
     if (renaming !== null) return;
     // As in Photoshop: a layer outside the selection becomes the selection.
     if (!selectedSet.has(layer.id)) select([layer.id], layer.id);
-    menuAt = { x: e.clientX, y: e.clientY, empty: false };
+    menuAt = { x: e.clientX, y: e.clientY, menu };
   }
 
   /** A right-click in the empty area: its own menu (new layers, paste), layers deselected. */
@@ -455,7 +468,7 @@
     e.preventDefault();
     if (renaming !== null) return;
     deselectLayers();
-    menuAt = { x: e.clientX, y: e.clientY, empty: true };
+    menuAt = { x: e.clientX, y: e.clientY, menu: "empty" };
   }
 
   /** The name of the next new pixel layer: "Layer N", as Photoshop counts them. */
@@ -1211,7 +1224,16 @@
             </span>
           {/if}
           {#if hasEffects(layer.style)}
-            <span class="fx" title={t("layers.fx")}>fx</span>
+            <!-- Right-click: Layer > Layer Style's commands, as on Photoshop's fx mark. -->
+            <span
+              class="fx"
+              role="img"
+              title={t("layers.fx")}
+              aria-label={t("layers.fx")}
+              oncontextmenu={(e) => onRowContextMenu(e, layer, "style")}
+            >
+              fx
+            </span>
           {/if}
           <!-- Linked copies change together (ADR 0040). -->
           {#if (layer.linked ?? 0) > 0}
@@ -1254,15 +1276,33 @@
       </li>
       {#if unfolded.has(layer.id) && effectsOf(layer.style).length > 0}
         <!-- Its effects (ADR 0032), each with its eye, as Photoshop lists them. -->
-        <li class="entry effects-title" class:hidden-layer={!shown}>
-          <span class="entry-indent" style:width="{30 + depth * 16 + 24}px"></span>
+        {@const effectsOn = effectsShown(layer.style)}
+        <!-- Its eye shows or hides every effect, each keeping its own (Photoshop's). -->
+        <li
+          class="entry effects-title"
+          class:hidden-layer={!shown}
+          class:off={!effectsOn}
+          oncontextmenu={(e) => onRowContextMenu(e, layer, "style")}
+        >
+          <span class="entry-indent" style:width="{30 + depth * 16 + 12}px"></span>
+          <button
+            class="effect-eye"
+            title={t(effectsOn ? "layers.effects.hide" : "layers.effects.show")}
+            aria-label={t(effectsOn ? "layers.effects.hide" : "layers.effects.show")}
+            aria-pressed={effectsOn}
+            onclick={() =>
+              layer.style &&
+              void edit(styleEdit(layer.id, withEffectsVisible(layer.style, !effectsOn)))}
+          >
+            <Icon name="eye" size={12} />
+          </button>
           <span class="entry-name">{t("layers.effects")}</span>
         </li>
         {#each effectsOf(layer.style) as effect (effect.id)}
           <li
             class="entry effect"
             class:hidden-layer={!shown}
-            class:off={!effect.enabled}
+            class:off={!effect.enabled || !effectsOn}
             ondblclick={() => onstyle?.(layer, effect.id)}
           >
             <span class="entry-indent" style:width="{30 + depth * 16 + 12}px"></span>

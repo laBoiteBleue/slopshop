@@ -106,8 +106,10 @@
   import PaintTool from "./lib/PaintTool.svelte";
   import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
   import LayerStyleDialog, { type StylePage } from "./lib/LayerStyleDialog.svelte";
+  import ScaleEffectsDialog from "./lib/ScaleEffectsDialog.svelte";
   import {
     EFFECTS,
+    allEffectsCommand,
     styleEdit,
     withEffect,
     withPatternOverlay,
@@ -2241,6 +2243,68 @@
         if (styleDialog) styleDialog.picking = false;
       },
     };
+  }
+
+  /** Copy Layer Style took a style (kept by the app for every tab): Paste is offered. */
+  let styleCopied = $state(false);
+
+  /** Layer > Layer Style > Copy Layer Style: the active layer's style. */
+  function copyStyle() {
+    const doc = active;
+    const layer = layersPanel?.selectedLayer();
+    if (!doc || !layer?.style) return;
+    engine.copyLayerStyle(doc.id, layer.id).then(
+      () => (styleCopied = true),
+      (e) => showError(String(e)),
+    );
+  }
+
+  /** The selected layers that can hold a style (not adjustment layers). */
+  function styleableSelection(): LayerView[] {
+    return (layersPanel?.selectedLayers() ?? []).filter((l) => l.kind !== "adjustment");
+  }
+
+  /** Layer > Layer Style > Paste Layer Style: onto every selected layer, one undo entry. */
+  function pasteStyle() {
+    const doc = active;
+    const ids = styleableSelection().map((l) => l.id);
+    if (doc && ids.length > 0) {
+      commitTransform();
+      void sync(engine.pasteLayerStyle(doc.id, ids));
+    }
+  }
+
+  /** Layer > Layer Style > Hide All Effects or Show All Effects: every layer's. */
+  function setAllEffectsVisible(visible: boolean) {
+    const doc = active;
+    if (doc) void edit(doc.id, { kind: "setAllEffectsVisible", visible });
+  }
+
+  /** Layer > Layer Style > Scale Effects under way: the styled layers it scales, live. */
+  let scaleEffects = $state<{ documentId: number; ids: number[] } | null>(null);
+
+  function openScaleEffects() {
+    const doc = active;
+    const ids = styleableSelection()
+      .filter((l) => l.style)
+      .map((l) => l.id);
+    if (!doc || ids.length === 0) return;
+    commitTransform();
+    scaleEffects = { documentId: doc.id, ids };
+  }
+
+  /** The whole gesture so far: each scale replaces the one before. */
+  function scaleEffectsLive(scale: number) {
+    const dialog = scaleEffects;
+    if (!dialog) return;
+    const request: EditRequest = { kind: "scaleLayerStyle", ids: dialog.ids, scale };
+    void sync(engine.performLive(dialog.documentId, request, true));
+  }
+
+  function closeScaleEffects(keep: boolean) {
+    const dialog = scaleEffects;
+    scaleEffects = null;
+    if (dialog) void (keep ? endGesture : cancelGesture)(dialog.documentId);
   }
 
   /** Layer > Layer Style > Clear Layer Style: the selected layers' styles removed. */
@@ -5389,6 +5453,44 @@
     };
   });
 
+  /**
+   * Layer > Layer Style, also the right-click menu of a layer's fx mark: Blending Options and
+   * the effects, Copy, Paste and Clear Layer Style, Hide or Show All Effects, Scale Effects.
+   */
+  let styleMenu = $derived.by((): MenuItem[] => {
+    const doc = active;
+    const layer = layersPanel?.selectedLayer() ?? null;
+    const selection = layersPanel?.selectedLayers() ?? [];
+    const styleable = selection.filter((l) => l.kind !== "adjustment");
+    const styled = styleable.some((l) => l.style);
+    const allEffects = doc ? allEffectsCommand(doc.layers) : null;
+    const separator = { kind: "separator" as const };
+    return [
+      command(t("menu.layer.style.blending"), () => layer && openStyle(layer, "blending")),
+      separator,
+      ...EFFECTS.map((effect) =>
+        command(`${t(effect.label)}…`, () => layer && openStyle(layer, effect.id)),
+      ),
+      separator,
+      command(t("menu.layer.style.copy"), copyStyle, undefined, !layer?.style),
+      command(
+        t("menu.layer.style.paste"),
+        pasteStyle,
+        undefined,
+        !styleCopied || styleable.length === 0,
+      ),
+      command(t("menu.layer.style.clear"), clearStyles, undefined, !styled),
+      separator,
+      command(
+        t(allEffects === "show" ? "menu.layer.style.showAll" : "menu.layer.style.hideAll"),
+        () => allEffects && setAllEffectsVisible(allEffects === "show"),
+        undefined,
+        allEffects === null,
+      ),
+      command(t("menu.layer.style.scale"), openScaleEffects, undefined, !styled),
+    ];
+  });
+
   /** The layers' right-click menu (Photoshop shows the commands on the layers there). */
   let layerContextMenu = $derived.by((): MenuItem[] => {
     const c = layerCommands;
@@ -5712,15 +5814,7 @@
             kind: "submenu",
             label: t("menu.layer.style"),
             disabled: !layer || layer.kind === "adjustment",
-            items: [
-              cmd(t("menu.layer.style.blending"), () => layer && openStyle(layer, "blending")),
-              separator,
-              ...EFFECTS.map((effect) =>
-                cmd(`${t(effect.label)}…`, () => layer && openStyle(layer, effect.id)),
-              ),
-              separator,
-              cmd(t("menu.layer.style.clear"), clearStyles, undefined, !layer?.style),
-            ],
+            items: styleMenu,
           },
           separator,
           layerCommands.group,
@@ -6632,6 +6726,7 @@
             onnudge={nudgePixels}
             contextMenu={layerContextMenu}
             emptyContextMenu={emptyLayersContextMenu}
+            styleContextMenu={styleMenu}
             onlayerdrag={onLayerDrag}
             hidden={previewHidden}
             onfillcolor={pickFillLayerColor}
@@ -6836,6 +6931,14 @@
     onpickpattern={pickStylePattern}
     onok={() => closeStyle(true)}
     oncancel={() => closeStyle(false)}
+  />
+{/if}
+
+{#if scaleEffects}
+  <ScaleEffectsDialog
+    onchange={scaleEffectsLive}
+    onok={() => closeScaleEffects(true)}
+    oncancel={() => closeScaleEffects(false)}
   />
 {/if}
 
