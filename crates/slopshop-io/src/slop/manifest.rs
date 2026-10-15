@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 36;
+pub(crate) const SCHEMA_MINOR: u32 = 37;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -105,7 +105,7 @@ pub(crate) const NODE_VERSION_PATTERN_OVERLAY: u32 = 17;
 /// Bézier patches (see `warp_json`). Written only for those, so that older readers refuse them
 /// instead of showing them unwarped.
 pub(crate) const NODE_VERSION_WARP: u32 = 18;
-/// Version of the nodes, of any type, with a vector mask (schema 0.36, ADR 0041):
+/// Version of the nodes, of any type, with a vector mask (schema 0.37, ADR 0041):
 /// `params.vector_mask` (see `slop::shape`). Written only for those, so that older readers
 /// refuse them instead of showing them unmasked. It reads every parameter of the versions
 /// before it. The newest node version this code reads.

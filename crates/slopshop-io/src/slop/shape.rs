@@ -31,7 +31,7 @@
 //! em, `align` `left`, `center` or `right`, `position` the anchor (the first baseline at the
 //! alignment point) in the layer's own space.
 //!
-//! A vector mask (schema 0.36, node version 19) is a node's `params.vector_mask`, its geometry
+//! A vector mask (schema 0.37, node version 19) is a node's `params.vector_mask`, its geometry
 //! written as a shape's, in the layer's own space:
 //!
 //! ```json
