@@ -4869,6 +4869,86 @@ mod tests {
     }
 
     #[test]
+    fn characters_are_styled_and_keep_their_style_while_typed() {
+        let mut s = blank_session();
+        let text = |content: &str| {
+            format!(
+                r#"{{"content":"{content}","family":"{}","weight":400,"italic":false,"size":20,"color":[0,0,0,1],"align":"left","position":[20,30]}}"#,
+                slopshop_text::DEFAULT_FAMILY
+            )
+        };
+        let perform = |s: &mut slopshop_core::Session, json: String| {
+            let request: EditRequest = serde_json::from_str(&json).unwrap();
+            let edit = request.into_edit(s).unwrap();
+            s.perform(edit).unwrap();
+        };
+        perform(
+            &mut s,
+            format!(r#"{{"kind":"addText","text":{}}}"#, text("é bold")),
+        );
+        let id = DocumentView::new(&s, &meta(), Vec::new()).layers[1].id;
+        // "bold" (UTF-16 places 2 to 6) in bold and red.
+        let json = format!(
+            r#"{{"kind":"styleText","id":{id},"range":[2,6],"style":{{"weight":700,"color":[1,0,0,1]}}}}"#
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(request.history_label().map(|l| l.kind), Some("editText"));
+        perform(&mut s, json);
+        let spans = |s: &slopshop_core::Session| {
+            let view = DocumentView::new(s, &meta(), Vec::new());
+            view.layers[1].text.as_ref().unwrap().spans.clone()
+        };
+        let styled = spans(&s);
+        assert_eq!(styled.len(), 1);
+        assert_eq!((styled[0].start, styled[0].end), (2, 6));
+        assert_eq!(styled[0].style.weight, Some(700.0));
+        let red = styled[0].style.color.unwrap();
+        for (a, b) in red.iter().zip([1.0, 0.0, 0.0, 1.0]) {
+            assert!((a - b).abs() < 1e-5, "{red:?}");
+        }
+        // Two colors: the glyphs by color.
+        let LayerContent::Vector { source, .. } =
+            &s.document().layer(LayerId::from_raw(id)).unwrap().content
+        else {
+            panic!("a vector layer")
+        };
+        assert_eq!(source.paints().len(), 2);
+        // Typed at the end of the bold word: bold; setText's own spans are not taken.
+        perform(
+            &mut s,
+            format!(
+                r#"{{"kind":"setText","id":{id},"text":{}}}"#,
+                text("é bolder")
+            ),
+        );
+        assert_eq!((spans(&s)[0].start, spans(&s)[0].end), (2, 8));
+        // The whole text in bold: the span keeps only its color.
+        perform(
+            &mut s,
+            format!(r#"{{"kind":"styleText","id":{id},"style":{{"weight":700}}}}"#),
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let dto = view.layers[1].text.as_ref().unwrap();
+        assert_eq!(dto.weight, 700.0);
+        assert_eq!(dto.spans[0].style.weight, None);
+        // Automatic leading as null; empty ranges and ranges out of the text are refused.
+        let json =
+            format!(r#"{{"kind":"styleText","id":{id},"range":[0,1],"style":{{"leading":null}}}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let crate::ipc::EditRequest::StyleText { style, .. } = &request else {
+            panic!("a styleText request")
+        };
+        assert_eq!(style.leading, Some(None));
+        for range in ["[1,1]", "[0,99]"] {
+            let json = format!(
+                r#"{{"kind":"styleText","id":{id},"range":{range},"style":{{"weight":700}}}}"#
+            );
+            let request: EditRequest = serde_json::from_str(&json).unwrap();
+            assert!(request.into_edit(&mut s).is_err(), "{range}");
+        }
+    }
+
+    #[test]
     fn a_shape_is_added_as_a_vector_layer_shown_and_changed() {
         let mut s = blank_session();
         let shape = r#"{"geometry":{"kind":"rectangle","rect":[10.0,20.0,110.0,70.0],"radii":[4.0,4.0,4.0,4.0]},"fill":[1.0,0.0,0.0,1.0],"stroke":null}"#;
