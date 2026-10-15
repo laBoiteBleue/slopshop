@@ -428,9 +428,11 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     `frame` (content pixels), `points` its control points flattened `[x, y, …]`, row-major,
     `3·columns + 1` per row and `3·rows + 1` rows (neighboring patches share their edges'
     points), in content pixels. `preset`, when present, is the style the grid was made from:
-    `{"style": "arc" | "bulge" | "flag" | "wave" | "twist", "bend": -1 to 1, "vertical"}`; the
-    points are what is drawn either way. Another `kind` comes from a newer SlopShop and is
-    refused. The layer's mask is warped with it. Only those nodes are written at v18.
+    `{"style", "bend": -1 to 1, "vertical"}`, `style` one of `arc`, `arcLower`, `arcUpper`,
+    `arch`, `bulge`, `shellLower`, `shellUpper`, `flag`, `wave`, `fish`, `rise`, `fisheye`,
+    `inflate`, `squeeze`, `twist`; the points are what is drawn either way (a style a reader does
+    not know reads as none, the grid edited point by point). Another `kind` comes from a newer
+    SlopShop and is refused. The layer's mask is warped with it. Only those nodes are written at v18.
   - From schema 0.21 ([ADR 0034](adr/0034-editable-operations.md)), a stack entry may be a
     filter entry, `{"filter": [steps]}`: steps of one kind applied in order, each
     `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier

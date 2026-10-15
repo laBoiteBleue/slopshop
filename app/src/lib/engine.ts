@@ -405,7 +405,22 @@ export type Bounds = { left: number; top: number; right: number; bottom: number 
 export type SnapTargets = { moving: Bounds | null; others: Bounds[] };
 
 /** Warp's styles (slopshop_core::warp::WarpStyle, ADR 0044). */
-export type WarpStyle = "arc" | "bulge" | "flag" | "wave" | "twist";
+export type WarpStyle =
+  | "arc"
+  | "arcLower"
+  | "arcUpper"
+  | "arch"
+  | "bulge"
+  | "shellLower"
+  | "shellUpper"
+  | "flag"
+  | "wave"
+  | "fish"
+  | "rise"
+  | "fisheye"
+  | "inflate"
+  | "squeeze"
+  | "twist";
 
 /**
  * A layer's warp grid (WarpGridDto in lib.rs): the style it was made from (null without one, or

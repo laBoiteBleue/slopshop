@@ -4,8 +4,24 @@
 import type { EditRequest, WarpGrid, WarpStyle } from "./engine";
 import type { Grid } from "./warpGrid";
 
-/** Warp's styles, in the options bar's order (Photoshop's, those SlopShop has). */
-export const WARP_STYLES: readonly WarpStyle[] = ["arc", "bulge", "flag", "wave", "twist"];
+/** Warp's styles, in the options bar's order (Photoshop's). */
+export const WARP_STYLES: readonly WarpStyle[] = [
+  "arc",
+  "arcLower",
+  "arcUpper",
+  "arch",
+  "bulge",
+  "shellLower",
+  "shellUpper",
+  "flag",
+  "wave",
+  "fish",
+  "rise",
+  "fisheye",
+  "inflate",
+  "squeeze",
+  "twist",
+];
 
 /** Photoshop's bend when a style is first chosen, in %. */
 export const DEFAULT_BEND = 50;

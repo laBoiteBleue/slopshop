@@ -18,22 +18,42 @@ pub const CELLS_PER_PATCH: u32 = 12;
 /// Bins per side of the lookup grid at most.
 const MAX_BINS: u32 = 64;
 
-/// The styles of Photoshop's Warp, each a starting grid made from a bend.
+/// The styles of Photoshop's Warp, each a starting grid made from a bend, in its menu's order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WarpStyle {
     Arc,
+    ArcLower,
+    ArcUpper,
+    Arch,
     Bulge,
+    ShellLower,
+    ShellUpper,
     Flag,
     Wave,
+    Fish,
+    Rise,
+    Fisheye,
+    Inflate,
+    Squeeze,
     Twist,
 }
 
 impl WarpStyle {
-    pub const ALL: [WarpStyle; 5] = [
+    pub const ALL: [WarpStyle; 15] = [
         WarpStyle::Arc,
+        WarpStyle::ArcLower,
+        WarpStyle::ArcUpper,
+        WarpStyle::Arch,
         WarpStyle::Bulge,
+        WarpStyle::ShellLower,
+        WarpStyle::ShellUpper,
         WarpStyle::Flag,
         WarpStyle::Wave,
+        WarpStyle::Fish,
+        WarpStyle::Rise,
+        WarpStyle::Fisheye,
+        WarpStyle::Inflate,
+        WarpStyle::Squeeze,
         WarpStyle::Twist,
     ];
 
@@ -41,9 +61,19 @@ impl WarpStyle {
     pub fn id(self) -> &'static str {
         match self {
             WarpStyle::Arc => "arc",
+            WarpStyle::ArcLower => "arcLower",
+            WarpStyle::ArcUpper => "arcUpper",
+            WarpStyle::Arch => "arch",
             WarpStyle::Bulge => "bulge",
+            WarpStyle::ShellLower => "shellLower",
+            WarpStyle::ShellUpper => "shellUpper",
             WarpStyle::Flag => "flag",
             WarpStyle::Wave => "wave",
+            WarpStyle::Fish => "fish",
+            WarpStyle::Rise => "rise",
+            WarpStyle::Fisheye => "fisheye",
+            WarpStyle::Inflate => "inflate",
+            WarpStyle::Squeeze => "squeeze",
             WarpStyle::Twist => "twist",
         }
     }
@@ -269,14 +299,53 @@ fn deform(frame: [f64; 4], preset: WarpPreset, x: f64, y: f64) -> (f64, f64) {
                 (r * theta.sin(), radius - r * theta.cos())
             }
         }
+        // The bottom edge bent down (or up) in the middle, the top edge straight.
+        WarpStyle::ArcLower => (dx, dy + b * h * (1.0 - u * u) * (1.0 + v) / 2.0),
+        // The top edge bent up (or down) in the middle, the bottom edge straight.
+        WarpStyle::ArcUpper => (dx, dy - b * h * (1.0 - u * u) * (1.0 - v) / 2.0),
+        // Every line raised alike in the middle, the sides upright: an arch.
+        WarpStyle::Arch => (dx, dy - b * h * 0.5 * (1.0 - u * u)),
         // The top and bottom edges pushed out (or in) in the middle, the sides straight.
         WarpStyle::Bulge => (dx, dy * (1.0 + b * 0.5 * (1.0 - u * u))),
+        // Arc Lower with the top drawn in: a shell opening downward.
+        WarpStyle::ShellLower => (
+            dx * (1.0 - b * 0.3 * (1.0 - v) / 2.0),
+            dy + b * h * (1.0 - u * u) * (1.0 + v) / 2.0,
+        ),
+        // Arc Upper with the bottom drawn in: a shell opening upward.
+        WarpStyle::ShellUpper => (
+            dx * (1.0 - b * 0.3 * (1.0 + v) / 2.0),
+            dy - b * h * (1.0 - u * u) * (1.0 - v) / 2.0,
+        ),
         // Every line waving by one period of a sine, the sides straight.
         WarpStyle::Flag => (dx, dy - b * h * 0.5 * (std::f64::consts::PI * u).sin()),
         // A wave whose phase shifts from top to bottom.
         WarpStyle::Wave => (
             dx,
             dy - b * h * 0.35 * (std::f64::consts::PI * (u + 0.5 * v)).sin(),
+        ),
+        // The top and bottom edges waving in opposite ways: tall on one side, narrow on the
+        // other.
+        WarpStyle::Fish => (dx, dy - v * b * h * 0.4 * (std::f64::consts::PI * u).sin()),
+        // Every line rising from one side to the other along a quarter of a sine.
+        WarpStyle::Rise => (
+            dx,
+            dy - b * h * 0.5 * (std::f64::consts::FRAC_PI_2 * u).sin(),
+        ),
+        // Pushed out from the center, the most halfway, the corners staying.
+        WarpStyle::Fisheye => {
+            let k = 1.0 + b * 0.5 * (1.0 - (u * u + v * v) / 2.0).max(0.0);
+            (dx * k, dy * k)
+        }
+        // Every edge pushed out in its middle, as a pillow.
+        WarpStyle::Inflate => (
+            dx * (1.0 + b * 0.3 * (1.0 - v * v)),
+            dy * (1.0 + b * 0.3 * (1.0 - u * u)),
+        ),
+        // Drawn in across the middle and stretched along it.
+        WarpStyle::Squeeze => (
+            dx * (1.0 - b * 0.3 * (1.0 - v * v)),
+            dy * (1.0 + b * 0.3 * (1.0 - u * u)),
         ),
         // Turned around the center, the more the closer to it.
         WarpStyle::Twist => {
@@ -687,6 +756,55 @@ mod tests {
                 assert!(PlacedMesh::new(&bent, Projective::IDENTITY, 2.0).is_some());
             }
         }
+    }
+
+    #[test]
+    fn the_other_styles_move_the_edges_they_name() {
+        let grid = |style| {
+            let preset = WarpPreset {
+                style,
+                bend: 0.5,
+                vertical: false,
+            };
+            Warp::from_preset(FRAME, preset).unwrap()
+        };
+        let plain = Warp::identity(FRAME, 3, 3).unwrap();
+        let y = |w: &Warp, s, t| w.eval(s, t).1;
+        let x = |w: &Warp, s, t| w.eval(s, t).0;
+        // Arc Lower: the bottom bends down, the top stays; Arc Upper the other way round.
+        let lower = grid(WarpStyle::ArcLower);
+        assert!(y(&lower, 1.5, 3.0) > y(&plain, 1.5, 3.0) + 1.0);
+        assert!(close(lower.eval(1.5, 0.0), plain.eval(1.5, 0.0)));
+        let upper = grid(WarpStyle::ArcUpper);
+        assert!(y(&upper, 1.5, 0.0) < y(&plain, 1.5, 0.0) - 1.0);
+        assert!(close(upper.eval(1.5, 3.0), plain.eval(1.5, 3.0)));
+        // Arch: the middle raised alike from top to bottom, the sides upright.
+        let arch = grid(WarpStyle::Arch);
+        let raised = y(&plain, 1.5, 0.0) - y(&arch, 1.5, 0.0);
+        assert!(raised > 1.0);
+        assert!((y(&plain, 1.5, 3.0) - y(&arch, 1.5, 3.0) - raised).abs() < 1e-9);
+        assert!(close(arch.eval(0.0, 1.5), plain.eval(0.0, 1.5)));
+        // Shells: the far edge drawn in.
+        let shell = grid(WarpStyle::ShellLower);
+        assert!(x(&shell, 0.0, 0.0) > x(&plain, 0.0, 0.0));
+        assert!(close(shell.eval(0.0, 3.0), plain.eval(0.0, 3.0)));
+        let shell = grid(WarpStyle::ShellUpper);
+        assert!(x(&shell, 0.0, 3.0) > x(&plain, 0.0, 3.0));
+        // Fish: taller on the left than on the right.
+        let fish = grid(WarpStyle::Fish);
+        let height = |w: &Warp, s| y(w, s, 3.0) - y(w, s, 0.0);
+        assert!(height(&fish, 0.75) > height(&fish, 2.25) + 1.0);
+        // Rise: the right side higher than the left.
+        let rise = grid(WarpStyle::Rise);
+        assert!(y(&rise, 3.0, 1.5) < y(&rise, 0.0, 1.5) - 1.0);
+        // Fisheye: the center and the corners stay, the edges' middles go out.
+        let fisheye = grid(WarpStyle::Fisheye);
+        assert!(close(fisheye.eval(1.5, 1.5), plain.eval(1.5, 1.5)));
+        assert!(close(fisheye.eval(0.0, 0.0), plain.eval(0.0, 0.0)));
+        assert!(y(&fisheye, 1.5, 0.0) < y(&plain, 1.5, 0.0) - 1.0);
+        // Inflate pushes the sides out, Squeeze draws them in.
+        assert!(x(&grid(WarpStyle::Inflate), 0.0, 1.5) < x(&plain, 0.0, 1.5) - 1.0);
+        assert!(x(&grid(WarpStyle::Squeeze), 0.0, 1.5) > x(&plain, 0.0, 1.5) + 1.0);
     }
 
     #[test]

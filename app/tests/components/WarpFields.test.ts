@@ -84,3 +84,14 @@ test("Split Warp's three modes toggle, and are off at the most patches", async (
   await rerender({ settings, onchange, onsplit, splittable: false });
   expect(screen.getByRole("button", { name: "Split Warp Vertically" })).toBeDisabled();
 });
+
+test("the Warp menu lists None, Custom and Photoshop's fifteen styles", async () => {
+  const { onchange, user } = open({ style: null, bend: 50, vertical: false });
+  const menu = screen.getByRole("combobox", { name: "Warp" });
+  const labels = [...menu.querySelectorAll("option")].map((o) => o.textContent);
+  expect(labels).toHaveLength(17);
+  expect(labels.slice(0, 6)).toEqual(["None", "Custom", "Arc", "Arc Lower", "Arc Upper", "Arch"]);
+  expect(labels.at(-1)).toBe("Twist");
+  await user.selectOptions(menu, "Fisheye");
+  expect(onchange).toHaveBeenLastCalledWith({ style: "fisheye", bend: 50, vertical: false });
+});
