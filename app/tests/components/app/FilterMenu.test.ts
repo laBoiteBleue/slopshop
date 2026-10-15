@@ -566,3 +566,93 @@ test("Render > Difference Clouds applies at once; Fibers: Variance, Strength, Ra
     }),
   );
 });
+
+/** Filter > Stylize > `name`…: its dialog on a photo layer. */
+async function stylizeDialog(name: string) {
+  localStorage.clear();
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Stylize", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: `${name}…` }));
+  const dialog = await screen.findByRole("dialog", { name });
+  return { user, dialog };
+}
+
+test("Stylize > Diffuse: Anisotropic; Wind: Blast from the left, a seed each time", async () => {
+  const { user, dialog } = await stylizeDialog("Diffuse");
+  expect(within(dialog).getByRole("radio", { name: "Normal" })).toBeChecked();
+  await user.click(within(dialog).getByRole("radio", { name: "Anisotropic" }));
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toMatchObject({ filter: "diffuse" }));
+  const diffuse = (applied() as { values: number[] }).values;
+  expect(diffuse[0]).toBe(3);
+  expect(Number.isInteger(diffuse[1])).toBe(true);
+
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Stylize", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Wind…" }));
+  const wind = await screen.findByRole("dialog", { name: "Wind" });
+  expect(within(wind).getByRole("radio", { name: "Wind" })).toBeChecked();
+  expect(within(wind).getByRole("radio", { name: "From the Right" })).toBeChecked();
+  await user.click(within(wind).getByRole("radio", { name: "Blast" }));
+  await user.click(within(wind).getByRole("radio", { name: "From the Left" }));
+  await user.click(within(wind).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toMatchObject({ filter: "wind" }));
+  expect((applied() as { values: number[] }).values.slice(0, 2)).toEqual([1, 1]);
+});
+
+test("Stylize > Tiles: its number, offset and fill, the colors of the moment", async () => {
+  const { user, dialog } = await stylizeDialog("Tiles");
+  const number = within(dialog).getByRole("spinbutton", { name: "Number of Tiles" });
+  expect(number).toHaveValue(10);
+  expect(within(dialog).getByRole("spinbutton", { name: "Maximum Offset" })).toHaveValue(10);
+  expect(within(dialog).getByRole("radio", { name: "Background Color" })).toBeChecked();
+  await user.clear(number);
+  await user.type(number, "25");
+  await user.click(within(dialog).getByRole("radio", { name: "Inverse Image" }));
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toMatchObject({ filter: "tiles" }));
+  expect((applied() as { values: number[] }).values.slice(0, 5)).toEqual([
+    25, 10, 2, 0x000000, 0xffffff,
+  ]);
+});
+
+test("Stylize > Trace Contour: a level, Lower; Oil Paint: its brush, lighting off", async () => {
+  const { user, dialog } = await stylizeDialog("Trace Contour");
+  const level = within(dialog).getByRole("spinbutton", { name: "Level" });
+  expect(level).toHaveValue(128);
+  expect(within(dialog).getByRole("radio", { name: "Upper" })).toBeChecked();
+  await user.clear(level);
+  await user.type(level, "90");
+  await user.click(within(dialog).getByRole("radio", { name: "Lower" }));
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "traceContour",
+      values: [90, 0],
+    }),
+  );
+
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Stylize", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Oil Paint…" }));
+  const oil = await screen.findByRole("dialog", { name: "Oil Paint" });
+  expect(within(oil).getByText("Brush")).toBeInTheDocument();
+  const stylization = within(oil).getByRole("spinbutton", { name: "Stylization" });
+  expect(stylization).toHaveValue(4);
+  await user.clear(stylization);
+  await user.type(stylization, "7.5");
+  await user.click(within(oil).getByRole("checkbox", { name: "Lighting" }));
+  await user.click(within(oil).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "oilPaint",
+      values: [7.5, 5, 1, 2, 0, -60, 1],
+    }),
+  );
+});

@@ -56,6 +56,23 @@ const drawingColors: FilterParam[] = [
   { kind: "color", key: "background", color: "background" },
 ];
 
+/** An Oil Paint setting from `min` to 10, a decimal (Photoshop's), under heading `group`. */
+const oilSetting = (
+  key: string,
+  label: MessageKey,
+  min: number,
+  group?: MessageKey,
+): NumberParam => ({
+  kind: "number",
+  key,
+  label,
+  min,
+  max: 10,
+  decimals: 1,
+  scale: "linear",
+  group,
+});
+
 /** A Fibers setting from 1 to 64 (Photoshop's). */
 const fibersSetting = (key: string, label: MessageKey): NumberParam => ({
   kind: "number",
@@ -430,6 +447,94 @@ export const FILTERS: Record<FilterId, FilterSpec> = {
     params: [...drawingColors, { kind: "seed", key: "seed" }],
     defaults: [0, 0xffffff, 0],
   },
+  diffuse: {
+    params: [
+      {
+        kind: "choice",
+        key: "mode",
+        label: "filter.diffuse.mode",
+        options: [
+          "filter.diffuse.normal",
+          "filter.diffuse.darkenOnly",
+          "filter.diffuse.lightenOnly",
+          "filter.diffuse.anisotropic",
+        ],
+      },
+      { kind: "seed", key: "seed" },
+    ],
+    defaults: [0, 0],
+  },
+  wind: {
+    params: [
+      {
+        kind: "choice",
+        key: "method",
+        label: "filter.wind.method",
+        options: ["filter.wind.wind", "filter.wind.blast", "filter.wind.stagger"],
+      },
+      {
+        kind: "choice",
+        key: "direction",
+        label: "filter.wind.direction",
+        options: ["filter.wind.fromRight", "filter.wind.fromLeft"],
+      },
+      { kind: "seed", key: "seed" },
+    ],
+    defaults: [0, 0, 0],
+  },
+  tiles: {
+    params: [
+      whole("tiles", "filter.tiles.number", [1, 99]),
+      whole("offset", "filter.tiles.offset", [1, 99], "filter.percent"),
+      {
+        kind: "choice",
+        key: "fill",
+        label: "filter.tiles.fill",
+        options: [
+          "filter.tiles.background",
+          "filter.tiles.foreground",
+          "filter.tiles.inverse",
+          "filter.tiles.unaltered",
+        ],
+      },
+      ...drawingColors,
+      { kind: "seed", key: "seed" },
+    ],
+    defaults: [10, 10, 0, 0, 0xffffff, 0],
+  },
+  traceContour: {
+    params: [
+      whole("level", "filter.traceContour.level", [0, 255]),
+      {
+        kind: "choice",
+        key: "edge",
+        label: "filter.traceContour.edge",
+        options: ["filter.traceContour.lower", "filter.traceContour.upper"],
+      },
+    ],
+    defaults: [128, 1],
+  },
+  oilPaint: {
+    params: [
+      oilSetting("stylization", "filter.oilPaint.stylization", 0.1, "filter.oilPaint.brush"),
+      oilSetting("cleanliness", "filter.oilPaint.cleanliness", 0, "filter.oilPaint.brush"),
+      oilSetting("scale", "filter.oilPaint.scale", 0.1, "filter.oilPaint.brush"),
+      oilSetting("bristle", "filter.oilPaint.bristle", 0, "filter.oilPaint.brush"),
+      { kind: "check", key: "lighting", label: "filter.oilPaint.lighting" },
+      {
+        kind: "number",
+        key: "angle",
+        label: "filter.oilPaint.angle",
+        unit: "filter.degrees",
+        min: -180,
+        max: 180,
+        decimals: 0,
+        scale: "linear",
+      },
+      oilSetting("shine", "filter.oilPaint.shine", 0),
+    ],
+    defaults: [4, 5, 1, 2, 1, -60, 1],
+  },
   fibers: {
     params: [
       fibersSetting("variance", "filter.fibers.variance"),
@@ -700,7 +805,19 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
   { label: "menu.filter.pixelate", filters: ["mosaic"] },
   { label: "menu.filter.render", filters: ["clouds", "differenceClouds", "fibers"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },
-  { label: "menu.filter.stylize", filters: ["emboss", "findEdges", "solarize"] },
+  {
+    label: "menu.filter.stylize",
+    filters: [
+      "diffuse",
+      "emboss",
+      "findEdges",
+      "oilPaint",
+      "solarize",
+      "tiles",
+      "traceContour",
+      "wind",
+    ],
+  },
   { label: "menu.filter.other", filters: ["highPass", "maximum", "minimum", "offset"] },
 ];
 
