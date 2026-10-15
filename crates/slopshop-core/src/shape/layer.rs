@@ -11,7 +11,7 @@ use std::sync::{Arc, OnceLock};
 use kurbo::Shape as _;
 
 use super::draw::{coverage, cut};
-use super::model::{FillRule, Geometry, Paint, ShapeSource, StrokeAlign};
+use super::model::{FillRule, Geometry, Paint, Shape, ShapeSource, StrokeAlign};
 use super::path::{fill_outline, outline, placed, stroke_outline, tolerance_for};
 use crate::blend::BlendMode;
 use crate::document::Layer;
@@ -88,12 +88,25 @@ fn painted(paint: Paint, coverage: Arc<crate::raster::RasterImage>, area: Rect) 
 }
 
 fn draw(source: &ShapeSource, to_document: Projective, canvas: Size) -> Drawn {
-    let shape = source.shape();
     let mut drawn = Drawn {
         paints: Vec::new(),
         at: to_document,
         canvas,
     };
+    // A text in several colors: its glyphs of each color, in turn.
+    match source.paints() {
+        [] => draw_shape(source.shape(), to_document, canvas, &mut drawn.paints),
+        paints => {
+            for shape in paints {
+                draw_shape(shape, to_document, canvas, &mut drawn.paints);
+            }
+        }
+    }
+    drawn
+}
+
+/// `shape`'s paints placed by `to_document` on a `canvas`, after `paints`.
+fn draw_shape(shape: &Shape, to_document: Projective, canvas: Size, paints: &mut Vec<Layer>) {
     let tolerance = tolerance_for(&shape.geometry, to_document);
     let own = outline(&shape.geometry, tolerance);
     let rule = match &shape.geometry {
@@ -128,7 +141,7 @@ fn draw(source: &ShapeSource, to_document: Projective, canvas: Size) -> Drawn {
         bounds = bounds.union(path.bounding_box());
     }
     let Some(area) = area_of(bounds, canvas) else {
-        return drawn;
+        return;
     };
     let needs_fill = (shape.fill.is_some() && shape.geometry.is_fillable())
         || (closed
@@ -140,7 +153,7 @@ fn draw(source: &ShapeSource, to_document: Projective, canvas: Size) -> Drawn {
         .flatten()
         .map(Arc::new);
     if let (Some(paint), Some(cover)) = (shape.fill, &fill) {
-        drawn.paints.push(painted(paint, Arc::clone(cover), area));
+        paints.push(painted(paint, Arc::clone(cover), area));
     }
     if let Some((s, path)) = stroke
         && let Ok(band) = coverage(&path, FillRule::NonZero, area)
@@ -152,10 +165,9 @@ fn draw(source: &ShapeSource, to_document: Projective, canvas: Size) -> Drawn {
             _ => Some(band),
         };
         if let Some(band) = band {
-            drawn.paints.push(painted(s.paint, Arc::new(band), area));
+            paints.push(painted(s.paint, Arc::new(band), area));
         }
     }
-    drawn
 }
 
 #[cfg(test)]
@@ -300,6 +312,37 @@ mod tests {
             .iter()
             .zip(expected)
             .all(|(a, e)| (a - e).abs() < 0.01)
+    }
+
+    #[test]
+    fn a_text_in_several_colors_draws_its_glyphs_by_color() {
+        let mut doc = document();
+        let text = crate::shape::Text {
+            content: "ab".to_owned(),
+            family: "Inter".to_owned(),
+            weight: 400.0,
+            italic: false,
+            size: 12.0,
+            color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
+            tracking: 0.0,
+            leading: None,
+            align: crate::shape::TextAlign::Left,
+            position: [0.0, 10.0],
+            frame: None,
+            spans: Vec::new(),
+        };
+        // Its outlines in one color (what bounds and older readers take), and by color.
+        let all = rectangle([8.0, 8.0, 40.0, 24.0], Some(RED), None);
+        let paints = vec![
+            rectangle([8.0, 8.0, 24.0, 24.0], Some(RED), None),
+            rectangle([24.0, 8.0, 40.0, 24.0], Some(BLUE), None),
+        ];
+        let source = ShapeSource::text(text, all, paints, "");
+        assert!(source.is_valid());
+        add_vector(&mut doc, source, Projective::IDENTITY);
+        assert!(close(at(&doc, 12, 16), [1.0, 0.0, 0.0, 1.0]));
+        assert!(close(at(&doc, 30, 16), [0.0, 0.0, 1.0, 1.0]));
+        assert!(close(at(&doc, 50, 16), [0.0; 4]));
     }
 
     #[test]
@@ -577,9 +620,10 @@ mod tests {
             align: crate::shape::TextAlign::Left,
             position: [0.0, 10.0],
             frame: None,
+            spans: Vec::new(),
         };
         let outlines = rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None);
-        let source = ShapeSource::text(text("Hi"), outlines.clone(), "");
+        let source = ShapeSource::text(text("Hi"), outlines.clone(), Vec::new(), "");
         let a = add_vector(&mut doc, Arc::clone(&source), Projective::IDENTITY);
         let b = add_vector(&mut doc, source, Projective::IDENTITY);
         // One layer named after its text, the other renamed by the user.
@@ -603,6 +647,7 @@ mod tests {
 world",
             ),
             outlines.clone(),
+            Vec::new(),
         )
         .unwrap()
         .apply(&mut doc)
@@ -631,7 +676,7 @@ world"
         let shape = ShapeSource::new(outlines.clone(), "Box");
         let c = add_vector(&mut doc, shape, Projective::IDENTITY);
         assert_eq!(
-            Edit::retext(&doc, c, text("x"), outlines.clone()).err(),
+            Edit::retext(&doc, c, text("x"), outlines.clone(), Vec::new()).err(),
             Some(crate::edit::EditError::NotText(c))
         );
         let bad = crate::shape::Text {
@@ -639,7 +684,7 @@ world"
             ..text("x")
         };
         assert_eq!(
-            Edit::retext(&doc, a, bad, outlines).err(),
+            Edit::retext(&doc, a, bad, outlines, Vec::new()).err(),
             Some(crate::edit::EditError::InvalidShape)
         );
     }
@@ -658,6 +703,7 @@ world"
             align: crate::shape::TextAlign::Left,
             position: [0.0, 30.0],
             frame: None,
+            spans: Vec::new(),
         };
         // Two letters' outlines, with a gap between them.
         let mut outlines = rectangle([10.0, 10.0, 14.0, 30.0], Some(RED), None);
@@ -678,7 +724,7 @@ world"
         };
         let id = add_vector(
             &mut doc,
-            ShapeSource::text(text, outlines.clone(), ""),
+            ShapeSource::text(text, outlines.clone(), Vec::new(), ""),
             Projective::IDENTITY,
         );
         // In the gap, and just beside the letters: the text; well away from them: nothing.

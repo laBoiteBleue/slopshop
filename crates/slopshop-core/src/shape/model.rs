@@ -320,6 +320,10 @@ pub struct ShapeSource {
     shape: Shape,
     /// What a text layer says (ADR 0041): `shape` is then its glyph outlines, laid out from it.
     text: Option<super::text::Text>,
+    /// A text in several colors: its glyphs by color, each a path filled with it, drawn
+    /// instead of `shape` (which keeps all of them, for bounds, picking and selections, and for
+    /// readers that know one color). Empty otherwise.
+    paints: Vec<Shape>,
 }
 
 /// Sources are immutable: the same source is the same allocation, told by its id.
@@ -337,17 +341,24 @@ impl ShapeSource {
             name: name.into(),
             shape,
             text: None,
+            paints: Vec::new(),
         })
     }
 
     /// A new source of text `text`, laid out into `outlines` (a path filled by the text's
-    /// color).
-    pub fn text(text: super::text::Text, outlines: Shape, name: impl Into<String>) -> Arc<Self> {
+    /// color) and, when it has several colors, its glyphs by color (`paints`).
+    pub fn text(
+        text: super::text::Text,
+        outlines: Shape,
+        paints: Vec<Shape>,
+        name: impl Into<String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             id: SourceId::next(),
             name: name.into(),
             shape: outlines,
             text: Some(text),
+            paints,
         })
     }
 
@@ -368,9 +379,16 @@ impl ShapeSource {
         self.text.as_ref()
     }
 
-    /// Whether its shape and text are valid.
+    /// A text's glyphs by color, when it has several (drawn instead of [`Self::shape`]).
+    pub fn paints(&self) -> &[Shape] {
+        &self.paints
+    }
+
+    /// Whether its shape, text and paints are valid.
     pub fn is_valid(&self) -> bool {
-        self.shape.is_valid() && self.text.as_ref().is_none_or(super::text::Text::is_valid)
+        self.shape.is_valid()
+            && self.text.as_ref().is_none_or(super::text::Text::is_valid)
+            && self.paints.iter().all(Shape::is_valid)
     }
 
     /// Another source of the same shape (Make Unique).
@@ -385,6 +403,7 @@ impl ShapeSource {
             name: name.into(),
             shape: self.shape.clone(),
             text: self.text.clone(),
+            paints: self.paints.clone(),
         })
     }
 }
