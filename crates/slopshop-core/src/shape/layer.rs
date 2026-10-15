@@ -765,6 +765,7 @@ world"
             leading: None,
             align: crate::shape::TextAlign::Left,
             position: [0.0, 10.0],
+            frame: None,
         };
         // Its outlines, a path (glyphs are paths).
         let mut outlines = rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None);
