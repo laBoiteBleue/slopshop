@@ -283,10 +283,14 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   alignment point, in the layer's own space; paragraph text: its box's top left corner),
   "frame" (from 0.38: paragraph text's box, `[width, height]` in the layer's own space, both
   positive; its lines wrap at its width, are aligned in it, and those whose letters pass its
-  height are hidden; absent: point text) }`. A reader older than 0.38
- draws paragraph text
-  from its outlines and, edited, takes it as point text. A text that is not valid makes the
-  file invalid. A
+  height are hidden; absent: point text), "spans" (from 0.39: characters set otherwise, sorted
+  and apart: `{ "start", "end" }` in UTF-8 bytes of `content` on character boundaries, and
+  what they set, among "family", "weight", "italic", "size", "color", "tracking" and
+  "leading" (null: automatic); each sets something; absent: none) }`. A reader older than 0.38
+  draws paragraph text from its outlines and, edited, takes it as point text. A text in several
+  colors (0.39) also has `paints` beside its `shape`: its glyphs by color, each a `path` filled
+  with its color, drawn instead of `shape` (which keeps them all in the text's own color, what
+  an older reader draws). A text that is not valid makes the file invalid. A
   reader that lays text out again (to edit it) uses the outlines until then, and the default
   family when `family` is not installed.
 - **Color spaces**: CIE xy chromaticities of the primaries and white point, and a transfer
