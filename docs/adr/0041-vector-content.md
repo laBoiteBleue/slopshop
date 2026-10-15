@@ -266,7 +266,7 @@ Status: accepted (2026-10-15, under the maintainer's delegation; to review).
    menu, through the system clipboard's text). The selection is drawn from the engine's
    layout: `text_layout` gives parley's carets and, besides, its lines (their places, whether a
    line break ends them, their boxes), in document pixels.
-2. **Paragraph text** (`.slop` 0.37): a text may have a `frame`, its box's width and height in
+2. **Paragraph text** (`.slop` 0.38): a text may have a `frame`, its box's width and height in
    the layer's own space, its `position` then being the box's top left corner (point text
    keeps its anchor). parley breaks the lines at the box's width (a word longer than the box
    is broken, as Photoshop does) and aligns them in it; lines whose letters (to the bottom of

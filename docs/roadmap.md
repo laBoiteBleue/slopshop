@@ -462,7 +462,7 @@ Raised on 2026-10-05, to schedule:
           and End by the lines drawn; Cut, Copy and Paste of characters (keys and Edit menu)
     - [x] Part 2b, paragraph text: a box drawn with the Type tool, lines wrapped and
           aligned in it, those past its height hidden (a plus in its handle), resized by its
-          handles while it is edited; `.slop` 0.37
+          handles while it is edited; `.slop` 0.38
     - [ ] Part 2c: per-character styles, the Character settings in Properties (family,
           style, size, tracking, leading, color, alignment), embedded fonts
 - [ ] Patterns (ADR 0042)
