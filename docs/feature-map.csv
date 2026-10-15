@@ -191,7 +191,7 @@ Menu,Layer > Layer Style > Drop Shadow,,done,"non-destructive, with PSD import a
 Menu,Layer > Layer Style > Copy Layer Style,,done,"the effects, Fill Opacity and whether they show; kept by the app for every tab; also on the fx mark's right-click menu"
 Menu,Layer > Layer Style > Paste Layer Style,,done,"onto every selected layer (adjustment layers aside), any tab, one undo entry; the layers' opacity and blend mode are not pasted"
 Menu,Layer > Layer Style > Clear Layer Style,,done,
-Menu,Layer > Layer Style > Global Light,,open,layer styles exist (ADR 0032); PSD import reads the global light
+Menu,Layer > Layer Style > Global Light,,done,"angle and altitude of the document, live; Use Global Light on Drop Shadow, Inner Shadow and Bevel and Emboss (on by default), an angle moved in Layer Style moves it for all; .slop 0.37, PSD resources 1037 and 1049 and uglg"
 Menu,Layer > Layer Style > Create Layers,,open,layer styles exist (ADR 0032); destructive: explicit and opt-in
 Menu,Layer > Layer Style > Hide All Effects,,done,"and Show All Effects; each layer's effects hidden as by the eye of its Effects row (PSD masterFXSwitch, .slop 0.36), each effect keeping its own"
 Menu,Layer > Layer Style > Scale Effects,,done,"1 to 1000 %, live, on the selected styled layers: sizes and distances in whole pixels, the overlays' scale"
