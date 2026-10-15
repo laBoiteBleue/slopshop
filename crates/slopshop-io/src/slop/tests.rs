@@ -2640,7 +2640,7 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         )),
         1.0,
     );
-    // Paragraph text (schema 0.36): its box.
+    // Paragraph text (schema 0.37): its box.
     let c = push(
         &mut doc,
         "c",
