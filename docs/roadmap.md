@@ -200,6 +200,12 @@ including the ones it leaves out: [feature-map.md](feature-map.md).
       contour; PSD `ChFX`), `.slop` node v13
 - [x] Layer styles: Bevel and Emboss (Inner, Outer, Emboss, Pillow; Smooth; depth, direction,
       size, soften, light angle and altitude, highlight and shadow; PSD `ebbl`), `.slop` node v14
+- [x] Layer > Layer Style's commands on styles (2026-10-15): Copy and Paste Layer Style (onto
+      every selected layer, any tab), Hide and Show All Effects (the "Effects" row's eye per
+      layer, PSD `masterFXSwitch`, `.slop` 0.36), Scale Effects; the same on the fx mark's
+      right-click menu
+- [ ] Layer styles: Global Light (a document angle and altitude shared by the effects that
+      use it), effect contours
 - [ ] Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md)): settled by
       [ADR 0040](adr/0040-sources.md), a tree of layers referencing read-only sources
