@@ -204,8 +204,10 @@ including the ones it leaves out: [feature-map.md](feature-map.md).
       every selected layer, any tab), Hide and Show All Effects (the "Effects" row's eye per
       layer, PSD `masterFXSwitch`, `.slop` 0.36), Scale Effects; the same on the fx mark's
       right-click menu
-- [ ] Layer styles: Global Light (a document angle and altitude shared by the effects that
-      use it), effect contours
+- [x] Layer > Layer Style > Global Light (2026-10-15): a document angle and altitude shared
+      by Drop Shadow, Inner Shadow and Bevel and Emboss where Use Global Light is checked;
+      `.slop` 0.37, PSD resources 1037 and 1049 and `uglg`
+- [ ] Layer styles: effect contours
 - [ ] Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md)): settled by
       [ADR 0040](adr/0040-sources.md), a tree of layers referencing read-only sources

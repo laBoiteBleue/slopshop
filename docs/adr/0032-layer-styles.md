@@ -121,3 +121,15 @@ Status: accepted (2026-10-15, under the maintainer's delegation; to review).
   whole pixels within its range (a Stroke at least 1 pixel), the Gradient and Pattern Overlays'
   scale with them; angles, spread and choke unchanged. Live, one undo entry.
 - The fx mark's and the "Effects" row's right-click menu is Layer > Layer Style's.
+- **Global Light**: `Document::global_light` (angle and altitude, Photoshop's 120° and 30° by
+  default) and `use_global_light` on Drop Shadow, Inner Shadow and Bevel and Emboss (on for
+  new effects, as in Photoshop). An effect using it keeps the light's angle (and a bevel its
+  altitude) in its own fields, as PSD does: drawing does not depend on the document, and the
+  engine keeps them equal. `Edit::SetGlobalLight` lights every such effect (whatever the
+  layers' locks: a setting of the document), and a style set or a layer inserted (pasted from
+  another document) takes the document's light. In the Layer Style dialog, moving the angle of
+  an effect using it moves the light for all, as in Photoshop. `.slop` 0.37 writes
+  `document.global_light` and `use_global_light`; PSD reads and writes resources 1037 and
+  1049 and `uglg`. Alternative rejected: resolving the light while drawing, which would tie
+  each style's cached effects to a document and break where layers move between documents
+  (paint previews, scratch documents).

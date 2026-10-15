@@ -244,6 +244,10 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   origin, possibly fractional or outside the canvas; at most 10 000 guides. Absent: none. An
   unknown `axis` is refused as made by a newer SlopShop. A writer of an older schema keeps
   them as an unknown field, without moving them when the canvas changes.
+  `global_light` (0.37, [ADR 0032](adr/0032-layer-styles.md)): Layer > Layer Style > Global
+  Light, `[angle, altitude]` in degrees (a finite angle counterclockwise from the right, an
+  altitude of 0 to 90); the effects whose `use_global_light` is true are lit by it. Absent:
+  `[120, 30]` (Photoshop's).
   `sources` (0.26, [ADR 0040](adr/0040-sources.md)): what raster and pattern fill (0.31) nodes
   and Pattern Overlays (0.32) show, kept once, each `{ "name": "photo.jpg", "image": "b3:…" }` (`name` absent when nothing
   names it) and named by its index in this list. Absent: none. Before schema 0.26, a reader gives each raster
@@ -357,6 +361,10 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     drawn (Photoshop's eye on the "Effects" row, Hide All Effects), each keeping its own
     `enabled`; Fill Opacity still applies. Absent: shown. Written at the node's version
     otherwise; a reader that does not know it shows the effects, which loses nothing.
+    From schema 0.37, `drop_shadow`, `inner_shadow` and `bevel` may have
+    `"use_global_light": true` (absent: false): their `angle` (and the bevel's `altitude`) are
+    the document's `global_light`, written as such too, so that a reader that does not know
+    it draws the same.
   - v9 (schema 0.18) is v8 with `outer_glow`, `inner_shadow` or `inner_glow` in the style: only
     those nodes are written at v9, so that readers of v8 refuse them rather than drop these
     effects.
