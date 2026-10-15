@@ -1285,6 +1285,15 @@ pub enum EditRequest {
         id: u64,
         text: crate::text::TextDto,
     },
+    /// Characters of a text layer set otherwise (the Character settings, ADR 0041): those of
+    /// `range` (UTF-16 code units, start and end), or with none the whole text, which then
+    /// changes its own settings and its spans stop setting what `style` sets.
+    StyleText {
+        id: u64,
+        #[serde(default)]
+        range: Option<[usize; 2]>,
+        style: crate::text::CharStyleDto,
+    },
     /// A pattern fill layer's scale (layer pixels per pattern pixel) and angle (degrees,
     /// counterclockwise), its pattern kept (ADR 0042).
     SetPatternFill {
@@ -1726,7 +1735,7 @@ impl EditRequest {
             Self::AddGroup { .. } => HistoryLabel::new("newGroup"),
             Self::AddShape { .. } => HistoryLabel::new("newShape"),
             Self::AddText { .. } => HistoryLabel::new("newText"),
-            Self::SetText { .. } => HistoryLabel::new("editText"),
+            Self::SetText { .. } | Self::StyleText { .. } => HistoryLabel::new("editText"),
             Self::AddAdjustmentLayer { adjustment: id, .. } => {
                 label("newAdjustmentLayer", adjustment(id))
             }
@@ -1936,9 +1945,9 @@ impl EditRequest {
                 index,
             } => {
                 let text = text.text()?;
-                let outlines = crate::text::lay_out(&text)?;
+                let (outlines, paints) = crate::text::lay_out(&text)?;
                 let name = slopshop_core::shape::text::layer_name(&text.content);
-                let source = slopshop_core::shape::ShapeSource::text(text, outlines, "");
+                let source = slopshop_core::shape::ShapeSource::text(text, outlines, paints, "");
                 let parent = parent.map(LayerId::from_raw);
                 let index = match index {
                     Some(index) => index,
@@ -1969,9 +1978,20 @@ impl EditRequest {
                 }
             }
             EditRequest::SetText { id, text } => {
-                let text = text.text()?;
-                let outlines = crate::text::lay_out(&text)?;
-                Edit::retext(session.document(), LayerId::from_raw(id), text, outlines)
+                let id = LayerId::from_raw(id);
+                // The layer's spans follow the content's change.
+                let text = crate::text::text_of(session.document(), id)?.retyped(text.text()?);
+                let (outlines, paints) = crate::text::lay_out(&text)?;
+                Edit::retext(session.document(), id, text, outlines, paints)
+                    .map_err(|e| e.to_string())?
+            }
+            EditRequest::StyleText { id, range, style } => {
+                let id = LayerId::from_raw(id);
+                let current = crate::text::text_of(session.document(), id)?;
+                let range = crate::text::byte_range(current, range)?;
+                let text = current.styled(range, &style.style()?);
+                let (outlines, paints) = crate::text::lay_out(&text)?;
+                Edit::retext(session.document(), id, text, outlines, paints)
                     .map_err(|e| e.to_string())?
             }
             EditRequest::SetPatternFill { id, scale, angle } => {
