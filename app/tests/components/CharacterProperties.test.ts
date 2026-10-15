@@ -38,8 +38,8 @@ function show(t: TextDto, range: [number, number] | null = null) {
     onalign: vi.fn(),
     onpickcolor: vi.fn(),
   };
-  render(CharacterProperties, props);
-  return { props, user: userEvent.setup() };
+  const shown = render(CharacterProperties, props);
+  return { props, user: userEvent.setup(), rerender: shown.rerender };
 }
 
 const field = (name: string) => screen.getByRole("spinbutton", { name });
@@ -105,4 +105,15 @@ test("leading emptied goes back to automatic", async () => {
   await user.clear(field("Leading"));
   await user.tab();
   expect(props.onstyle).toHaveBeenLastCalledWith({ leading: null });
+});
+
+test("typing does not ask the family's styles again", async () => {
+  const { props, rerender } = show(text());
+  await waitFor(() => expect(props.stylesOf).toHaveBeenCalledTimes(1));
+  await rerender({ text: { ...text(), content: "Hello world!" } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(props.stylesOf).toHaveBeenCalledTimes(1);
+  await rerender({ text: { ...text(), content: "Hello world!!", family: "Arial" } });
+  await waitFor(() => expect(props.stylesOf).toHaveBeenCalledTimes(2));
+  expect(props.stylesOf).toHaveBeenLastCalledWith("Arial");
 });
