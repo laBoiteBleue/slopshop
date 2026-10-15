@@ -1607,6 +1607,7 @@ fn effect_layer(
         transform,
         style: None,
         warp: None,
+        vector_mask: None,
     }
 }
 
@@ -1951,6 +1952,7 @@ mod tests {
                 style: None,
                 content: LayerContent::raster(Arc::new(image)),
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
@@ -2009,6 +2011,7 @@ mod tests {
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
@@ -2237,6 +2240,7 @@ mod tests {
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
@@ -2307,6 +2311,7 @@ mod tests {
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
@@ -2863,6 +2868,7 @@ mod tests {
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
             &[id],
         )
@@ -3067,6 +3073,7 @@ mod tests {
                 transform: crate::transform::Projective::IDENTITY,
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
             &[id],
         )

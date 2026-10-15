@@ -85,6 +85,7 @@ fn push_layer(
                 mask: None,
                 content,
                 warp: None,
+                vector_mask: None,
             },
         })
         .unwrap();

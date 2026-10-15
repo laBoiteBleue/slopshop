@@ -210,6 +210,7 @@ mod tests {
             mask,
             content,
             warp: None,
+            vector_mask: None,
         }
     }
 

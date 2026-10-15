@@ -280,6 +280,7 @@ mod tests {
                 transform,
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(doc)
@@ -513,6 +514,7 @@ mod tests {
             transform: Projective::IDENTITY,
             style: None,
             warp: None,
+            vector_mask: None,
         };
         assert_eq!(
             Edit::InsertLayer {

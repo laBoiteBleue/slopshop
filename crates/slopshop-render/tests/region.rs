@@ -50,6 +50,7 @@ fn push_layer(session: &mut Session, content: LayerContent, opacity: f32) -> Lay
                 mask: None,
                 content,
                 warp: None,
+                vector_mask: None,
             },
         })
         .unwrap();
@@ -861,6 +862,7 @@ fn push_into(
                 mask: None,
                 content,
                 warp: None,
+                vector_mask: None,
             },
         })
         .unwrap();
@@ -1947,6 +1949,130 @@ fn vector_layers_match_the_cpu_reference_compositor() {
     for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
         s.perform(Edit::SetBlendSpace { space }).unwrap();
         let what = format!("vectors {space:?}");
+        assert_matches_cpu(&r, s.document(), size.bounds(), &what);
+        assert_matches_cpu(&r, s.document(), Rect::new(181, 37, 110, 90), &what);
+    }
+}
+
+#[test]
+fn vector_masks_match_the_cpu_reference_compositor() {
+    use slopshop_core::shape::{
+        FillRule, Geometry, Paint, Segment, Shape, ShapeSource, Subpath, VectorMask,
+    };
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 280);
+    let mut s = Session::new(Document::new(size));
+    push_layer(
+        &mut s,
+        raster(&image(size, PixelFormat::RGBA8_SRGB, pattern)),
+        1.0,
+    );
+    let curve = Geometry::Path {
+        subpaths: vec![Subpath {
+            start: [20.0, 30.0],
+            segments: vec![
+                Segment::Cubic([120.0, -10.0], [260.0, 60.0], [270.0, 150.0]),
+                Segment::Line([60.0, 250.0]),
+            ],
+            closed: true,
+        }],
+        rule: FillRule::NonZero,
+    };
+    // A pixel layer: a feathered curved mask times a pixel mask.
+    let top = image(Size::new(280, 260), PixelFormat::RGBA8_SRGB, |x, y| {
+        vec![(x % 256) as u8, (y % 256) as u8, 180, 230]
+    });
+    let pixels = push_layer(&mut s, raster(&top), 0.9);
+    let gray = PixelFormat {
+        layout: ChannelLayout::Gray,
+        sample: SampleType::U8,
+        color_space: ColorSpace::LINEAR_SRGB,
+        alpha: AlphaMode::Straight,
+    };
+    s.perform(Edit::SetLayerMask {
+        id: pixels,
+        mask: Some(slopshop_core::LayerMask {
+            original: None,
+            image: image(Size::new(280, 260), gray, |x, _| vec![(x % 256) as u8]),
+            enabled: true,
+            replaces_alpha: false,
+        }),
+    })
+    .unwrap();
+    let feathered = VectorMask::new(curve.clone(), false)
+        .unwrap()
+        .with_feather(5.0)
+        .unwrap();
+    s.perform(Edit::SetVectorMask {
+        id: pixels,
+        mask: Some(feathered),
+    })
+    .unwrap();
+    // A fill layer rotated, its path hiding what it encloses (Reveal All, then a path).
+    let fill = push_layer(
+        &mut s,
+        LayerContent::Fill {
+            color: LinearRgba::new(0.1, 0.6, 0.3, 0.8),
+        },
+        0.7,
+    );
+    s.perform(Edit::SetVectorMask {
+        id: fill,
+        mask: VectorMask::reveal_all().with_geometry(Geometry::Ellipse {
+            center: [150.0, 140.0],
+            radii: [90.0, 60.0],
+        }),
+    })
+    .unwrap();
+    transform(
+        &mut s,
+        fill,
+        Affine::translation(-150.0, -140.0)
+            .then(Affine::rotation(20f64.to_radians()))
+            .then(Affine::translation(150.0, 140.0)),
+    );
+    // A vector layer with a vector mask, and an adjustment limited by one.
+    let disc = push_layer(
+        &mut s,
+        LayerContent::vector(ShapeSource::new(
+            Shape {
+                geometry: Geometry::Ellipse {
+                    center: [200.0, 200.0],
+                    radii: [70.0, 50.0],
+                },
+                fill: Some(Paint::Solid(LinearRgba::new(0.9, 0.2, 0.1, 1.0))),
+                stroke: None,
+            },
+            "",
+        )),
+        1.0,
+    );
+    s.perform(Edit::SetVectorMask {
+        id: disc,
+        mask: VectorMask::new(curve, true),
+    })
+    .unwrap();
+    let invert = push_layer(
+        &mut s,
+        LayerContent::Adjustment {
+            adjustment: slopshop_core::adjust::Adjustment::Invert,
+        },
+        1.0,
+    );
+    s.perform(Edit::SetVectorMask {
+        id: invert,
+        mask: VectorMask::new(
+            Geometry::Rectangle {
+                rect: [10.5, 120.25, 140.0, 270.0],
+                radii: [20.0; 4],
+            },
+            false,
+        ),
+    })
+    .unwrap();
+    for space in [BlendSpace::Perceptual, BlendSpace::Linear] {
+        s.perform(Edit::SetBlendSpace { space }).unwrap();
+        let what = format!("vector masks {space:?}");
         assert_matches_cpu(&r, s.document(), size.bounds(), &what);
         assert_matches_cpu(&r, s.document(), Rect::new(181, 37, 110, 90), &what);
     }

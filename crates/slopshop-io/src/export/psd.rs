@@ -481,6 +481,8 @@ impl Writer<'_, '_> {
                 enabled: false,
                 ..m.clone()
             });
+        // Its vector mask goes with its mask (`add_mask`).
+        copy.vector_mask = None;
         self.single(copy)
     }
 
@@ -497,15 +499,18 @@ impl Writer<'_, '_> {
     }
 
     /// `layer`'s mask as channel −2 over the canvas: the coverage of a white fill it masks.
+    /// Its vector mask (ADR 0041) is written into it, as pixels (Photoshop's `vmsk`: later):
+    /// the enabled masks multiplied, or all of them, disabled, when none is enabled.
     fn add_mask(&mut self, layer: &Layer, record: &mut Record) -> Result<(), ExportError> {
-        let Some(mask) = &layer.mask else {
-            return Ok(());
-        };
-        if mask.replaces_alpha {
-            // The transparency moved to the mask: Photoshop gets it back as the layer's alpha
-            // (rendered above), no mask.
+        // The transparency moved to the mask: Photoshop gets it back as the layer's alpha
+        // (rendered above), no mask.
+        let pixel = layer.mask.as_ref().filter(|m| !m.replaces_alpha);
+        let vector = layer.vector_mask.as_ref();
+        if pixel.is_none() && vector.is_none() {
             return Ok(());
         }
+        let disabled = !pixel.is_some_and(|m| m.enabled) && !vector.is_some_and(|m| m.enabled);
+        let kept = |enabled: bool| enabled || disabled;
         let transform = layer
             .transform
             .then(self.document.parent_transform(layer.id));
@@ -517,9 +522,9 @@ impl Writer<'_, '_> {
             visible: true,
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
-            mask: Some(LayerMask {
+            mask: pixel.filter(|m| kept(m.enabled)).map(|m| LayerMask {
                 enabled: true,
-                ..mask.clone()
+                ..m.clone()
             }),
             clipped: false,
             transform,
@@ -527,13 +532,18 @@ impl Writer<'_, '_> {
                 color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
             },
             warp: None,
+            vector_mask: vector.filter(|m| kept(m.enabled)).map(|m| {
+                let mut m = m.clone();
+                m.enabled = true;
+                m
+            }),
         };
         let area = self.document.size().bounds();
         let alone = self.single(coverage);
         let planes = self.render_planes(&alone, area, false)?;
         let alpha = planes.channels.into_iter().nth(3);
         record.channels.push((-2, alpha));
-        record.mask = Some((area, !mask.enabled));
+        record.mask = Some((area, disabled));
         Ok(())
     }
 

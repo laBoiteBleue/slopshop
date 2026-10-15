@@ -53,6 +53,7 @@ impl HistoryLabel {
             Edit::SetCanvasSize { .. } => "canvasSize",
             Edit::SetLayerMask { .. } => "mask",
             Edit::SetLayerMaskEnabled { .. } => "maskEnabled",
+            Edit::SetVectorMask { .. } => "vectorMask",
             Edit::MoveLayer { .. } => "arrange",
             Edit::SetLayerTransform { .. } => "transform",
             Edit::SetLayerWarp { .. } => "warp",
@@ -339,6 +340,7 @@ impl Session {
                             pass_through: false,
                         },
                         warp: None,
+                        vector_mask: None,
                     },
                 };
                 (Some(id), edit)
@@ -659,6 +661,7 @@ mod tests {
                         color: LinearRgba::new(0.0, 0.0, 1.0, 1.0),
                     },
                     warp: None,
+                    vector_mask: None,
                 },
             })
             .unwrap();
@@ -949,6 +952,7 @@ mod tests {
                         image: crate::stack::Pixels::ready(image.clone()),
                     },
                     warp: None,
+                    vector_mask: None,
                 },
             })
             .unwrap();
@@ -1066,6 +1070,7 @@ mod tests {
                         pass_through: true,
                     },
                     warp: None,
+                    vector_mask: None,
                 },
             })
             .unwrap();

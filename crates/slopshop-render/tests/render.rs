@@ -45,6 +45,7 @@ fn add_fill(session: &mut Session, color: LinearRgba, opacity: f32) {
                 mask: None,
                 content: LayerContent::Fill { color },
                 warp: None,
+                vector_mask: None,
             },
         })
         .unwrap();
@@ -246,6 +247,7 @@ fn raster_session(size: Size, pixel: impl Fn(u32, u32) -> [u8; 4]) -> Session {
                 image: slopshop_core::stack::Pixels::ready(Arc::new(image)),
             },
             warp: None,
+            vector_mask: None,
         },
     })
     .unwrap();
@@ -379,6 +381,7 @@ fn raster_stack(size: Size, images: &[std::sync::Arc<slopshop_core::RasterImage>
                     image: slopshop_core::stack::Pixels::ready(image.clone()),
                 },
                 warp: None,
+                vector_mask: None,
             },
         })
         .unwrap();
