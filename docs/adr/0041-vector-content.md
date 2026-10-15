@@ -254,3 +254,45 @@ then Free Transform changing a vector layer's geometry so that its stroke keeps 
    that transforming one does not move the others; and **text layers**, whose outlines are
    laid out from what they say (Photoshop transforms type layers and keeps them editable).
 
+
+## Amendment: vector masks (2026-10-15)
+
+Status: accepted (2026-10-15, under the maintainer's delegation; to review).
+
+Point 4, as built:
+
+1. **A layer's vector mask** (`Layer::vector_mask`, beside its pixel mask): a geometry in the
+   layer's space (a path, or a live shape kept live, as Photoshop keeps a shape's), `inverted`
+   (the path hides what it encloses), a feather (a Gaussian's standard deviation in the layer's
+   pixels, 0 to 250, as a selection's) and `enabled`. Any layer takes one: pixel, fill,
+   adjustment, group and vector layers.
+2. **Applied as one mask with the pixel mask.** Its coverage (what the geometry encloses, open
+   subpaths joined, its fill rule kept, anti-aliased by exact area as Make Selection covers a
+   path) is drawn in the layer's space over the pixels a mask of the layer covers (the pixel
+   mask's, else a raster's image, else the canvas seen from the layer and a shape's bounds),
+   feathered, inverted when it must be, and multiplied with the enabled pixel mask into a
+   16-bit gray mask. The compositor's steps carry that mask (`Step::Layer`, `Step::Adjust`
+   and `Step::End` take `mask`), so the CPU compositor and the GPU, which read the same
+   image, agree by construction; the renderer needs no new slot. The drawing is kept with
+   the mask and forgotten when the layer changes (`Layer::applied_mask`).
+3. **First version, as vector layers' (point 2's first version):** the mask is drawn at the
+   layer's pixels, so a layer scaled up shows its vector mask resampled; drawing it at the
+   scale it is seen is left for later.
+4. **Layer > Vector Mask**: Reveal All (an empty path, inverted), Hide All (an empty path),
+   Current Path (with two layers selected, the other one a vector layer: its path, placed in
+   the active layer's space; a live shape stays live where the map allows it), Disable or
+   Enable, Delete; each on the selected layers, one undo entry. There is no Paths panel: a
+   path lives in a vector layer (amendment "the Pen", point 2).
+5. **In the Layers panel**: its thumbnail after the pixel mask's (the canvas gray where it
+   hides, white where it shows), a click targets it (as the pixel mask's), Shift+click
+   disables or enables it, Ctrl+click loads what it shows as the selection. Targeted, **the
+   Pen draws and edits in it**: a path finished is added to the mask's path (no new layer),
+   the anchors and handles edit as a vector layer's (a live shape is turned into a path
+   first), and Ctrl+Enter makes a selection of its path. Painting reaches the layer's pixels
+   meanwhile. The Properties panel shows its Feather.
+6. **Edits**: `Edit::SetVectorMask` adds, replaces or removes it (Lock All refuses it); Free
+   Transform transforms a layer with a vector mask (rather than reshaping a vector layer), so
+   that its mask follows; Rasterize keeps it (moved with the content space), the merges bake
+   it into their pixels. `.slop` 0.36 writes it as `params.vector_mask` at node version 19;
+   PSD export writes it into the layer's pixel mask (Photoshop's `vmsk` import and export,
+   Rasterize > Vector Mask and a Density setting are left for later).

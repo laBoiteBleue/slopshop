@@ -216,7 +216,7 @@ Menu,Layer > New Adjustment Layer > Gradient Map,,done,with PSD import and expor
 Menu,Layer > New Adjustment Layer > Selective Color,,done,with PSD import and export
 Menu,Layer > Layer Content Options,,done,"the Properties panel, for adjustment and fill layers"
 Menu,Layer > Layer Mask,,done,"Reveal or Hide All or Selection, From Transparency, enable, disable, delete; painting in masks"
-Menu,Layer > Vector Mask,,open,waits for vector content (an ADR)
+Menu,Layer > Vector Mask,,done,"Reveal All, Hide All, Current Path (the other selected vector layer's path), Disable/Enable, Delete; drawn and edited with the Pen, Feather in Properties, Ctrl+Enter selects its path (ADR 0041); PSD: written into the layer mask, Photoshop's vmsk later"
 Menu,Layer > Create Clipping Mask,,done,
 Menu,Layer > Release Clipping Mask,,done,
 Menu,Layer > Smart Objects > Convert to Smart Object,,open,transforms are already non-destructive on every layer; embedded and linked documents as layers are the open part
@@ -257,7 +257,7 @@ Menu,Layer > Video Layers > Rasterize,,wont,video editing is out of scope for no
 Menu,Layer > Rasterize > Type,,done,Layer > Bake to Pixels > Rasterize (ADR 0031) bakes a text layer as any vector layer
 Menu,Layer > Rasterize > Shape,,done,Layer > Bake to Pixels > Rasterize on a vector layer (ADR 0031)
 Menu,Layer > Rasterize > Fill Content,,done,Layer > Bake to Pixels > Rasterize (ADR 0031)
-Menu,Layer > Rasterize > Vector Mask,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
+Menu,Layer > Rasterize > Vector Mask,,open,"vector masks exist (ADR 0041); turning one into the pixel mask is the open part"
 Menu,Layer > Rasterize > Smart Object,,open,Layer > Bake to Pixels > Rasterize exists (ADR 0031); waits for this layer kind
 Menu,Layer > Rasterize > Video,,wont,video editing is out of scope for now
 Menu,Layer > Rasterize > 3D,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)

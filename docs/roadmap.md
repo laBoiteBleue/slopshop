@@ -440,7 +440,14 @@ Raised on 2026-10-05, to schedule:
   - [x] Editing a vector layer's path with the Pen: Ctrl-drag an anchor, a handle or the
         whole path; a click adds or deletes an anchor, or continues an open path; Alt converts
         an anchor; a live shape is turned into a regular path first
-  - [ ] Selecting several anchors or paths (marquee, Shift), Path Selection (A); vector masks
+  - [x] Vector masks: Layer > Vector Mask (Reveal All, Hide All, Current Path, Disable,
+        Delete), a path mask beside the pixel mask, anti-aliased and feathered, multiplied with
+        it on the CPU and the GPU alike; its thumbnail in the Layers panel, targeted by a click,
+        the Pen drawing and editing in it, Ctrl+Enter, Feather in Properties; `.slop` 0.36
+  - [ ] Vector masks, next: PSD `vmsk` import and export (written as the pixel mask
+        meanwhile), Layer > Rasterize > Vector Mask, Density, drawn at the scale they are seen
+        (masks of scaled layers are resampled with them)
+  - [ ] Selecting several anchors or paths (marquee, Shift), Path Selection (A)
   - [ ] Type
     - [x] Part 1: text layers (a vector source laid out by parley into glyph outlines, drawn
           as shapes; `.slop` 0.34 keeps the text and its outlines; Inter bundled), the Type
