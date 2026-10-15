@@ -31,7 +31,8 @@ use super::manifest::{
     NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
     NODE_VERSION_PATTERN, NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE,
     NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR,
-    NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR_SOURCES,
+    NODE_VERSION_VECTOR_MASK, NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    SCHEMA_MINOR_SOURCES,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -459,8 +460,10 @@ pub(super) fn read_node(
     }
     let versioned = || format!("{}@{}", node.kind, node.version);
     let known_version = (1..=NODE_VERSION_PAINTED).contains(&node.version);
-    // A Pattern Overlay (v17) on any node type but adjustments.
-    let overlaid = node.version == NODE_VERSION_PATTERN_OVERLAY;
+    // A Pattern Overlay (v17, any node type but adjustments) or a vector mask (v19, any type),
+    // reading every parameter of the versions before them.
+    let overlaid =
+        node.version == NODE_VERSION_PATTERN_OVERLAY || node.version == NODE_VERSION_VECTOR_MASK;
     let known_raster = (1..=NODE_VERSION_BEVEL).contains(&node.version)
         || overlaid
         || node.version == NODE_VERSION_WARP;
@@ -523,7 +526,10 @@ pub(super) fn read_node(
                 pass_through,
             }
         }
-        NODE_ADJUSTMENT if (3..=NODE_VERSION_PAINTED).contains(&node.version) => {
+        NODE_ADJUSTMENT
+            if (3..=NODE_VERSION_PAINTED).contains(&node.version)
+                || node.version == NODE_VERSION_VECTOR_MASK =>
+        {
             LayerContent::Adjustment {
                 adjustment: adjustment_of(&node.params)?,
             }
@@ -566,6 +572,14 @@ pub(super) fn read_node(
         Some(_) => return Err(corrupt("a style needs node version 8")),
     };
     let warp = node_warp(node)?;
+    let vector_mask = match node.params.get("vector_mask") {
+        None | Some(Value::Null) => None,
+        Some(value) if node.version >= NODE_VERSION_VECTOR_MASK => Some(
+            super::shape::vector_mask_from_json(value)
+                .ok_or_else(|| corrupt("invalid vector mask"))?,
+        ),
+        Some(_) => return Err(corrupt("a vector mask needs node version 19")),
+    };
     if !node.extra.is_empty() {
         residue.nodes.insert(id, node.extra.clone());
     }
@@ -582,6 +596,7 @@ pub(super) fn read_node(
         mask,
         content,
         warp,
+        vector_mask,
     })
 }
 
