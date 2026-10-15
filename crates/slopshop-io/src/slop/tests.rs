@@ -1784,6 +1784,8 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
         LayerStyle {
             fill_opacity: 0.6,
             drop_shadow: Some(DropShadow::default()),
+            // Hidden (Hide All Effects, schema 0.36): kept so.
+            effects_visible: false,
             ..LayerStyle::default()
         },
     ];
@@ -1810,6 +1812,11 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
         super::style::from_json(&serde_json::json!({ "fill_opacity": 1.0 }), &|_| None),
         Some(LayerStyle::default())
     );
+    bad = serde_json::json!({ "fill_opacity": 1.0, "effects_visible": 0 });
+    assert_eq!(super::style::from_json(&bad, &|_| None), None);
+    // Shown effects write nothing more than before.
+    let shown = super::style::to_json(&LayerStyle::default(), &|_| None);
+    assert_eq!(shown.get("effects_visible"), None);
 }
 
 #[test]
