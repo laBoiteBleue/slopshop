@@ -1069,6 +1069,20 @@ fn filtered(
         Filter::Average => Some(average(step, input, &pixels, selection.as_ref())?),
         _ => None,
     };
+    // A drawing filter's colors (sRGB-encoded) in the step's blend space, opaque.
+    let colors = filter.colors().map(|colors| {
+        colors.map(|[r, g, b]| {
+            let c = LinearRgba::from_srgb_encoded_to_working(
+                f32::from(r) / 255.0,
+                f32::from(g) / 255.0,
+                f32::from(b) / 255.0,
+                1.0,
+            );
+            pixels
+                .blender
+                .encode_premultiplied(&[c.r, c.g, c.b, c.a].map(f64::from))
+        })
+    });
     let mut tiles: Vec<(TileCoord, Option<Arc<[u8]>>)> =
         grid_coords(size).map(|coord| (coord, None)).collect();
     parallel_for_each(&mut tiles, |(coord, out)| {
@@ -1164,6 +1178,14 @@ fn filtered(
                 }
                 if let Some(average) = average {
                     blurs[0] = average;
+                }
+                // Clouds, Fibers: drawn at the layer point the pixel is.
+                if let Some(colors) = colors {
+                    let p = [
+                        frame.origin[0] + ((x0 + x) as f64 + 0.5) * frame.factor,
+                        frame.origin[1] + ((y0 + y) as f64 + 0.5) * frame.factor,
+                    ];
+                    blurs[0] = filter.render(p, colors);
                 }
                 let blurs = &blurs[..plans.len()];
                 let px = &mut bytes[(y * t + x) * bpp..][..bpp];
@@ -6824,5 +6846,134 @@ mod tests {
             let v = pixel(&smoothed, x, y)[0];
             assert!(v.abs_diff(220) <= 2, "({x}, {y}): {v}");
         }
+    }
+
+    #[test]
+    fn clouds_replace_the_layer_or_the_selection_between_their_two_colors() {
+        // Red to blue clouds over a transparent layer: opaque, each pixel on the way between.
+        let empty = image(PixelFormat::RGBA8_SRGB, |_, _| vec![0, 0, 0, 0]);
+        let clouds = Filter::Clouds {
+            foreground: [255, 0, 0],
+            background: [0, 0, 255],
+            seed: 7,
+        };
+        let stack = applied(&empty, clouds);
+        let drawn = stack.evaluate().unwrap();
+        let mut reds = Vec::new();
+        for y in (0..H).step_by(7) {
+            for x in (0..W).step_by(7) {
+                let px = pixel(&drawn, x, y);
+                assert_eq!((px[1], px[3]), (0, 255), "({x}, {y}): {px:?}");
+                assert!(
+                    (i32::from(px[0]) + i32::from(px[2]) - 255).abs() <= 1,
+                    "{px:?}"
+                );
+                reds.push(px[0]);
+            }
+        }
+        let (least, most) = (reds.iter().min().unwrap(), reds.iter().max().unwrap());
+        assert!(
+            most - least > 150,
+            "spread over the colors: {least} to {most}"
+        );
+        // A look of part of the layer draws the same clouds there (the pixel's place counts).
+        let job = stack
+            .look_job([T as f64 + 10.0, T as f64, W as f64, H as f64], 0)
+            .expect("a look");
+        let look = job.run().unwrap().image;
+        for (x, y) in [(3, 2), (20, 1), (30, 0)] {
+            assert_eq!(
+                pixel(&look, x, y),
+                pixel(&drawn, T + x, T + y),
+                "({x}, {y})"
+            );
+        }
+        // Another seed, other clouds; within a selection, there only.
+        let other = applied(
+            &empty,
+            Filter::Clouds {
+                foreground: [255, 0, 0],
+                background: [0, 0, 255],
+                seed: 8,
+            },
+        )
+        .evaluate()
+        .unwrap();
+        assert!(difference(&other, &drawn) > 50);
+        let step = FilterStep {
+            filter: clouds,
+            ..blur(1.0, Some(selection(|x, _| x < 100)))
+        };
+        let selected = LayerStack::new(Arc::clone(&empty))
+            .with_filter(step, None)
+            .unwrap()
+            .evaluate()
+            .unwrap();
+        assert_eq!(pixel(&selected, 50, 50), pixel(&drawn, 50, 50));
+        assert_eq!(pixel(&selected, 150, 50), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn difference_clouds_invert_white_into_the_clouds_negative() {
+        // Over white, black to white clouds in Difference: their negative, the opacity kept.
+        let white = image(PixelFormat::RGBA8_SRGB, |x, _| {
+            vec![255, 255, 255, if x < 150 { 255 } else { 128 }]
+        });
+        let empty = image(PixelFormat::RGBA8_SRGB, |_, _| vec![0, 0, 0, 0]);
+        let colors = ([0; 3], [255; 3]);
+        let clouds = applied(
+            &empty,
+            Filter::Clouds {
+                foreground: colors.0,
+                background: colors.1,
+                seed: 3,
+            },
+        )
+        .evaluate()
+        .unwrap();
+        let differenced = applied(
+            &white,
+            Filter::DifferenceClouds {
+                foreground: colors.0,
+                background: colors.1,
+                seed: 3,
+            },
+        )
+        .evaluate()
+        .unwrap();
+        for (x, y) in [(10, 10), (77, 200), (140, 33)] {
+            let (c, d) = (pixel(&clouds, x, y), pixel(&differenced, x, y));
+            assert!((255 - c[0]).abs_diff(d[0]) <= 1, "({x}, {y}): {c:?} {d:?}");
+            assert_eq!(d[3], 255);
+        }
+        assert_eq!(pixel(&differenced, 200, 10)[3], 128, "its own opacity");
+    }
+
+    #[test]
+    fn fibers_draw_vertical_streaks() {
+        let empty = image(PixelFormat::RGBA8_SRGB, |_, _| vec![0, 0, 0, 0]);
+        let fibers = applied(
+            &empty,
+            Filter::Fibers {
+                variance: 16.0,
+                strength: 4.0,
+                foreground: [0; 3],
+                background: [255; 3],
+                seed: 1,
+            },
+        )
+        .evaluate()
+        .unwrap();
+        // Neighbours along a column differ much less than across a row.
+        let (mut down, mut across) = (0u64, 0u64);
+        for y in 0..H - 1 {
+            for x in 0..W - 1 {
+                let v = pixel(&fibers, x, y);
+                assert_eq!(v[3], 255);
+                down += u64::from(v[0].abs_diff(pixel(&fibers, x, y + 1)[0]));
+                across += u64::from(v[0].abs_diff(pixel(&fibers, x + 1, y)[0]));
+            }
+        }
+        assert!(across > 4 * down, "across {across}, down {down}");
     }
 }

@@ -2060,6 +2060,59 @@ fn filter_entries_round_trip() {
     fs::remove_file(&path).ok();
 }
 
+#[test]
+fn drawing_filters_keep_their_colors_and_seeds_in_a_file() {
+    use slopshop_core::filter::Filter;
+    let mut doc = golden_document();
+    let id = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster { stack: Some(_), .. } => Some(l.id),
+            _ => None,
+        })
+        .expect("a layer with a stack");
+    let filters = [
+        Filter::Clouds {
+            foreground: [200, 10, 30],
+            background: [0, 90, 255],
+            seed: 12_345,
+        },
+        Filter::Fibers {
+            variance: 20.0,
+            strength: 9.0,
+            foreground: [1, 2, 3],
+            background: [250, 251, 252],
+            seed: 16_777_215,
+        },
+    ];
+    for filter in filters {
+        Edit::apply_filter(&doc, id, filter)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+    }
+    let path = temp_path("drawing-filters.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let LayerContent::Raster {
+        stack: Some(read), ..
+    } = &loaded.layer(id).unwrap().content
+    else {
+        panic!("a layer with a stack");
+    };
+    let read: Vec<Filter> = read
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Filter(filter) => Some(filter.steps()[0].filter),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(read, filters);
+    fs::remove_file(&path).ok();
+}
+
 /// A field that pushed pixels around and froze a spot, over a layer of `size`.
 fn liquified_field(size: slopshop_core::Size) -> Arc<slopshop_core::liquify::Field> {
     use slopshop_core::liquify::{Brush, Field, Stroke, Tool};
