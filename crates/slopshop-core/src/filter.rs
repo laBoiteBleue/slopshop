@@ -220,6 +220,69 @@ pub enum OffsetEdge {
     Wrap,
 }
 
+/// How Diffuse moves pixels (Photoshop's Mode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffuseMode {
+    /// Each pixel one of its neighbours, drawn at random.
+    Normal,
+    /// Only where that neighbour is darker.
+    DarkenOnly,
+    /// Only where that neighbour is lighter.
+    LightenOnly,
+    /// The neighbour closest in color: pixels shuffled along edges rather than across them.
+    Anisotropic,
+}
+
+/// Wind's Method (Photoshop's): streaks, longer and stronger ones, or staggered ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindMethod {
+    Wind,
+    Blast,
+    Stagger,
+}
+
+impl WindMethod {
+    /// Its longest streak at full size (layer pixels), how strongly a streak covers what it
+    /// crosses, and whether streaks are staggered (start further along, keep their strength).
+    fn streaks(self) -> (f64, f64, bool) {
+        match self {
+            Self::Wind => (WIND_LENGTH, 0.6, false),
+            Self::Blast => (2.0 * WIND_LENGTH, 0.9, false),
+            Self::Stagger => (WIND_LENGTH, 0.7, true),
+        }
+    }
+}
+
+/// Wind's longest streak (Wind and Stagger; Blast's twice as long), in the layer's pixels.
+pub const WIND_LENGTH: f64 = 30.0;
+
+/// The difference of luma between two neighbours (0 to 1) from which Wind blows a streak.
+const WIND_EDGE: f32 = 0.05;
+
+/// What fills the gaps Tiles leaves (Photoshop's Fill Empty Area With).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TilesFill {
+    Background,
+    Foreground,
+    /// The layer's pixel there, inverted.
+    Inverse,
+    /// The layer's pixel there.
+    Unaltered,
+}
+
+/// Tiles' Number of Tiles and Maximum Offset (percent) range (Photoshop's).
+pub const MAX_TILES_SETTING: f32 = 99.0;
+
+/// Oil Paint's Stylization, Cleanliness, Scale, Bristle Detail and Shine range (Photoshop's);
+/// Stylization and Scale from 0.1.
+pub const MAX_OIL_SETTING: f32 = 10.0;
+
+/// How strongly Oil Paint's light shades the paint's relief, at Shine 1 and Scale 1.
+const OIL_RELIEF: f64 = 1.5;
+
+/// How much less a quadrant's variance must be to be another quadrant's than the first's.
+const OIL_TIE: f64 = 1e-7;
+
 /// Maximum's and Minimum's radius range in whole pixels (Photoshop's, Squareness): each pixel
 /// the largest (smallest) value of the square of `2 radius + 1` pixels around it.
 pub const MIN_EXTREME_RADIUS: f32 = 1.0;
@@ -472,12 +535,60 @@ pub enum Filter {
         background: [u8; 3],
         seed: u32,
     },
+    /// Photoshop's Diffuse: each pixel replaced by one of its eight neighbours drawn from `seed`
+    /// and its place, as `mode` says. `reduction`: how many of the layer's pixels a pixel it is
+    /// computed on stands for (1, more for a look; not a setting): beyond 1.5 nothing moves, a
+    /// neighbour being farther than Diffuse reaches.
+    Diffuse {
+        mode: DiffuseMode,
+        seed: u32,
+        reduction: f32,
+    },
+    /// Photoshop's Wind: streaks blown along the rows from the layer's edges (neighbours of
+    /// different lightness), from the right or `from_left`, their lengths drawn from `seed`
+    /// (see [`WindMethod`]); `reduction` as Diffuse's, the streaks shortened by it.
+    Wind {
+        method: WindMethod,
+        from_left: bool,
+        seed: u32,
+        reduction: f32,
+    },
+    /// Photoshop's Tiles: the frame (the selection's box or the layer) cut into square tiles,
+    /// `tiles` of them (1 to 99) along its shorter side, each moved by up to `offset` percent of
+    /// its side in a direction drawn from `seed`, later tiles over earlier ones (row by row);
+    /// the gaps filled as `fill` says (the colors of when it was applied, sRGB-encoded).
+    Tiles {
+        tiles: f32,
+        offset: f32,
+        fill: TilesFill,
+        foreground: [u8; 3],
+        background: [u8; 3],
+        seed: u32,
+    },
+    /// Photoshop's Trace Contour: thin lines where each channel crosses `level` (0 to 255) on
+    /// white, drawn on the pixels above it (`upper`) or below it, each pixel keeping its opacity.
+    TraceContour { level: f32, upper: bool },
+    /// Photoshop's Oil Paint: the layer smoothed into strokes (a Kuwahara filter of a radius
+    /// growing with `stylization` and `scale`), cleaned by a blur growing with `cleanliness`,
+    /// then, with `lighting`, its relief (its lightness, `bristle` adding the brush's grain) lit
+    /// from `angle` degrees, `shine` and `scale` how strongly. `reduction` as Diffuse's: the
+    /// radii shrink by it.
+    OilPaint {
+        stylization: f32,
+        cleanliness: f32,
+        scale: f32,
+        bristle: f32,
+        lighting: bool,
+        angle: f32,
+        shine: f32,
+        reduction: f32,
+    },
 }
 
 impl Filter {
     /// Every filter's identifier, in menu order.
     /// Shadows/Highlights last: it is in Image > Adjustments, not in the Filter menu.
-    pub const IDS: [&'static str; 31] = [
+    pub const IDS: [&'static str; 36] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -508,6 +619,11 @@ impl Filter {
         "clouds",
         "differenceClouds",
         "fibers",
+        "diffuse",
+        "oilPaint",
+        "tiles",
+        "traceContour",
+        "wind",
         "shadowsHighlights",
     ];
 
@@ -545,6 +661,11 @@ impl Filter {
             Self::Clouds { .. } => "clouds",
             Self::DifferenceClouds { .. } => "differenceClouds",
             Self::Fibers { .. } => "fibers",
+            Self::Diffuse { .. } => "diffuse",
+            Self::Wind { .. } => "wind",
+            Self::Tiles { .. } => "tiles",
+            Self::TraceContour { .. } => "traceContour",
+            Self::OilPaint { .. } => "oilPaint",
         }
     }
 
@@ -721,6 +842,68 @@ impl Filter {
                 packed(background),
                 seed as f32,
             ],
+            Self::Diffuse { mode, seed, .. } => vec![
+                match mode {
+                    DiffuseMode::Normal => 0.0,
+                    DiffuseMode::DarkenOnly => 1.0,
+                    DiffuseMode::LightenOnly => 2.0,
+                    DiffuseMode::Anisotropic => 3.0,
+                },
+                seed as f32,
+            ],
+            Self::Wind {
+                method,
+                from_left,
+                seed,
+                ..
+            } => vec![
+                match method {
+                    WindMethod::Wind => 0.0,
+                    WindMethod::Blast => 1.0,
+                    WindMethod::Stagger => 2.0,
+                },
+                f32::from(u8::from(from_left)),
+                seed as f32,
+            ],
+            Self::Tiles {
+                tiles,
+                offset,
+                fill,
+                foreground,
+                background,
+                seed,
+            } => vec![
+                tiles,
+                offset,
+                match fill {
+                    TilesFill::Background => 0.0,
+                    TilesFill::Foreground => 1.0,
+                    TilesFill::Inverse => 2.0,
+                    TilesFill::Unaltered => 3.0,
+                },
+                packed(foreground),
+                packed(background),
+                seed as f32,
+            ],
+            Self::TraceContour { level, upper } => vec![level, f32::from(u8::from(upper))],
+            Self::OilPaint {
+                stylization,
+                cleanliness,
+                scale,
+                bristle,
+                lighting,
+                angle,
+                shine,
+                ..
+            } => vec![
+                stylization,
+                cleanliness,
+                scale,
+                bristle,
+                f32::from(u8::from(lighting)),
+                angle,
+                shine,
+            ],
         }
     }
 
@@ -869,6 +1052,67 @@ impl Filter {
                 background: unpacked(background)?,
                 seed: whole_seed(seed)?,
             }),
+            ("diffuse", &[mode, seed]) => Some(Self::Diffuse {
+                mode: match mode {
+                    0.0 => DiffuseMode::Normal,
+                    1.0 => DiffuseMode::DarkenOnly,
+                    2.0 => DiffuseMode::LightenOnly,
+                    3.0 => DiffuseMode::Anisotropic,
+                    _ => return None,
+                },
+                seed: whole_seed(seed)?,
+                reduction: 1.0,
+            }),
+            ("wind", &[method, direction, seed]) => Some(Self::Wind {
+                method: match method {
+                    0.0 => WindMethod::Wind,
+                    1.0 => WindMethod::Blast,
+                    2.0 => WindMethod::Stagger,
+                    _ => return None,
+                },
+                from_left: flag(direction)?,
+                seed: whole_seed(seed)?,
+                reduction: 1.0,
+            }),
+            ("tiles", &[tiles, offset, fill, foreground, background, seed]) => Some(Self::Tiles {
+                tiles,
+                offset,
+                fill: match fill {
+                    0.0 => TilesFill::Background,
+                    1.0 => TilesFill::Foreground,
+                    2.0 => TilesFill::Inverse,
+                    3.0 => TilesFill::Unaltered,
+                    _ => return None,
+                },
+                foreground: unpacked(foreground)?,
+                background: unpacked(background)?,
+                seed: whole_seed(seed)?,
+            }),
+            ("traceContour", &[level, edge]) => Some(Self::TraceContour {
+                level,
+                upper: flag(edge)?,
+            }),
+            (
+                "oilPaint",
+                &[
+                    stylization,
+                    cleanliness,
+                    scale,
+                    bristle,
+                    lighting,
+                    angle,
+                    shine,
+                ],
+            ) => Some(Self::OilPaint {
+                stylization,
+                cleanliness,
+                scale,
+                bristle,
+                lighting: flag(lighting)?,
+                angle,
+                shine,
+                reduction: 1.0,
+            }),
             ("shadowsHighlights", &[sa, st, sr, ha, ht, hr, color, midtone]) => {
                 Some(Self::ShadowsHighlights {
                     shadows: [sa, st, sr],
@@ -886,18 +1130,14 @@ impl Filter {
                 clarity,
                 scale: 1.0,
             }),
-            ("addNoise", &[amount, gaussian, monochromatic, seed]) => {
-                // Flags are 0 or 1, the seed a whole number in range: anything else is not
-                // this filter's.
-                let flag = |v: f32| (v == 0.0 || v == 1.0).then_some(v == 1.0);
-                let whole = seed.fract() == 0.0 && (0.0..NOISE_SEEDS as f32).contains(&seed);
-                Some(Self::AddNoise {
-                    amount,
-                    gaussian: flag(gaussian)?,
-                    monochromatic: flag(monochromatic)?,
-                    seed: whole.then_some(seed as u32)?,
-                })
-            }
+            // Flags are 0 or 1, the seed a whole number in range: anything else is not this
+            // filter's.
+            ("addNoise", &[amount, gaussian, monochromatic, seed]) => Some(Self::AddNoise {
+                amount,
+                gaussian: flag(gaussian)?,
+                monochromatic: flag(monochromatic)?,
+                seed: whole_seed(seed)?,
+            }),
             _ => None,
         }
     }
@@ -1007,6 +1247,39 @@ impl Filter {
                 foreground: [0; 3],
                 background: [255; 3],
                 seed: 0,
+            }),
+            "diffuse" => Some(Self::Diffuse {
+                mode: DiffuseMode::Normal,
+                seed: 0,
+                reduction: 1.0,
+            }),
+            "wind" => Some(Self::Wind {
+                method: WindMethod::Wind,
+                from_left: false,
+                seed: 0,
+                reduction: 1.0,
+            }),
+            "tiles" => Some(Self::Tiles {
+                tiles: 10.0,
+                offset: 10.0,
+                fill: TilesFill::Background,
+                foreground: [0; 3],
+                background: [255; 3],
+                seed: 0,
+            }),
+            "traceContour" => Some(Self::TraceContour {
+                level: 128.0,
+                upper: true,
+            }),
+            "oilPaint" => Some(Self::OilPaint {
+                stylization: 4.0,
+                cleanliness: 5.0,
+                scale: 1.0,
+                bristle: 2.0,
+                lighting: true,
+                angle: -60.0,
+                shine: 1.0,
+                reduction: 1.0,
             }),
             "shadowsHighlights" => Some(Self::ShadowsHighlights {
                 shadows: [35.0, 50.0, 30.0],
@@ -1155,6 +1428,48 @@ impl Filter {
                     .all(|v| v.fract() == 0.0 && (1.0..=MAX_FIBERS_SETTING).contains(v))
                     && seed < NOISE_SEEDS
             }
+            Self::Diffuse {
+                seed, reduction, ..
+            }
+            | Self::Wind {
+                seed, reduction, ..
+            } => seed < NOISE_SEEDS && reduction.is_finite() && reduction >= 1.0,
+            Self::Tiles {
+                tiles,
+                offset,
+                seed,
+                ..
+            } => {
+                [tiles, offset]
+                    .iter()
+                    .all(|v| v.fract() == 0.0 && (1.0..=MAX_TILES_SETTING).contains(v))
+                    && seed < NOISE_SEEDS
+            }
+            Self::TraceContour { level, .. } => {
+                level.fract() == 0.0 && (0.0..=MAX_THRESHOLD).contains(&level)
+            }
+            Self::OilPaint {
+                stylization,
+                cleanliness,
+                scale,
+                bristle,
+                angle,
+                shine,
+                reduction,
+                ..
+            } => {
+                let within =
+                    |v: f32, min: f32| v.is_finite() && (min..=MAX_OIL_SETTING).contains(&v);
+                within(stylization, 0.1)
+                    && within(cleanliness, 0.0)
+                    && within(scale, 0.1)
+                    && within(bristle, 0.0)
+                    && within(shine, 0.0)
+                    && angle.is_finite()
+                    && (-180.0..=180.0).contains(&angle)
+                    && reduction.is_finite()
+                    && reduction >= 1.0
+            }
             Self::RadialBlur { amount, center, .. } => {
                 amount.fract() == 0.0
                     && (MIN_RADIAL_AMOUNT..=MAX_RADIAL_AMOUNT).contains(&amount)
@@ -1212,7 +1527,12 @@ impl Filter {
             | Self::Average
             | Self::Clouds { .. }
             | Self::DifferenceClouds { .. }
-            | Self::Fibers { .. } => None,
+            | Self::Fibers { .. }
+            | Self::Diffuse { .. }
+            | Self::Wind { .. }
+            | Self::Tiles { .. }
+            | Self::TraceContour { .. }
+            | Self::OilPaint { .. } => None,
         }
     }
 
@@ -1332,7 +1652,49 @@ impl Filter {
             | Self::PolarCoordinates { .. }
             | Self::Clouds { .. }
             | Self::DifferenceClouds { .. }
-            | Self::Fibers { .. } => *self,
+            | Self::Fibers { .. }
+            | Self::Tiles { .. } => *self,
+            // Lines of a pixel: as thin on a reduced layer.
+            Self::TraceContour { .. } => *self,
+            Self::Diffuse {
+                mode,
+                seed,
+                reduction,
+            } => Self::Diffuse {
+                mode,
+                seed,
+                reduction: reduction * factor,
+            },
+            Self::Wind {
+                method,
+                from_left,
+                seed,
+                reduction,
+            } => Self::Wind {
+                method,
+                from_left,
+                seed,
+                reduction: reduction * factor,
+            },
+            Self::OilPaint {
+                stylization,
+                cleanliness,
+                scale,
+                bristle,
+                lighting,
+                angle,
+                shine,
+                reduction,
+            } => Self::OilPaint {
+                stylization,
+                cleanliness,
+                scale,
+                bristle,
+                lighting,
+                angle,
+                shine,
+                reduction: reduction * factor,
+            },
             Self::ClarityTexture {
                 texture,
                 clarity,
@@ -1367,6 +1729,8 @@ impl Filter {
             | Self::Clouds { .. }
             | Self::DifferenceClouds { .. }
             | Self::Fibers { .. } => 0.0,
+            Self::Diffuse { .. } | Self::TraceContour { .. } => 2.0,
+            Self::Wind { .. } | Self::OilPaint { .. } => self.plan().kernel.reach() as f64 + 2.0,
             Self::DustAndScratches { radius, .. }
             | Self::Median { radius }
             | Self::BoxBlur { radius }
@@ -1389,7 +1753,8 @@ impl Filter {
             | Self::Ripple { .. }
             | Self::Wave { .. }
             | Self::ZigZag { .. }
-            | Self::PolarCoordinates { .. } => f64::INFINITY,
+            | Self::PolarCoordinates { .. }
+            | Self::Tiles { .. } => f64::INFINITY,
             Self::ClarityTexture { scale, .. } => {
                 3.5 * f64::from((CLARITY_RADIUS / scale).max(MIN_BLUR_RADIUS)) + 2.0
             }
@@ -1427,10 +1792,75 @@ impl Filter {
             Self::AddNoise { .. }
             | Self::Clouds { .. }
             | Self::DifferenceClouds { .. }
-            | Self::Fibers { .. } => Plan {
+            | Self::Fibers { .. }
+            | Self::Tiles { .. } => Plan {
                 factor: 1,
                 kernel: Kernel::Identity,
             },
+            Self::Diffuse {
+                mode,
+                seed,
+                reduction,
+            } => Plan {
+                factor: 1,
+                kernel: if reduction > 1.5 {
+                    Kernel::Identity
+                } else {
+                    Kernel::Diffuse { mode, seed }
+                },
+            },
+            Self::Wind {
+                method,
+                from_left,
+                seed,
+                reduction,
+            } => {
+                let (length, strength, stagger) = method.streaks();
+                Plan {
+                    factor: 1,
+                    kernel: Kernel::Wind {
+                        length: (length / f64::from(reduction)).round().max(1.0) as usize,
+                        strength,
+                        stagger,
+                        from_left,
+                        seed,
+                    },
+                }
+            }
+            Self::TraceContour { level, upper } => Plan {
+                factor: 1,
+                kernel: Kernel::Contour {
+                    level: f64::from(level) / 255.0,
+                    upper,
+                },
+            },
+            Self::OilPaint {
+                stylization,
+                cleanliness,
+                scale,
+                bristle,
+                lighting,
+                angle,
+                shine,
+                reduction,
+            } => {
+                let r = f64::from(reduction);
+                let (sin, cos) = f64::from(angle).to_radians().sin_cos();
+                Plan {
+                    factor: 1,
+                    kernel: Kernel::Oil(Oil {
+                        radius: ((1.0 + f64::from(stylization) * 0.6 * f64::from(scale).sqrt()) / r)
+                            .round()
+                            .max(1.0) as usize,
+                        clean: f64::from(cleanliness) * 0.2 / r,
+                        bristle: f64::from(bristle) / MAX_OIL_SETTING as f64,
+                        grain: r,
+                        // Toward the light (up is negative y).
+                        light: lighting.then_some([cos, -sin]),
+                        relief: f64::from(shine) * f64::from(scale) * OIL_RELIEF,
+                    }),
+                }
+            }
             Self::DustAndScratches { radius, .. } | Self::Median { radius } => {
                 Plan::median(f64::from(radius))
             }
@@ -1529,7 +1959,26 @@ impl Filter {
                 | Self::Wave { .. }
                 | Self::ZigZag { .. }
                 | Self::PolarCoordinates { .. }
+                | Self::Tiles { .. }
         )
+    }
+
+    /// What a distortion brings in where [`Self::source`] reads nothing: transparency, or
+    /// Tiles' fill, from `original` (the pixel's own premultiplied value) and `colors` (the
+    /// filter's colors in the blend space, see [`Self::render`]).
+    pub fn gap(&self, original: [f64; 4], colors: Option<[[f64; 4]; 2]>) -> [f64; 4] {
+        let Self::Tiles { fill, .. } = *self else {
+            return [0.0; 4];
+        };
+        match (fill, colors) {
+            (TilesFill::Background, Some(colors)) => colors[1],
+            (TilesFill::Foreground, Some(colors)) => colors[0],
+            (TilesFill::Inverse, _) => {
+                let a = original[3];
+                [a - original[0], a - original[1], a - original[2], a]
+            }
+            (TilesFill::Unaltered, _) | (_, None) => original,
+        }
     }
 
     /// Whether the filter works within a frame (the selection's box or the layer): a distortion,
@@ -1767,6 +2216,50 @@ impl Filter {
                     }
                 }
             }
+            Self::Tiles {
+                tiles,
+                offset,
+                seed,
+                ..
+            } => {
+                if w <= 0.0
+                    || h <= 0.0
+                    || p[0] < left
+                    || p[1] < top
+                    || p[0] >= right
+                    || p[1] >= bottom
+                {
+                    return Some(p);
+                }
+                let side = w.min(h) / f64::from(tiles);
+                let (columns, rows) = ((w / side).ceil() as i64, (h / side).ceil() as i64);
+                let (col, row) = (
+                    ((p[0] - left) / side).floor() as i64,
+                    ((p[1] - top) / side).floor() as i64,
+                );
+                let most = f64::from(offset) / 100.0 * side;
+                // A tile moves by less than its side: only those around can cover `p`, the
+                // last one row by row on top.
+                let mut found = None;
+                for r in (row - 1).max(0)..=(row + 1).min(rows - 1) {
+                    for c in (col - 1).max(0)..=(col + 1).min(columns - 1) {
+                        let draw = |k: u32| {
+                            let h = hash(c as i32 as u32 ^ hash(r as i32 as u32 ^ hash(seed ^ k)));
+                            f64::from(h >> 8) / f64::from(1u32 << 24) * 2.0 - 1.0
+                        };
+                        let q = [p[0] - draw(0) * most, p[1] - draw(1) * most];
+                        let (x0, y0) = (left + c as f64 * side, top + r as f64 * side);
+                        if q[0] >= x0
+                            && q[1] >= y0
+                            && q[0] < (x0 + side).min(right)
+                            && q[1] < (y0 + side).min(bottom)
+                        {
+                            found = Some(q);
+                        }
+                    }
+                }
+                found
+            }
             Self::PolarCoordinates { to_polar } => {
                 let tau = std::f64::consts::TAU;
                 if w <= 0.0 || h <= 0.0 || radius <= 0.0 {
@@ -1811,16 +2304,25 @@ impl Filter {
                 | Self::SmartBlur { .. }
                 | Self::Clouds { .. }
                 | Self::Fibers { .. }
+                | Self::Diffuse { .. }
+                | Self::Wind { .. }
+                | Self::Tiles { .. }
+                | Self::TraceContour { .. }
+                | Self::OilPaint { .. }
         )
     }
 
     /// Whether the filter draws (Clouds, Difference Clouds, Fibers): each pixel's
     /// [`Self::render`] its "blur".
     pub fn renders(&self) -> bool {
-        self.colors().is_some()
+        matches!(
+            self,
+            Self::Clouds { .. } | Self::DifferenceClouds { .. } | Self::Fibers { .. }
+        )
     }
 
-    /// The colors a drawing filter stores, foreground then background, sRGB-encoded.
+    /// The colors a filter stores (a drawing filter's, Tiles'), foreground then background,
+    /// sRGB-encoded.
     pub fn colors(&self) -> Option<[[u8; 3]; 2]> {
         match *self {
             Self::Clouds {
@@ -1834,6 +2336,11 @@ impl Filter {
                 ..
             }
             | Self::Fibers {
+                foreground,
+                background,
+                ..
+            }
+            | Self::Tiles {
                 foreground,
                 background,
                 ..
@@ -1898,7 +2405,12 @@ impl Filter {
             | Self::SurfaceBlur { .. }
             | Self::SmartBlur { .. }
             | Self::Clouds { .. }
-            | Self::Fibers { .. } => blurred,
+            | Self::Fibers { .. }
+            | Self::Diffuse { .. }
+            | Self::Wind { .. }
+            | Self::Tiles { .. }
+            | Self::TraceContour { .. }
+            | Self::OilPaint { .. } => blurred,
             // Each channel the difference of the pixel's color and the clouds' (`blurred`,
             // opaque), its own opacity.
             Self::DifferenceClouds { .. } => color(&|o, b| (o - b).abs()),
@@ -2012,6 +2524,11 @@ fn unpacked(v: f32) -> Option<[u8; 3]> {
         let n = v as u32;
         [(n >> 16) as u8, (n >> 8) as u8, n as u8]
     })
+}
+
+/// A flag parameter back: 0 or 1.
+fn flag(v: f32) -> Option<bool> {
+    (v == 0.0 || v == 1.0).then_some(v == 1.0)
 }
 
 /// A seed parameter back: a whole number below [`NOISE_SEEDS`].
@@ -2349,7 +2866,49 @@ pub(crate) enum Kernel {
         taps: usize,
         mode: SmartMode,
     },
+    /// Diffuse's: each pixel one of its eight neighbours drawn from `seed` and its place on the
+    /// layer, as `mode` says.
+    Diffuse {
+        mode: DiffuseMode,
+        seed: u32,
+    },
+    /// Wind's streaks along the rows, at most `length` pixels from their edge (see
+    /// [`wind`]).
+    Wind {
+        length: usize,
+        strength: f64,
+        stagger: bool,
+        from_left: bool,
+        seed: u32,
+    },
+    /// Trace Contour's lines where a channel crosses `level` (0 to 1), on the pixels above it
+    /// (`upper`) or below, white elsewhere.
+    Contour {
+        level: f64,
+        upper: bool,
+    },
+    Oil(Oil),
     Identity,
+}
+
+/// Oil Paint's computation (see [`oil`]): a Kuwahara filter of `radius`, a Gaussian blur of
+/// `clean` (none below 0.3), then the relief lit from `light` (a unit direction) by `relief`,
+/// its lightness grained by `bristle` (0 to 1) gradient noise of 1.5 pixels at full size
+/// (`grain`: how many of the layer's pixels a pixel is).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Oil {
+    radius: usize,
+    clean: f64,
+    bristle: f64,
+    grain: f64,
+    light: Option<[f64; 2]>,
+    relief: f64,
+}
+
+impl Oil {
+    fn reach(&self) -> usize {
+        self.radius + (3.0 * self.clean).ceil() as usize + 2
+    }
 }
 
 impl Kernel {
@@ -2362,6 +2921,9 @@ impl Kernel {
                 *radius
             }
             Self::Smart { radius, .. } => radius.ceil() as usize + 1,
+            Self::Diffuse { .. } | Self::Contour { .. } => 1,
+            Self::Wind { length, .. } => *length,
+            Self::Oil(oil) => oil.reach(),
             Self::Sobel => 1,
             Self::Relief { offset } => offset[0].abs().max(offset[1].abs()).ceil() as usize + 1,
             Self::Cells(cell) => cell.ceil() as usize,
@@ -2382,6 +2944,23 @@ impl Kernel {
     ) {
         match self {
             &Self::Cells(cell) => cells(region, width, height, cell, origin, layer),
+            &Self::Diffuse { mode, seed } => diffuse(region, width, height, mode, seed, origin),
+            &Self::Wind {
+                length,
+                strength,
+                stagger,
+                from_left,
+                seed,
+            } => wind(
+                region,
+                width,
+                [length as i64, i64::from(from_left)],
+                strength,
+                stagger,
+                seed,
+                origin,
+            ),
+            Self::Oil(oil) => self::oil(region, width, height, oil, origin),
             _ => self.region(region, width, height),
         }
     }
@@ -2412,6 +2991,10 @@ impl Kernel {
                 taps,
                 mode,
             } => smart(region, width, height, radius, threshold, taps, mode),
+            Self::Diffuse { .. } | Self::Wind { .. } | Self::Oil(_) => {
+                self.region_at(region, width, height, [0, 0], [width, height]);
+            }
+            &Self::Contour { level, upper } => contour(region, width, height, level, upper),
             Self::Identity => {}
         }
     }
@@ -2427,7 +3010,11 @@ impl Kernel {
             | Self::Relief { .. }
             | Self::Cells(_)
             | Self::Surface { .. }
-            | Self::Smart { .. } => {
+            | Self::Smart { .. }
+            | Self::Diffuse { .. }
+            | Self::Wind { .. }
+            | Self::Contour { .. }
+            | Self::Oil(_) => {
                 let mut image = image;
                 self.region(&mut image, width, height);
                 image
@@ -2682,6 +3269,282 @@ fn smart(
             }
             // The pixel itself is always close: never nothing.
             *out = sum.map(|v| v / count);
+        }
+    }
+}
+
+/// The eight neighbours of a pixel, clockwise from the left.
+const NEIGHBOURS: [[i64; 2]; 8] = [
+    [-1, 0],
+    [-1, -1],
+    [0, -1],
+    [1, -1],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+    [-1, 1],
+];
+
+/// Rec. 709 luma of a premultiplied value (its lightness over black).
+fn luma_of(p: [f32; 4]) -> f32 {
+    0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+}
+
+/// A draw from 0 to 1 (24 bits) for layer pixel `at`, `seed` and `salt`.
+fn draw(at: [i64; 2], seed: u32, salt: u32) -> f64 {
+    let h = hash(at[0] as i32 as u32 ^ hash(at[1] as i32 as u32 ^ hash(seed ^ salt)));
+    f64::from(h >> 8) / f64::from(1u32 << 24)
+}
+
+/// `region` (`width` × `height`, its first pixel pixel `origin` of the layer) in place:
+/// Diffuse ([`Kernel::Diffuse`]), the edges repeating outward. Each pixel's neighbour drawn
+/// from its place on the layer, so that tiles and their margins agree.
+fn diffuse(
+    region: &mut [[f32; 4]],
+    width: usize,
+    height: usize,
+    mode: DiffuseMode,
+    seed: u32,
+    origin: [i64; 2],
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    let at = |x: usize, y: usize, [dx, dy]: [i64; 2]| {
+        let x = (x as i64 + dx).clamp(0, width as i64 - 1) as usize;
+        let y = (y as i64 + dy).clamp(0, height as i64 - 1) as usize;
+        source[y * width + x]
+    };
+    for y in 0..height {
+        for x in 0..width {
+            let own = source[y * width + x];
+            let pick = (draw([origin[0] + x as i64, origin[1] + y as i64], seed, 0xd1f) * 8.0)
+                as usize
+                % 8;
+            let other = at(x, y, NEIGHBOURS[pick]);
+            region[y * width + x] = match mode {
+                DiffuseMode::Normal => other,
+                DiffuseMode::DarkenOnly if luma_of(other) < luma_of(own) => other,
+                DiffuseMode::LightenOnly if luma_of(other) > luma_of(own) => other,
+                DiffuseMode::DarkenOnly | DiffuseMode::LightenOnly => own,
+                // The closest neighbour in color, ties to the first from the one drawn.
+                DiffuseMode::Anisotropic => {
+                    let differs = |p: [f32; 4]| (0..4).map(|c| (p[c] - own[c]).abs()).sum::<f32>();
+                    (0..8)
+                        .map(|i| at(x, y, NEIGHBOURS[(pick + i) % 8]))
+                        .fold((f32::MAX, own), |(best, chosen), p| {
+                            let d = differs(p);
+                            if d < best { (d, p) } else { (best, chosen) }
+                        })
+                        .1
+                }
+            };
+        }
+    }
+}
+
+/// `region` (`width` pixels a row, its first pixel pixel `origin` of the layer) in place:
+/// Wind ([`Kernel::Wind`]), `[length, from_left]` its longest streak and its direction. A pixel
+/// whose luma differs from its neighbour downwind by [`WIND_EDGE`] or more blows a streak of its
+/// color downwind, a quarter of `length` to all of it long (drawn from its place and `seed`),
+/// covering what it crosses by `strength`, less and less to its end (or, `stagger`, as much
+/// all along, starting up to half its length further). Each pixel takes the strongest streak
+/// over it.
+fn wind(
+    region: &mut [[f32; 4]],
+    width: usize,
+    [length, from_left]: [i64; 2],
+    strength: f64,
+    stagger: bool,
+    seed: u32,
+    origin: [i64; 2],
+) {
+    if width == 0 {
+        return;
+    }
+    // Where the wind comes from, one pixel along the row.
+    let up: i64 = if from_left == 1 { -1 } else { 1 };
+    let n = width as i64;
+    let mut streaks = vec![(0.0f64, 0.0f64); width];
+    for (y, row) in region.chunks_mut(width).enumerate() {
+        let source = row.to_vec();
+        let ly = origin[1] + y as i64;
+        for (x, streak) in streaks.iter_mut().enumerate() {
+            let down = x as i64 - up;
+            *streak = (0.0, 0.0);
+            if (0..n).contains(&down)
+                && (luma_of(source[x]) - luma_of(source[down as usize])).abs() >= WIND_EDGE
+            {
+                let at = [origin[0] + x as i64, ly];
+                let len = length as f64 * (0.25 + 0.75 * draw(at, seed, 0x3a1));
+                let start = if stagger {
+                    len * 0.5 * draw(at, seed, 0x3a2)
+                } else {
+                    0.0
+                };
+                *streak = (len, start);
+            }
+        }
+        for (x, out) in row.iter_mut().enumerate() {
+            let own = source[x];
+            let (mut best, mut color) = (0.0, own);
+            for k in 1..=length {
+                let s = x as i64 + up * k;
+                if !(0..n).contains(&s) {
+                    break;
+                }
+                let (len, start) = streaks[s as usize];
+                let d = k as f64 - start;
+                if len <= 0.0 || d < 0.0 || d > len {
+                    continue;
+                }
+                let w = if stagger {
+                    strength
+                } else {
+                    strength * (1.0 - d / (len + 1.0))
+                };
+                if w > best {
+                    (best, color) = (w, source[s as usize]);
+                }
+            }
+            let w = best as f32;
+            *out = std::array::from_fn(|c| own[c] + (color[c] - own[c]) * w);
+        }
+    }
+}
+
+/// `region` (`width` × `height`) in place: Trace Contour ([`Kernel::Contour`]), the edges
+/// repeating outward. A channel of a pixel on the side outlined (above `level` for `upper`,
+/// else at or below it) with a neighbour (of four) on the other side is 0, every other one
+/// white; each pixel keeps its opacity.
+fn contour(region: &mut [[f32; 4]], width: usize, height: usize, level: f64, upper: bool) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    let above = |p: [f32; 4], c: usize| p[3] > 0.0 && f64::from(p[c] / p[3]) > level;
+    for y in 0..height {
+        for x in 0..width {
+            let own = source[y * width + x];
+            if own[3] <= 0.0 {
+                continue;
+            }
+            let near = [[-1i64, 0], [1, 0], [0, -1], [0, 1]].map(|[dx, dy]| {
+                let x = (x as i64 + dx).clamp(0, width as i64 - 1) as usize;
+                let y = (y as i64 + dy).clamp(0, height as i64 - 1) as usize;
+                source[y * width + x]
+            });
+            let mut out = [own[3]; 4];
+            for (c, v) in out.iter_mut().enumerate().take(3) {
+                let side = above(own, c);
+                if side == upper && near.iter().any(|&n| above(n, c) != side) {
+                    *v = 0.0;
+                }
+            }
+            region[y * width + x] = out;
+        }
+    }
+}
+
+/// `region` (`width` × `height`, its first pixel pixel `origin` of the layer) in place: Oil
+/// Paint ([`Kernel::Oil`]), the edges repeating outward.
+///
+/// Each pixel the average of the quadrant of `radius` around it (of four, each including it)
+/// whose luma varies least (a Kuwahara filter, from summed-area tables: strokes that keep
+/// their edges); blurred by `clean`; then, with a light, its relief (the result's luma, plus
+/// `bristle` gradient noise) shades it: lighter where the paint faces the light.
+fn oil(region: &mut [[f32; 4]], width: usize, height: usize, oil: &Oil, origin: [i64; 2]) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    // Summed-area tables (a row and a column of zeros first) of the four values, the luma and
+    // its square.
+    let (w1, h1) = (width + 1, height + 1);
+    let mut sums = vec![[0.0f64; 6]; w1 * h1];
+    for y in 0..height {
+        let mut row = [0.0f64; 6];
+        for x in 0..width {
+            let p = region[y * width + x];
+            let l = f64::from(luma_of(p));
+            let v = [p[0], p[1], p[2], p[3]].map(f64::from);
+            for (c, s) in row.iter_mut().enumerate() {
+                *s += match c {
+                    0..=3 => v[c],
+                    4 => l,
+                    _ => l * l,
+                };
+            }
+            let above = sums[y * w1 + x + 1];
+            sums[(y + 1) * w1 + x + 1] = std::array::from_fn(|c| above[c] + row[c]);
+        }
+    }
+    let r = oil.radius as i64;
+    let box_sum = |x0: i64, y0: i64, x1: i64, y1: i64| {
+        // Inclusive bounds clamped to the region.
+        let (x0, y0) = (x0.max(0) as usize, y0.max(0) as usize);
+        let (x1, y1) = (
+            (x1.min(width as i64 - 1) + 1) as usize,
+            (y1.min(height as i64 - 1) + 1) as usize,
+        );
+        let n = ((x1 - x0) * (y1 - y0)) as f64;
+        let s: [f64; 6] = std::array::from_fn(|c| {
+            sums[y1 * w1 + x1][c] - sums[y0 * w1 + x1][c] - sums[y1 * w1 + x0][c]
+                + sums[y0 * w1 + x0][c]
+        });
+        (s, n)
+    };
+    let mut painted = vec![[0.0f32; 4]; width * height];
+    for y in 0..height as i64 {
+        for x in 0..width as i64 {
+            let mut best = (f64::MAX, [0.0f64; 6], 1.0);
+            for (x0, y0) in [(x - r, y - r), (x, y - r), (x - r, y), (x, y)] {
+                let (s, n) = box_sum(x0, y0, x0 + r, y0 + r);
+                let mean = s[4] / n;
+                let variance = s[5] / n - mean * mean;
+                // Ties (a smooth gradient) to the first quadrant whatever the sums' rounding,
+                // which depends on where the region starts.
+                if variance < best.0 - OIL_TIE {
+                    best = (variance, s, n);
+                }
+            }
+            let (_, s, n) = best;
+            painted[y as usize * width + x as usize] = std::array::from_fn(|c| (s[c] / n) as f32);
+        }
+    }
+    if oil.clean >= 0.3 {
+        Blur::gaussian(oil.clean).region(&mut painted, width, height);
+    }
+    let Some(light) = oil.light.filter(|_| oil.relief > 0.0) else {
+        region.copy_from_slice(&painted);
+        return;
+    };
+    let relief: Vec<f64> = (0..width * height)
+        .map(|i| {
+            let (x, y) = ((i % width) as i64, (i / width) as i64);
+            let at = [
+                (origin[0] + x) as f64 * oil.grain / 1.5,
+                (origin[1] + y) as f64 * oil.grain / 1.5,
+            ];
+            f64::from(luma_of(painted[i])) + oil.bristle * 0.1 * gradient_noise(at, 0, 0)
+        })
+        .collect();
+    let height_at = |x: i64, y: i64| {
+        relief
+            [y.clamp(0, height as i64 - 1) as usize * width + x.clamp(0, width as i64 - 1) as usize]
+    };
+    for y in 0..height as i64 {
+        for x in 0..width as i64 {
+            let i = y as usize * width + x as usize;
+            let g = [
+                (height_at(x + 1, y) - height_at(x - 1, y)) / 2.0,
+                (height_at(x, y + 1) - height_at(x, y - 1)) / 2.0,
+            ];
+            // A slope rising toward the light faces away from it.
+            let shade = -(g[0] * light[0] + g[1] * light[1]) * oil.relief;
+            let p = painted[i];
+            let lift = (shade * f64::from(p[3])) as f32;
+            region[i] = [p[0] + lift, p[1] + lift, p[2] + lift, p[3]];
         }
     }
 }
@@ -4494,5 +5357,329 @@ mod tests {
         let p = [12.5, 40.5];
         let v = clouds(p, 0);
         assert_eq!(filter.render(p, colors), [v, v * 0.5, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn stylize_settings_are_photoshops_ranges() {
+        let tiles = |tiles, offset| Filter::Tiles {
+            tiles,
+            offset,
+            fill: TilesFill::Background,
+            foreground: [0; 3],
+            background: [255; 3],
+            seed: 0,
+        };
+        assert!(tiles(1.0, 99.0).is_valid() && tiles(99.0, 1.0).is_valid());
+        for wrong in [
+            tiles(0.0, 10.0),
+            tiles(100.0, 10.0),
+            tiles(10.0, 0.0),
+            tiles(10.5, 10.0),
+        ] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        let contour = |level| Filter::TraceContour { level, upper: true };
+        assert!(contour(0.0).is_valid() && contour(255.0).is_valid());
+        assert!(!contour(256.0).is_valid() && !contour(12.5).is_valid());
+        let Some(Filter::OilPaint { .. }) =
+            Filter::from_params("oilPaint", &[0.1, 0.0, 0.1, 0.0, 0.0, -180.0, 0.0])
+        else {
+            panic!("Oil Paint at its least");
+        };
+        for wrong in [
+            [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            [1.0, 10.5, 1.0, 0.0, 1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0, 0.0, 1.0, 181.0, 1.0],
+            [1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 11.0],
+        ] {
+            let filter = Filter::from_params("oilPaint", &wrong).expect("its parameters");
+            assert!(!filter.is_valid(), "{wrong:?}");
+        }
+        assert_eq!(
+            Filter::from_params("oilPaint", &[1.0, 1.0, 1.0, 0.0, 2.0, 0.0, 1.0]),
+            None
+        );
+        assert_eq!(Filter::from_params("wind", &[3.0, 0.0, 0.0]), None);
+        assert_eq!(Filter::from_params("diffuse", &[4.0, 0.0]), None);
+        // A look of a reduced level: Wind's streaks and Oil Paint's strokes shrink; Diffuse
+        // stops moving pixels beyond 1.5.
+        let wind = Filter::defaults("wind").unwrap();
+        assert!(wind.scaled(4.0).reach() < wind.reach());
+        let oil = Filter::defaults("oilPaint").unwrap();
+        assert!(oil.scaled(4.0).reach() < oil.reach());
+        let diffuse = Filter::defaults("diffuse").unwrap();
+        assert!(matches!(
+            diffuse.scaled(2.0).plan().kernel,
+            Kernel::Identity
+        ));
+        assert!(matches!(diffuse.plan().kernel, Kernel::Diffuse { .. }));
+    }
+
+    /// Pixel `(x, y)` of `region`, `width` wide.
+    fn at(region: &[[f32; 4]], width: usize, x: usize, y: usize) -> [f32; 4] {
+        region[y * width + x]
+    }
+
+    #[test]
+    fn diffuse_takes_a_neighbour_drawn_from_its_place_as_its_mode_says() {
+        let (w, h) = (24, 20);
+        let source = speckled(w * h, 3);
+        let diffused = |mode, origin: [i64; 2], region: &[[f32; 4]], (w, h): (usize, usize)| {
+            let mut out = region.to_vec();
+            diffuse(&mut out, w, h, mode, 9, origin);
+            out
+        };
+        let normal = diffused(DiffuseMode::Normal, [0, 0], &source, (w, h));
+        let darker = diffused(DiffuseMode::DarkenOnly, [0, 0], &source, (w, h));
+        let lighter = diffused(DiffuseMode::LightenOnly, [0, 0], &source, (w, h));
+        let mut moved = 0;
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let own = at(&source, w, x, y);
+                let out = at(&normal, w, x, y);
+                let neighbours: Vec<[f32; 4]> = NEIGHBOURS
+                    .iter()
+                    .map(|[dx, dy]| {
+                        at(
+                            &source,
+                            w,
+                            (x as i64 + dx) as usize,
+                            (y as i64 + dy) as usize,
+                        )
+                    })
+                    .collect();
+                assert!(neighbours.contains(&out), "({x}, {y})");
+                moved += usize::from(out != own);
+                let d = at(&darker, w, x, y);
+                assert!(d == own || (neighbours.contains(&d) && luma_of(d) < luma_of(own)));
+                let l = at(&lighter, w, x, y);
+                assert!(l == own || (neighbours.contains(&l) && luma_of(l) > luma_of(own)));
+            }
+        }
+        assert!(moved > (w - 2) * (h - 2) * 9 / 10, "{moved}");
+        // A part of the layer, from its place: the same neighbours.
+        let part: Vec<[f32; 4]> = (5..15)
+            .flat_map(|y| (4..20).map(move |x| (x, y)))
+            .map(|(x, y)| at(&source, w, x, y))
+            .collect();
+        let shifted = diffused(DiffuseMode::Normal, [4, 5], &part, (16, 10));
+        for y in 1..9 {
+            for x in 1..15 {
+                assert_eq!(
+                    at(&shifted, 16, x, y),
+                    at(&normal, w, x + 4, y + 5),
+                    "({x}, {y})"
+                );
+            }
+        }
+        // Anisotropic: along an edge, never across it.
+        let halves: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                if i % w < 12 {
+                    [0.0, 0.0, 0.0, 1.0]
+                } else {
+                    [1.0; 4]
+                }
+            })
+            .collect();
+        assert_eq!(
+            diffused(DiffuseMode::Anisotropic, [0, 0], &halves, (w, h)),
+            halves
+        );
+    }
+
+    #[test]
+    fn wind_blows_streaks_downwind_from_edges() {
+        // A white bar at x = 40..44 on black, 120 pixels wide, 16 rows.
+        let (w, h) = (120, 16);
+        let bar: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                if (40..44).contains(&(i % w)) {
+                    [1.0; 4]
+                } else {
+                    [0.0, 0.0, 0.0, 1.0]
+                }
+            })
+            .collect();
+        let blown = |method: WindMethod, from_left| {
+            let (length, strength, stagger) = method.streaks();
+            let mut out = bar.clone();
+            wind(
+                &mut out,
+                w,
+                [length as i64, i64::from(from_left)],
+                strength,
+                stagger,
+                4,
+                [0, 0],
+            );
+            out
+        };
+        for method in [WindMethod::Wind, WindMethod::Blast, WindMethod::Stagger] {
+            let (length, ..) = method.streaks();
+            // From the right: streaks go left of the bar, nothing changes right of it.
+            let out = blown(method, false);
+            let lit = |x: usize| (0..h).filter(|&y| at(&out, w, x, y)[0] > 0.05).count();
+            assert!((38..40).map(lit).sum::<usize>() > 0, "{method:?}");
+            for x in 44..w {
+                assert_eq!(lit(x), 0, "{method:?} at {x}");
+            }
+            for x in 0..40usize.saturating_sub(length as usize + 1) {
+                assert_eq!(lit(x), 0, "{method:?} beyond its length, at {x}");
+            }
+            // From the left: mirrored.
+            let out = blown(method, true);
+            let lit = |x: usize| (0..h).filter(|&y| at(&out, w, x, y)[0] > 0.05).count();
+            assert!((44..46).map(lit).sum::<usize>() > 0, "{method:?}");
+            for x in 0..40 {
+                assert_eq!(lit(x), 0, "{method:?} at {x}");
+            }
+        }
+    }
+
+    #[test]
+    fn trace_contour_outlines_each_channel_on_the_side_chosen() {
+        // Red 0.8 left of x = 5, 0.2 from there; green 1 everywhere; half-transparent.
+        let (w, h) = (10, 3);
+        let step: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let red = if i % w < 5 { 0.8 } else { 0.2 };
+                [red * 0.5, 0.5, 0.0, 0.5]
+            })
+            .collect();
+        for upper in [true, false] {
+            let mut out = step.clone();
+            contour(&mut out, w, h, 0.5, upper);
+            let line = if upper { 4 } else { 5 };
+            for x in 0..w {
+                let px = at(&out, w, x, 1);
+                let red = if x == line { 0.0 } else { 0.5 };
+                assert_eq!(px, [red, 0.5, 0.5, 0.5], "upper {upper} at {x}");
+            }
+        }
+    }
+
+    #[test]
+    fn tiles_move_squares_within_their_reach_and_leave_gaps() {
+        let tiles = |offset| Filter::Tiles {
+            tiles: 4.0,
+            offset,
+            fill: TilesFill::Background,
+            foreground: [0; 3],
+            background: [255; 3],
+            seed: 11,
+        };
+        let frame = [0.0, 0.0, 200.0, 100.0];
+        // Tiles of 25 pixels (4 along the height), 8 by 4.
+        let mut gaps = 0;
+        for y in 0..100 {
+            for x in 0..200 {
+                let p = [x as f64 + 0.5, y as f64 + 0.5];
+                match tiles(40.0).source(p, frame, [200.0, 100.0]) {
+                    Some(q) => {
+                        // Read from within the frame, at most 40 % of a tile away.
+                        assert!((p[0] - q[0]).abs() <= 10.0 && (p[1] - q[1]).abs() <= 10.0);
+                        assert!(q[0] >= 0.0 && q[1] >= 0.0 && q[0] < 200.0 && q[1] < 100.0);
+                    }
+                    None => gaps += 1,
+                }
+            }
+        }
+        assert!(gaps > 500, "{gaps}");
+        // Outside the frame: as it is.
+        let p = [150.0, 150.0];
+        assert_eq!(tiles(40.0).source(p, frame, [300.0, 300.0]), Some(p));
+        // The gaps' fills.
+        let original = [0.2, 0.3, 0.4, 0.5];
+        let colors = Some([[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]]);
+        let fill = |fill| Filter::Tiles {
+            tiles: 4.0,
+            offset: 10.0,
+            fill,
+            foreground: [0; 3],
+            background: [255; 3],
+            seed: 11,
+        };
+        assert_eq!(fill(TilesFill::Background).gap(original, colors), [1.0; 4]);
+        assert_eq!(
+            fill(TilesFill::Foreground).gap(original, colors),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        let inverse = fill(TilesFill::Inverse).gap(original, colors);
+        for (v, e) in inverse.iter().zip([0.3, 0.2, 0.1, 0.5]) {
+            assert!((v - e).abs() < 1e-12, "{inverse:?}");
+        }
+        assert_eq!(fill(TilesFill::Unaltered).gap(original, colors), original);
+        assert_eq!(Filter::Average.gap(original, colors), [0.0; 4]);
+    }
+
+    #[test]
+    fn oil_paint_smooths_into_strokes_keeping_edges_and_lights_its_relief() {
+        // A step with fine noise: the strokes smooth the noise, the step stays sharp.
+        let (w, h) = (40, 30);
+        let noise = speckled(w * h, 5);
+        let source: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let base = if i % w < 20 { 0.2 } else { 0.8 };
+                let v = base + (noise[i][0] - 0.5) * 0.1;
+                [v, v, v, 1.0]
+            })
+            .collect();
+        let painted = |light: Option<[f64; 2]>, bristle| {
+            let mut out = source.clone();
+            let filter = Oil {
+                radius: 3,
+                clean: 0.0,
+                bristle,
+                grain: 1.0,
+                light,
+                relief: 1.5,
+            };
+            oil(&mut out, w, h, &filter, [0, 0]);
+            out
+        };
+        let plain = painted(None, 0.0);
+        let roughness = |img: &[[f32; 4]]| {
+            (5..h - 5)
+                .flat_map(|y| (3..15).map(move |x| (x, y)))
+                .map(|(x, y)| (at(img, w, x + 1, y)[0] - at(img, w, x, y)[0]).abs())
+                .sum::<f32>()
+        };
+        assert!(roughness(&plain) < roughness(&source) / 3.0);
+        for y in 5..h - 5 {
+            assert!(
+                at(&plain, w, 19, y)[0] < 0.3 && at(&plain, w, 20, y)[0] > 0.7,
+                "{y}"
+            );
+        }
+        // Lit from the left: the step's rise faces it, lighter; lit from the right, darker.
+        let lit = painted(Some([-1.0, 0.0]), 0.0);
+        assert!(at(&lit, w, 20, 10)[0] > at(&plain, w, 20, 10)[0]);
+        let shaded = painted(Some([1.0, 0.0]), 0.0);
+        assert!(at(&shaded, w, 20, 10)[0] < at(&plain, w, 20, 10)[0]);
+        let flat = Oil {
+            radius: 2,
+            clean: 0.0,
+            bristle: 0.0,
+            grain: 1.0,
+            light: Some([1.0, 0.0]),
+            relief: 1.5,
+        };
+        let mut gray = vec![[0.5, 0.5, 0.5, 1.0]; 100];
+        oil(&mut gray, 10, 10, &flat, [0, 0]);
+        assert!(gray.iter().all(|p| *p == [0.5, 0.5, 0.5, 1.0]));
+        // The bristles grain even a flat area.
+        let mut grained = vec![[0.5, 0.5, 0.5, 1.0]; 100];
+        oil(
+            &mut grained,
+            10,
+            10,
+            &Oil {
+                bristle: 1.0,
+                ..flat
+            },
+            [0, 0],
+        );
+        assert!(grained.iter().any(|p| (p[0] - 0.5).abs() > 0.001));
     }
 }
