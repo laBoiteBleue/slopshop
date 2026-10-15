@@ -1069,7 +1069,7 @@ fn filtered(
         Filter::Average => Some(average(step, input, &pixels, selection.as_ref())?),
         _ => None,
     };
-    // A drawing filter's colors (sRGB-encoded) in the step's blend space, opaque.
+    // A filter's colors (Clouds', Tiles': sRGB-encoded) in the step's blend space, opaque.
     let colors = filter.colors().map(|colors| {
         colors.map(|[r, g, b]| {
             let c = LinearRgba::from_srgb_encoded_to_working(
@@ -1164,7 +1164,14 @@ fn filtered(
                         )
                     };
                     blurs[0] = if filter.samples() {
-                        filter.source(p, area, frame.layer).map_or([0.0; 4], read)
+                        match filter.source(p, area, frame.layer) {
+                            Some(q) => read(q),
+                            // Nothing there: transparency, or Tiles' fill.
+                            None => {
+                                let own = pixels.read(&bytes[(y * t + x) * bpp..][..bpp]);
+                                filter.gap(own, colors)
+                            }
+                        }
                     } else {
                         let mut sum = [0.0f64; 4];
                         let n = filter.radial_samples(p, area, frame.factor, |q| {
@@ -1180,7 +1187,7 @@ fn filtered(
                     blurs[0] = average;
                 }
                 // Clouds, Fibers: drawn at the layer point the pixel is.
-                if let Some(colors) = colors {
+                if let Some(colors) = colors.filter(|_| filter.renders()) {
                     let p = [
                         frame.origin[0] + ((x0 + x) as f64 + 0.5) * frame.factor,
                         frame.origin[1] + ((y0 + y) as f64 + 0.5) * frame.factor,
@@ -6975,5 +6982,100 @@ mod tests {
             }
         }
         assert!(across > 4 * down, "across {across}, down {down}");
+    }
+
+    /// `stack`'s look at part of the layer from (`T + 10`, `T`) at full size, against its
+    /// evaluation there.
+    fn look_matches_evaluation(stack: &LayerStack) {
+        let whole = stack.evaluate().unwrap();
+        let job = stack
+            .look_job([T as f64 + 10.0, T as f64, W as f64, H as f64], 0)
+            .expect("a look");
+        let origin = job.origin;
+        let look = job.run().unwrap().image;
+        // Within the part asked for (the crop's first pixels are its margin), along the layer's
+        // top edge.
+        for (x, y) in [(13, 2), (25, 1), (30, 0), (40, 2)] {
+            assert_eq!(
+                pixel(&look, x, y),
+                pixel(&whole, origin[0] + x, origin[1] + y),
+                "({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn stylize_filters_move_the_same_pixels_in_a_look_and_in_the_whole_layer() {
+        let original = gradient(true);
+        for id in ["diffuse", "wind", "oilPaint", "tiles"] {
+            let filter = Filter::defaults(id).unwrap();
+            let stack = applied(&original, filter);
+            assert!(
+                difference(&stack.evaluate().unwrap(), &original) > 0,
+                "{id}"
+            );
+            look_matches_evaluation(&stack);
+        }
+    }
+
+    #[test]
+    fn trace_contour_draws_a_line_on_white_where_the_layer_crosses_its_level() {
+        // Black then white at x = 150: Upper outlines the white side, Lower the black one.
+        let original = halves();
+        for (upper, line) in [(true, 150), (false, 149)] {
+            let traced = applied(
+                &original,
+                Filter::TraceContour {
+                    level: 128.0,
+                    upper,
+                },
+            )
+            .evaluate()
+            .unwrap();
+            for x in [0, 100, 148, 149, 150, 151, 299] {
+                let v = if x == line { 0 } else { 255 };
+                assert_eq!(
+                    pixel(&traced, x, 20),
+                    vec![v, v, v, 255],
+                    "upper {upper} at {x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tiles_fill_their_gaps_as_chosen() {
+        let original = gradient(true);
+        let tiles = |fill| Filter::Tiles {
+            tiles: 5.0,
+            offset: 30.0,
+            fill,
+            foreground: [255, 0, 0],
+            background: [0, 0, 255],
+            seed: 2,
+        };
+        let filled = applied(&original, tiles(crate::filter::TilesFill::Background))
+            .evaluate()
+            .unwrap();
+        let unaltered = applied(&original, tiles(crate::filter::TilesFill::Unaltered))
+            .evaluate()
+            .unwrap();
+        let (mut gaps, mut moved) = (0, 0);
+        for y in 0..H {
+            for x in 0..W {
+                let (f, u, o) = (
+                    pixel(&filled, x, y),
+                    pixel(&unaltered, x, y),
+                    pixel(&original, x, y),
+                );
+                if f == [0, 0, 255, 255] && u == o {
+                    gaps += 1;
+                } else {
+                    assert_eq!(f, u, "({x}, {y})");
+                    moved += usize::from(f != o);
+                }
+            }
+        }
+        assert!(gaps > 1000 && moved > 10_000, "{gaps} {moved}");
     }
 }
