@@ -76,7 +76,8 @@ struct Read {
     global_angle: f64,
     /// The style's scale (Layer Style > Scale Effects), applied to its sizes.
     scale: f64,
-    /// The master switch: off, every effect is off.
+    /// The master switch (`masterFXSwitch`): off, the effects are hidden, each keeping its own
+    /// setting.
     on: bool,
 }
 
@@ -113,7 +114,7 @@ impl Read {
     }
 
     fn enabled(&self, d: &Descriptor) -> bool {
-        self.on && d.bool(b"enab").unwrap_or(true)
+        d.bool(b"enab").unwrap_or(true)
     }
 
     fn opacity(d: &Descriptor) -> f32 {
@@ -454,6 +455,7 @@ pub(crate) fn read(block: &[u8], global_angle: f64) -> Option<ImportedStyle> {
     if pattern && read.on {
         read.approximated = true;
     }
+    style.effects_visible = read.on;
     style.is_valid().then_some(ImportedStyle {
         style,
         approximated: read.approximated,
@@ -638,7 +640,11 @@ fn gradient_overlay(o: GradientOverlay) -> Vec<Item> {
 pub(crate) fn write(style: &LayerStyle) -> Option<Vec<u8>> {
     let mut items: Vec<Item> = vec![
         (b"Scl ", b"UntF", unit(b"#Prc", 100.0)),
-        (b"masterFXSwitch", b"bool", vec![1]),
+        (
+            b"masterFXSwitch",
+            b"bool",
+            vec![u8::from(style.effects_visible)],
+        ),
     ];
     if let Some(s) = style.drop_shadow {
         items.push((b"DrSh", b"Objc", object(b"DrSh", &shadow(s))));
@@ -827,6 +833,7 @@ mod tests {
                 mode: BlendMode::LinearDodge,
                 ..Stroke::default()
             }),
+            effects_visible: true,
         };
         let block = write(&style).unwrap();
         let read = read(&block, 120.0).unwrap();
@@ -902,7 +909,7 @@ mod tests {
 
     #[test]
     fn what_slopshop_does_not_draw_is_reported() {
-        // A bevel, and the master switch off: every effect off.
+        // A bevel, and the master switch off: the effects hidden, each keeping its setting.
         let mut block = 0u32.to_be_bytes().to_vec();
         block.extend(16u32.to_be_bytes());
         block.extend(object(
@@ -922,9 +929,12 @@ mod tests {
             ],
         ));
         let read = read(&block, 30.0).unwrap();
-        assert!(!read.style.drop_shadow.unwrap().enabled);
-        // The bevel is off with the switch: nothing is left out.
-        assert!(!read.approximated);
+        assert!(read.style.drop_shadow.unwrap().enabled);
+        assert!(!read.style.effects_visible);
+        assert!(!read.style.shows());
+        // Back as it was.
+        let back = super::read(&write(&read.style).unwrap(), 30.0).unwrap();
+        assert!(!back.style.effects_visible);
         assert_eq!(super::read(&block[..10], 30.0), None);
     }
 

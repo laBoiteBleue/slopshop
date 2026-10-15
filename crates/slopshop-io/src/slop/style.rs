@@ -26,7 +26,9 @@
 //! Colors are linear working-space RGB, as a fill node's; a gradient's stops are Gradient
 //! Map's (`[location 0–4096, r, g, b]`, sRGB-encoded). Effects not added are absent; a node
 //! with a Gradient Overlay is written at node version 12 (schema 0.27), one with a Satin at 13
-//! (schema 0.28), one with a Bevel and Emboss at 14 (schema 0.29).
+//! (schema 0.28), one with a Bevel and Emboss at 14 (schema 0.29). From schema 0.36,
+//! `"effects_visible": false` hides every effect (Photoshop's eye on the "Effects" row), each
+//! keeping its own `enabled`; absent, they show (an older reader shows them, losing nothing).
 
 use serde_json::{Map, Value, json};
 use slopshop_core::blend::BlendMode;
@@ -67,6 +69,9 @@ pub(super) fn to_json(
 ) -> Value {
     let mut value = Map::new();
     value.insert("fill_opacity".into(), json!(style.fill_opacity));
+    if !style.effects_visible {
+        value.insert("effects_visible".into(), json!(false));
+    }
     let shadow = |s: DropShadow| {
         json!({
             "enabled": s.enabled,
@@ -255,6 +260,10 @@ pub(super) fn from_json(
 ) -> Option<LayerStyle> {
     let style = value.as_object()?;
     let fill_opacity = style.get("fill_opacity")?.as_f64()? as f32;
+    let effects_visible = match style.get("effects_visible") {
+        None => true,
+        Some(value) => value.as_bool()?,
+    };
     let shadow = |f: &Fields| {
         Some(DropShadow {
             enabled: f.enabled()?,
@@ -411,6 +420,7 @@ pub(super) fn from_json(
         satin,
         stroke,
         bevel,
+        effects_visible,
     };
     style.is_valid().then_some(style)
 }
