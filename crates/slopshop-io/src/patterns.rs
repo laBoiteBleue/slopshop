@@ -153,6 +153,7 @@ fn write_png(path: &Path, image: Arc<RasterImage>) -> Result<(), String> {
             transform: slopshop_core::Projective::IDENTITY,
             style: None,
             warp: None,
+            vector_mask: None,
         },
     }
     .apply(&mut document)

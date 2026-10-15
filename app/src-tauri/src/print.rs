@@ -39,6 +39,7 @@ fn on_paper(doc: &Document) -> Result<Document, String> {
             color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
         },
         warp: None,
+        vector_mask: None,
     };
     Edit::InsertLayer {
         parent: None,

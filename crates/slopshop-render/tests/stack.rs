@@ -144,6 +144,7 @@ fn document(stack: &LayerStack, ready: bool) -> Document {
             mask: None,
             content: LayerContent::raster(Arc::clone(stack.original())),
             warp: None,
+            vector_mask: None,
         },
     }
     .apply(&mut doc)

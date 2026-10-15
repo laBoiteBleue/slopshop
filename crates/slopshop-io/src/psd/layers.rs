@@ -476,6 +476,7 @@ fn read_layer_info<R: Read + Seek>(
             content,
             mask: built.mask,
             warp: None,
+            vector_mask: None,
         };
         if let Some(level) = levels.last_mut() {
             level.push(layer);

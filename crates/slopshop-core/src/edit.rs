@@ -76,6 +76,12 @@ pub enum Edit {
         id: LayerId,
         enabled: bool,
     },
+    /// Add, replace (`Some`: its path, feather, or enabled) or delete (`None`) a layer's
+    /// vector mask (ADR 0041).
+    SetVectorMask {
+        id: LayerId,
+        mask: Option<crate::shape::VectorMask>,
+    },
     /// Move a layer (a group with everything inside it) so that it ends up at `index` among the
     /// layers of `parent` (`None`: the top level; 0 = bottom).
     MoveLayer {
@@ -528,6 +534,14 @@ impl Edit {
                 let previous = std::mem::replace(&mut layer.mask, mask);
                 Edit::SetLayerMask { id, mask: previous }
             }
+            Edit::SetVectorMask { id, mask } => {
+                if mask.as_ref().is_some_and(|m| !m.is_valid()) {
+                    return Err(EditError::InvalidShape);
+                }
+                let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
+                let previous = std::mem::replace(&mut layer.vector_mask, mask);
+                Edit::SetVectorMask { id, mask: previous }
+            }
             Edit::SetLayerStack { id, stack, shown } => {
                 let layer = doc.layer_mut(id).ok_or(EditError::UnknownLayer(id))?;
                 let LayerContent::Raster {
@@ -852,6 +866,7 @@ impl Edit {
             | Edit::SetLayerStyle { id, .. }
             | Edit::SetLayerMask { id, .. }
             | Edit::SetLayerMaskEnabled { id, .. }
+            | Edit::SetVectorMask { id, .. }
             | Edit::SetMaskPaint { id, .. }
             | Edit::SetLayerClipped { id, .. }
             | Edit::SetGroupPassThrough { id, .. }
@@ -891,6 +906,7 @@ fn reshaped_vector(
     }
     let locks = doc.effective_locks(layer.id);
     if layer.mask.is_some()
+        || layer.vector_mask.is_some()
         || transform == layer.transform
         || locks.locks_pixels()
         || locks.locks_position()
@@ -2216,6 +2232,7 @@ mod tests {
                 color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
             },
             warp: None,
+            vector_mask: None,
         }
     }
 
@@ -2348,6 +2365,7 @@ mod tests {
                 adjustment: Adjustment::DEFAULTS[0],
             },
             warp: None,
+            vector_mask: None,
         };
         Edit::InsertLayer {
             parent: None,

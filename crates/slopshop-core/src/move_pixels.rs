@@ -696,6 +696,7 @@ pub fn show_floating(
         clipped: false,
         transform,
         warp: None,
+        vector_mask: None,
     };
     let mut children = vec![part(
         doc.allocate_layer_id(),
@@ -1091,6 +1092,7 @@ mod tests {
             clipped,
             transform: crate::transform::Projective::IDENTITY,
             warp: None,
+            vector_mask: None,
         };
         let mut pixels = Vec::new();
         for y in 0..canvas.height {
@@ -1132,6 +1134,7 @@ mod tests {
             clipped: false,
             transform: placed.into(),
             warp: None,
+            vector_mask: None,
         };
         let below = fill(&mut doc, LinearRgba::new(0.2, 0.5, 0.8, 1.0), false);
         let clipped = fill(&mut doc, LinearRgba::new(0.9, 0.1, 0.1, 0.3), true);

@@ -315,6 +315,8 @@ pub struct Layer {
     pub content: LayerContent,
     /// Hides parts of the layer (ADR 0014).
     pub mask: Option<LayerMask>,
+    /// A path hiding parts of the layer besides its mask, multiplied with it (ADR 0041).
+    pub vector_mask: Option<crate::shape::VectorMask>,
     /// Shown only where the nearest layer below it that is not clipped (its base) has pixels:
     /// a clipping mask (ADR 0016).
     pub clipped: bool,
@@ -448,11 +450,64 @@ impl Layer {
         }
     }
 
-    /// A vector layer's drawing made anew: it moved, or its canvas changed (ADR 0041).
+    /// A vector layer's drawing made anew, and what its vector mask covers forgotten: it moved,
+    /// changed, or its canvas changed (ADR 0041).
     fn redraw_vector(&mut self) {
         if let LayerContent::Vector { drawing, .. } = &mut self.content {
             *drawing = Arc::default();
         }
+        if let Some(mask) = &mut self.vector_mask {
+            mask.forget();
+        }
+    }
+
+    /// The mask applied to the layer placed in the document by `to_document` on a `canvas`: its
+    /// enabled pixel mask multiplied by its enabled vector mask's coverage (ADR 0041), drawn in
+    /// the layer's space at the pixels of [`Layer::mask_size`] (the pixel mask's when it has
+    /// one) and kept with the vector mask. `None`: no mask applies.
+    pub fn applied_mask(
+        &self,
+        to_document: crate::transform::Projective,
+        canvas: Size,
+    ) -> Option<&LayerMask> {
+        let pixel = self.mask.as_ref().filter(|m| m.enabled);
+        let Some(vector) = self.vector_mask.as_ref().filter(|v| v.enabled) else {
+            return pixel;
+        };
+        let size = match pixel {
+            Some(m) => m.image.size(),
+            None => self.mask_size(to_document, canvas),
+        };
+        vector.applied(size, pixel.map(|m| &m.image))
+    }
+
+    /// The pixels a new mask of the layer covers in its space, from its origin (ADR 0014): a
+    /// raster's image; otherwise the canvas seen from the layer (placed in the document by
+    /// `to_document`), and a shape's bounds where it reaches beyond the canvas.
+    pub fn mask_size(&self, to_document: crate::transform::Projective, canvas: Size) -> Size {
+        if let LayerContent::Raster { image, .. } = &self.content {
+            return image.size();
+        }
+        let Some(inverse) = to_document.inverse() else {
+            return canvas;
+        };
+        let [_, _, mut x1, mut y1] =
+            inverse.map_rect([0.0, 0.0, f64::from(canvas.width), f64::from(canvas.height)]);
+        // A shape reaching beyond the canvas keeps showing there (ADR 0041).
+        if let LayerContent::Vector { source, .. } = &self.content
+            && let Some([_, _, sx1, sy1]) = crate::shape::path::shape_bounds(source.shape())
+        {
+            x1 = x1.max(sx1);
+            y1 = y1.max(sy1);
+        }
+        let side = |v: f64| {
+            if v.is_finite() {
+                v.ceil().clamp(1.0, f64::from(MAX_MASK_SIDE)) as u32
+            } else {
+                1
+            }
+        };
+        Size::new(side(x1), side(y1))
     }
 
     /// Every source the layer shows: its content's (ADR 0040), then its Pattern Overlay's
@@ -595,6 +650,10 @@ impl LayerMask {
         image.format().layout == crate::color::ChannelLayout::Gray
     }
 }
+
+/// The longest side of a mask made for a layer that is not a raster ([`Layer::mask_size`]): a
+/// layer scaled far down sees the canvas as huge in its own space.
+pub const MAX_MASK_SIDE: u32 = 1 << 16;
 
 /// Pixels per inch of a document whose file does not say (Photoshop's default too).
 pub const DEFAULT_RESOLUTION: f64 = 72.0;
@@ -1202,6 +1261,7 @@ mod tests {
                 color: LinearRgba::new(0.1, 0.2, 0.3, 1.0),
             },
             warp: None,
+            vector_mask: None,
         }
     }
 

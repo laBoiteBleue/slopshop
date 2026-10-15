@@ -130,6 +130,7 @@ pub async fn add_pattern_fill(
                 pattern: PatternFill::new(source),
             },
             warp: None,
+            vector_mask: None,
         },
     };
     document

@@ -88,6 +88,9 @@ pub enum Step<'a> {
         /// Display only: a raster layer whose pixels are what the stack steps before it made
         /// (its stack not evaluated yet, ADR 0029), not its image.
         stack: bool,
+        /// The mask applied (placed by `transform`): the layer's enabled mask, times its vector
+        /// mask's coverage ([`Layer::applied_mask`]).
+        mask: Option<&'a LayerMask>,
     },
     /// Apply an adjustment layer to the accumulator (ADR 0020), mixed with it by `opacity` × its
     /// mask (placed by `transform`).
@@ -96,6 +99,8 @@ pub enum Step<'a> {
         adjustment: Adjustment,
         opacity: f32,
         transform: Projective,
+        /// The mask applied, as a layer's.
+        mask: Option<&'a LayerMask>,
     },
     /// Push the accumulator. An isolated group starts over from transparency; a pass-through
     /// one keeps compositing onto what is below it.
@@ -225,6 +230,11 @@ fn enabled(layer: &Layer) -> Option<&LayerMask> {
     layer.mask.as_ref().filter(|m| m.enabled)
 }
 
+/// Whether a mask applies to `layer`: its pixel mask or its vector mask (ADR 0041).
+fn masked(layer: &Layer) -> bool {
+    enabled(layer).is_some() || layer.vector_mask.as_ref().is_some_and(|m| m.enabled)
+}
+
 /// A canvas area in document pixels: `[x0, y0, x1, y1]`, empty when `x0 >= x1` or `y0 >= y1`.
 type Area = [i64; 4];
 
@@ -291,7 +301,7 @@ fn opaque_area(layer: &Layer, parent: Projective, canvas: Size) -> Option<Area> 
         || layer.clipped
         || layer.blend_mode != BlendMode::Normal
         || layer.opacity < 1.0
-        || enabled(layer).is_some()
+        || masked(layer)
     {
         return None;
     }
@@ -404,12 +414,14 @@ fn push_layer<'a>(
         Role::Plain | Role::Clipped => (layer.blend_mode, layer.opacity),
     };
     let atop = role == Role::Clipped;
+    let mask = layer.applied_mask(transform, plan.canvas);
     if let LayerContent::Adjustment { adjustment } = &layer.content {
         steps.push(Step::Adjust {
             layer,
             adjustment: *adjustment,
             opacity,
             transform,
+            mask,
         });
         return;
     }
@@ -491,7 +503,7 @@ fn push_layer<'a>(
     else {
         if let LayerContent::Vector { source, drawing } = &layer.content {
             push_vector(
-                layer,
+                mask,
                 &drawing.drawn(source, transform, plan.canvas).paints,
                 transform,
                 (mode, opacity, atop),
@@ -508,6 +520,7 @@ fn push_layer<'a>(
                 atop,
                 transform,
                 stack: stacked,
+                mask,
             });
             return;
         };
@@ -518,6 +531,7 @@ fn push_layer<'a>(
             atop: false,
             transform,
             stack: stacked,
+            mask,
         });
         push_style_tail(drawn, mode, opacity, atop, steps);
         return;
@@ -525,7 +539,6 @@ fn push_layer<'a>(
     // A base or a clipped group is composited as a unit: isolated; so is a styled one, its
     // content at Fill Opacity inside its effects (ADR 0032).
     let passes = *pass_through && role == Role::Plain && drawn.is_none();
-    let mask = enabled(layer);
     if passes && opacity >= 1.0 && mask.is_none() {
         push_steps(children, transform, plan, steps);
         return;
@@ -565,11 +578,11 @@ fn push_layer<'a>(
 }
 
 /// A vector layer's steps (ADR 0041): its `paints` (fills masked by their coverage) blended as
-/// one with the layer's mask (placed by `transform`) and `blend` (mode, opacity, atop); a single
-/// paint without a mask directly. A styled layer's paints are its content, at Fill Opacity
-/// within its effects.
+/// one with the layer's applied `mask` (placed by `transform`) and `blend` (mode, opacity,
+/// atop); a single paint without a mask directly. A styled layer's paints are its content, at
+/// Fill Opacity within its effects.
 fn push_vector<'a>(
-    layer: &'a Layer,
+    mask: Option<&'a LayerMask>,
     paints: &'a [Layer],
     transform: Projective,
     blend: (BlendMode, f32, bool),
@@ -577,7 +590,6 @@ fn push_vector<'a>(
     steps: &mut Vec<Step<'a>>,
 ) {
     let (mode, opacity, atop) = blend;
-    let mask = enabled(layer);
     match (styled, paints) {
         (None, []) => {}
         (None, [paint]) if mask.is_none() => steps.push(Step::Layer {
@@ -587,6 +599,7 @@ fn push_vector<'a>(
             atop,
             transform: paint.transform,
             stack: false,
+            mask: enabled(paint),
         }),
         _ => {
             steps.push(Step::Begin { isolated: true });
@@ -649,6 +662,7 @@ fn effect_step(effect: &Layer, atop: bool) -> Step<'_> {
         atop,
         transform: effect.transform,
         stack: false,
+        mask: enabled(effect),
     }
 }
 
@@ -795,13 +809,14 @@ fn stored_texel(
 
 /// A fill or raster layer, placed by `transform`, ready to be sampled with `mode` and
 /// `opacity` (atop when `atop`).
-fn source(
-    layer: &Layer,
+fn source<'a>(
+    layer: &'a Layer,
     mode: BlendMode,
     opacity: f32,
     atop: bool,
     transform: Projective,
-) -> Option<Source<'_>> {
+    mask: Option<&'a LayerMask>,
+) -> Option<Source<'a>> {
     let replaces_alpha = layer.mask.as_ref().is_some_and(|m| m.replaces_alpha);
     let content = match &layer.content {
         LayerContent::Fill { color } => {
@@ -864,7 +879,7 @@ fn source(
         atop,
         content,
         replaces_alpha,
-        mask: enabled(layer).and_then(|m| mask_source(m, transform, layer.warp.as_ref())),
+        mask: mask.and_then(|m| mask_source(m, transform, layer.warp.as_ref())),
     })
 }
 
@@ -1070,17 +1085,21 @@ fn ops(document: &Document) -> Vec<Op<'_>> {
                 opacity,
                 atop,
                 transform,
+                mask,
                 ..
-            } => source(layer, mode, opacity, atop, transform).map(|s| Op::Layer(Box::new(s))),
+            } => {
+                source(layer, mode, opacity, atop, transform, mask).map(|s| Op::Layer(Box::new(s)))
+            }
             Step::Adjust {
-                layer,
                 adjustment,
                 opacity,
                 transform,
+                mask,
+                ..
             } => Some(Op::Adjust {
                 adjustment: adjustment.prepare(),
                 opacity: f64::from(opacity),
-                mask: enabled(layer).and_then(|m| mask_source(m, transform, None)),
+                mask: mask.and_then(|m| mask_source(m, transform, None)),
             }),
             Step::Begin { isolated } => Some(Op::Begin { isolated }),
             Step::End {
@@ -1503,6 +1522,7 @@ mod tests {
                 mask: None,
                 content,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(doc)
@@ -1545,6 +1565,14 @@ mod tests {
         let mut out = vec![0.0; region.size().pixel_count() as usize * 4];
         let report = composite_region(doc, region, &mut out).unwrap();
         (out, report)
+    }
+
+    /// Within a 16-bit mask's rounding of `expected`.
+    fn assert_near(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (a, e) in actual.iter().zip(expected) {
+            assert!((a - e).abs() < 1e-4, "{actual:?} != {expected:?}");
+        }
     }
 
     fn assert_close(actual: &[f32], expected: &[f32]) {
@@ -2080,6 +2108,164 @@ mod tests {
         assert!(crate::document::LayerMask::from_transparency(&opaque_image).is_none());
     }
 
+    /// A closed square path from (`l`, `t`) to (`r`, `b`).
+    fn square_path(l: f64, t: f64, r: f64, b: f64) -> crate::shape::Geometry {
+        use crate::shape::{FillRule, Geometry, Segment, Subpath};
+        Geometry::Path {
+            subpaths: vec![Subpath {
+                start: [l, t],
+                segments: vec![
+                    Segment::Line([r, t]),
+                    Segment::Line([r, b]),
+                    Segment::Line([l, b]),
+                ],
+                closed: true,
+            }],
+            rule: FillRule::NonZero,
+        }
+    }
+
+    #[test]
+    fn a_vector_mask_shows_what_its_path_encloses_times_the_pixel_mask() {
+        use crate::shape::VectorMask;
+        let mut doc = linear_document(Size::new(4, 1));
+        let id = add(&mut doc, fill(0.0, 0.0, 1.0, 1.0), 1.0, true);
+        // The path covers the first two pixels and half of the third.
+        let vector = VectorMask::new(square_path(0.0, 0.0, 2.5, 1.0), false).unwrap();
+        let inverse = Edit::SetVectorMask {
+            id,
+            mask: Some(vector.clone()),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(inverse, Edit::SetVectorMask { id, mask: None });
+        let (out, _) = composite(&doc, doc.size().bounds());
+        let alpha: Vec<f32> = out.chunks(4).map(|p| p[3]).collect();
+        assert_near(&alpha, &[1.0, 1.0, 0.5, 0.0]);
+        // A pixel mask multiplies it: a quarter on the second pixel.
+        let format = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let pixel =
+            RasterImage::from_pixels(Size::new(4, 1), format, &[255, 64, 255, 255]).unwrap();
+        set_mask(
+            &mut doc,
+            id,
+            Some(crate::document::LayerMask {
+                original: None,
+                image: Arc::new(pixel),
+                enabled: true,
+                replaces_alpha: false,
+            }),
+        );
+        let (out, _) = composite(&doc, doc.size().bounds());
+        let alpha: Vec<f32> = out.chunks(4).map(|p| p[3]).collect();
+        assert_near(&alpha, &[1.0, 64.0 / 255.0, 0.5, 0.0]);
+        // Disabled, the vector mask is ignored; the pixel mask still applies.
+        let mut disabled = vector.clone();
+        disabled.enabled = false;
+        Edit::SetVectorMask {
+            id,
+            mask: Some(disabled),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let (out, _) = composite(&doc, doc.size().bounds());
+        let alpha: Vec<f32> = out.chunks(4).map(|p| p[3]).collect();
+        assert_near(&alpha, &[1.0, 64.0 / 255.0, 1.0, 1.0]);
+        // Inverted (Reveal All with a path): the path hides what it encloses.
+        set_mask(&mut doc, id, None);
+        let inverted = VectorMask::new(square_path(0.0, 0.0, 2.5, 1.0), true).unwrap();
+        Edit::SetVectorMask {
+            id,
+            mask: Some(inverted),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let (out, _) = composite(&doc, doc.size().bounds());
+        let alpha: Vec<f32> = out.chunks(4).map(|p| p[3]).collect();
+        assert_near(&alpha, &[0.0, 0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn a_vector_mask_follows_its_layer_and_limits_adjustments() {
+        use crate::shape::VectorMask;
+        let mut doc = linear_document(Size::new(4, 1));
+        let id = add(&mut doc, fill(0.0, 0.0, 1.0, 1.0), 1.0, true);
+        Edit::SetVectorMask {
+            id,
+            mask: Some(VectorMask::new(square_path(0.0, 0.0, 1.0, 1.0), false).unwrap()),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        // Moved two pixels right, its mask with it (the mask lives in the layer's space).
+        Edit::SetLayerTransform {
+            id,
+            transform: crate::transform::Affine::translation(2.0, 0.0).into(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let (out, _) = composite(&doc, doc.size().bounds());
+        let alpha: Vec<f32> = out.chunks(4).map(|p| p[3]).collect();
+        assert_near(&alpha, &[0.0, 0.0, 1.0, 0.0]);
+        // An adjustment layer's vector mask limits where it applies: Invert on the third pixel
+        // only (the blue one, turned yellow).
+        let invert = add(
+            &mut doc,
+            LayerContent::Adjustment {
+                adjustment: crate::adjust::Adjustment::Invert,
+            },
+            1.0,
+            true,
+        );
+        Edit::SetVectorMask {
+            id: invert,
+            mask: Some(VectorMask::new(square_path(2.0, 0.0, 3.0, 1.0), false).unwrap()),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let (with_invert, _) = composite(&doc, doc.size().bounds());
+        assert_near(&with_invert[..8], &out[..8]);
+        assert_near(&with_invert[12..], &out[12..]);
+        assert_near(&with_invert[8..12], &[1.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn vector_mask_edits_are_validated_and_refused_under_lock_all() {
+        use crate::shape::{FillRule, Geometry, Segment, Subpath, VectorMask};
+        let mut doc = linear_document(Size::new(4, 1));
+        let id = add(&mut doc, fill(0.0, 0.0, 1.0, 1.0), 1.0, true);
+        let invalid = VectorMask::reveal_all().with_geometry(Geometry::Path {
+            subpaths: vec![Subpath {
+                start: [f64::NAN, 0.0],
+                segments: vec![Segment::Line([1.0, 1.0])],
+                closed: false,
+            }],
+            rule: FillRule::NonZero,
+        });
+        assert!(invalid.is_none());
+        Edit::SetLayerLocks {
+            id,
+            locks: crate::document::LayerLocks {
+                all: true,
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert!(matches!(
+            Edit::SetVectorMask {
+                id,
+                mask: Some(VectorMask::hide_all()),
+            }
+            .apply(&mut doc),
+            Err(crate::edit::EditError::Locked { .. })
+        ));
+    }
+
     #[test]
     fn alpha_masks_keep_the_sample_type_and_every_value() {
         let size = Size::new(300, 260);
@@ -2134,6 +2320,7 @@ mod tests {
             mask: None,
             content,
             warp: None,
+            vector_mask: None,
         }
     }
 

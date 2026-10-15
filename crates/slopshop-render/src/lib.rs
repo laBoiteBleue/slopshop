@@ -37,8 +37,7 @@ use slopshop_core::tile::TileCoord;
 use slopshop_core::view::ViewTransform;
 use slopshop_core::warp::{PlacedMesh, Warp};
 use slopshop_core::{
-    Affine, BlendMode, BlendSpace, Document, Layer, LayerContent, Projective, RasterImage, Rect,
-    Size,
+    Affine, BlendMode, BlendSpace, Document, LayerContent, Projective, RasterImage, Rect, Size,
 };
 
 use crate::tiles::{GpuTileFormat, TileCache, TileKey, gpu_texels};
@@ -1530,6 +1529,7 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<StepRaster<'a>>; 2] {
             layer,
             transform,
             stack,
+            mask,
             ..
         } => {
             let content = match &layer.content {
@@ -1554,14 +1554,14 @@ fn step_rasters<'a>(step: &Step<'a>) -> [Option<StepRaster<'a>>; 2] {
             };
             [
                 content,
-                enabled_mask(layer).map(|image| (image, *transform, false, layer.warp.as_ref())),
+                mask.map(|m| (m.image.as_ref(), *transform, false, layer.warp.as_ref())),
             ]
         }
         Step::Adjust {
-            layer, transform, ..
+            transform, mask, ..
         } => [
             None,
-            enabled_mask(layer).map(|image| (image, *transform, false, None)),
+            mask.map(|m| (m.image.as_ref(), *transform, false, None)),
         ],
         Step::Begin { .. } => [None, None],
         Step::End {
@@ -1602,15 +1602,6 @@ fn shifted(area: [f64; 4], offset: [i32; 2]) -> [f64; 4] {
     [area[0] - x, area[1] - y, area[2] - x, area[3] - y]
 }
 
-/// The image of a layer's mask, when it has an enabled one.
-fn enabled_mask(layer: &Layer) -> Option<&RasterImage> {
-    layer
-        .mask
-        .as_ref()
-        .filter(|mask| mask.enabled)
-        .map(|mask| mask.image.as_ref())
-}
-
 /// Encode `steps` (bottom to top) with their plans and tile slots: two per step, its raster
 /// then its enabled mask. Raster layers without a plan (nothing of them to sample) are left out,
 /// and so are layers whose enabled mask has none (the mask hides them there); a group whose mask
@@ -1638,15 +1629,16 @@ fn encode_layers(
         let (plan, mask_plan) = (&plans[2 * i], &plans[2 * i + 1]);
         let table = tables.next().unwrap_or_default();
         let mask_table = tables.next().unwrap_or_default();
-        let (layer, mode, opacity, atop, stacked) = match step {
+        let (layer, mode, opacity, atop, stacked, masked) = match step {
             Step::Layer {
                 layer,
                 mode,
                 opacity,
                 atop,
                 stack,
+                mask,
                 ..
-            } => (*layer, *mode, *opacity, *atop, *stack),
+            } => (*layer, *mode, *opacity, *atop, *stack, mask.is_some()),
             Step::StackOriginal { .. } => {
                 // Nothing of the layer in this view: its stack steps are left out with it.
                 let Some(plan) = plan else {
@@ -1707,13 +1699,13 @@ fn encode_layers(
                 continue;
             }
             Step::Adjust {
-                layer,
                 adjustment,
                 opacity,
+                mask,
                 ..
             } => {
                 // Hidden where its enabled mask has nothing to sample.
-                if enabled_mask(layer).is_some() && mask_plan.is_none() {
+                if mask.is_some() && mask_plan.is_none() {
                     continue;
                 }
                 let mut fields =
@@ -1761,7 +1753,7 @@ fn encode_layers(
                 continue;
             }
         };
-        if enabled_mask(layer).is_some() && mask_plan.is_none() {
+        if masked && mask_plan.is_none() {
             continue;
         }
         let mut fields = LayerFields {
@@ -2677,6 +2669,7 @@ fn display_matrix() -> [[f32; 4]; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slopshop_core::Layer;
 
     fn renderer() -> Option<Renderer> {
         match Renderer::new() {
@@ -2857,6 +2850,7 @@ mod tests {
                 image: slopshop_core::stack::Pixels::ready(image.into()),
             },
             warp: None,
+            vector_mask: None,
         };
         slopshop_core::Edit::InsertLayer {
             parent: None,
@@ -2911,6 +2905,7 @@ mod tests {
                 image: slopshop_core::stack::Pixels::ready(image.into()),
             },
             warp: None,
+            vector_mask: None,
         };
         slopshop_core::Edit::InsertLayer {
             parent: None,
@@ -2954,6 +2949,7 @@ mod tests {
                 image: slopshop_core::stack::Pixels::ready(image.into()),
             },
             warp: None,
+            vector_mask: None,
         };
         slopshop_core::Edit::InsertLayer {
             parent: None,
