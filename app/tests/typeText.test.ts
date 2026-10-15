@@ -7,6 +7,7 @@ import {
   defaultTypeOptions,
   newText,
   optionsOf,
+  styleChange,
   pixelsToPoints,
   pointsToPixels,
   styleKey,
@@ -74,6 +75,43 @@ describe("texts and options", () => {
     const text = newText({ ...options, family: "Arial" }, [0, 0], 300, "Inter Variable");
     expect(optionsOf(text, 300)).toEqual({ ...options, family: "Arial" });
     expect(optionsOf({ ...text, size: 10 }, 300).sizePt).toBe(2.4);
+  });
+
+  test("the options of characters selected are the first one's", () => {
+    const text = {
+      ...newText(options, [0, 0], 72, "Inter Variable"),
+      content: "Hello",
+      spans: [{ start: 2, end: 5, style: { weight: 700, size: 30 } }],
+    };
+    expect(optionsOf(text, 72, [2, 4])).toMatchObject({ weight: 700, sizePt: 30 });
+    expect(optionsOf(text, 72, [0, 4])).toMatchObject({ weight: 400, sizePt: 24 });
+    expect(optionsOf(text, 72)).toMatchObject({ weight: 400 });
+  });
+
+  test("a change of options is a style of what changed, the alignment apart", () => {
+    const shown = { ...options, family: "Arial" };
+    expect(styleChange(shown, shown, 72, "Inter Variable")).toEqual({});
+    expect(
+      styleChange(
+        shown,
+        { ...shown, weight: 700, sizePt: 30, align: "left" },
+        144,
+        "Inter Variable",
+      ),
+    ).toEqual({ weight: 700, size: 60 });
+    expect(styleChange(shown, { ...shown, color: "#0000FF" }, 72, "X")).toEqual({
+      color: [0, 0, 1, 1],
+    });
+    // An empty family is the default one.
+    expect(
+      styleChange(
+        { ...shown, family: "" },
+        { ...shown, family: "Inter Variable" },
+        72,
+        "Inter Variable",
+      ),
+    ).toEqual({});
+    expect(styleChange(shown, { ...shown, italic: true }, 72, "X")).toEqual({ italic: true });
   });
 });
 

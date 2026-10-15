@@ -3,7 +3,16 @@
 // once, so a new panel needs no wiring of its own in App.svelte.
 
 import { getContext, setContext } from "svelte";
-import type { DocumentView, EditRequest, LayerView, SelectionMode } from "../engine";
+import type {
+  CharStyleDto,
+  DocumentView,
+  EditRequest,
+  FontsView,
+  LayerView,
+  SelectionMode,
+  TextAlign,
+  TextDto,
+} from "../engine";
 import type { CombinedRow } from "../savedSelections";
 
 export type PanelContext = {
@@ -27,6 +36,18 @@ export type PanelContext = {
   pickShapeColor(layer: LayerView, which: "fill" | "stroke"): void;
   /** Another library pattern chosen for a pattern fill layer (ADR 0042). */
   pickPattern(layer: LayerView): void;
+  /** The active text layer being typed: its text as typed and the characters selected. */
+  readonly typedText: { text: TextDto; selection: [number, number] } | null;
+  /** The fonts to choose from, once listed (a text layer or the Type tool shown). */
+  readonly fonts: FontsView | null;
+  /** The styles a font family offers. */
+  fontStyles(family: string): Promise<{ weight: number; italic: boolean }[]>;
+  /** A style on the characters selected, or on the whole active text layer (ADR 0041). */
+  styleText(change: CharStyleDto): void;
+  /** The active text layer's alignment. */
+  alignText(align: TextAlign): void;
+  /** The color of the characters selected (or of the whole text), chosen in the color picker. */
+  pickTextColor(): void;
   /** Delete a source and the layers showing it, once the user confirmed (ADR 0040). */
   deleteSource(source: number, name: string): void;
   /** Select > Save Selection… (it asks a name). */

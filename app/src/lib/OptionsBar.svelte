@@ -30,10 +30,10 @@
     MIN_SIZE_PT,
     styleKey,
     styleOfKey,
-    weightName,
     type TypeOptions,
   } from "./typeText";
   import type { FontsView } from "./engine";
+  import { styleName } from "./fontStyleName";
 
   let {
     tool,
@@ -241,12 +241,6 @@
   );
 
   const current = $derived(toolInfo(tool));
-
-  /** A font style's name: its weight's, italic or not. */
-  function styleName(style: { weight: number; italic: boolean }): string {
-    const name = t(`options.type.weight.${weightName(style.weight)}`);
-    return style.italic ? t("options.type.italic", { style: name }) : name;
-  }
 
   /** Crop's choice: free, a preset ratio (`w:h`), the canvas's, a ratio typed, or a size. */
   function cropPreset(aspect: CropAspect): string {

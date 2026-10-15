@@ -1172,7 +1172,11 @@ const fr: Messages = {
   "layers.defaultAdjustmentName": "{name} {n}",
   "properties.title": "Propriétés",
   "properties.empty":
-    "Sélectionnez un calque de réglage, de remplissage ou vectoriel pour voir ses propriétés.",
+    "Sélectionnez un calque de réglage, de remplissage, vectoriel ou de texte pour voir ses propriétés.",
+  "properties.character.title": "Caractère",
+  "properties.character.leading": "Interlignage",
+  "properties.character.auto": "Auto",
+  "properties.character.tracking": "Approche",
   "properties.shape.rectangle": "Rectangle",
   "properties.shape.ellipse": "Ellipse",
   "properties.shape.polygon": "Polygone",
