@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use fontique::{Blob, Collection, CollectionOptions, FontInfo, SourceCache};
 use parley::{
-    Affinity, Alignment, AlignmentOptions, Cursor, FontContext, FontFamily, FontStyle, FontWeight,
-    Layout, LayoutContext, LineHeight, PositionedLayoutItem, StyleProperty,
+    Affinity, Alignment, AlignmentOptions, BreakReason, Cursor, FontContext, FontFamily, FontStyle,
+    FontWeight, Layout, LayoutContext, LineHeight, PositionedLayoutItem, StyleProperty,
 };
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::prelude::{LocationRef, Size};
@@ -44,6 +44,32 @@ pub struct FontStyleInfo {
 pub struct Caret {
     pub top: [f64; 2],
     pub bottom: [f64; 2],
+}
+
+/// A line of a laid out text, in the layer's own space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineBox {
+    /// Its first place and the place after its last character, in UTF-16 code units: a line
+    /// ended by a line break holds it.
+    pub start: usize,
+    pub end: usize,
+    /// It ends at a line break (`\n`), not where the text wrapped.
+    pub hard_break: bool,
+    /// Its box: from the start to the end of its content, from the top to the bottom of its
+    /// line box.
+    pub left: f64,
+    pub right: f64,
+    pub top: f64,
+    pub bottom: f64,
+}
+
+/// Where a caret can stand in a text and its lines, for editing it: the carets, one per place
+/// counted in UTF-16 code units (the interface's strings), `content.encode_utf16().count() + 1`
+/// of them, a place inside a character given the caret before it; the lines in order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextGeometry {
+    pub carets: Vec<Caret>,
+    pub lines: Vec<LineBox>,
 }
 
 /// What laying out a text gives.
@@ -254,12 +280,18 @@ impl Fonts {
         }
     }
 
-    /// The carets of `text`, one per place a caret can stand counted in UTF-16 code units (the
-    /// interface's strings): `content.encode_utf16().count() + 1` of them, a place inside a
-    /// character given the caret before it.
-    pub fn carets(&mut self, text: &Text) -> Vec<Caret> {
+    /// Where a caret can stand in `text` and its lines, for editing it (see [`TextGeometry`]).
+    pub fn geometry(&mut self, text: &Text) -> TextGeometry {
         let (layout, _) = self.build(text);
         let [ox, oy] = Self::origin(text, &layout);
+        // UTF-16 places of byte indices: the interface's strings count in UTF-16 units.
+        // parley counts a place past the end in an empty text's line: clamped.
+        let utf16 = |byte: usize| {
+            let byte = byte.min(text.content.len());
+            text.content
+                .get(..byte)
+                .map_or(0, |s| s.encode_utf16().count())
+        };
         let caret_at = |byte: usize| {
             let cursor = Cursor::from_byte_index(&layout, byte, Affinity::Downstream);
             let b = cursor.geometry(&layout, 1.0);
@@ -274,7 +306,27 @@ impl Fonts {
             carets.extend(std::iter::repeat_n(caret, c.len_utf16()));
         }
         carets.push(caret_at(text.content.len()));
-        carets
+        let lines = layout
+            .lines()
+            .map(|line| {
+                let m = line.metrics();
+                let range = line.text_range();
+                // The line box, as parley's selection geometry takes it.
+                let top = f64::from(m.block_min_coord.min(m.content_block_min_coord));
+                let bottom = f64::from(m.block_max_coord.max(m.content_block_max_coord));
+                let left = f64::from(m.offset);
+                LineBox {
+                    start: utf16(range.start),
+                    end: utf16(range.end),
+                    hard_break: line.break_reason() == BreakReason::Explicit,
+                    left: ox + left,
+                    right: ox + left + f64::from(m.advance),
+                    top: oy + top,
+                    bottom: oy + bottom,
+                }
+            })
+            .collect();
+        TextGeometry { carets, lines }
     }
 }
 

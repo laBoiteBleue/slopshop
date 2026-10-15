@@ -139,8 +139,14 @@ fn empty_text_has_no_outlines_but_a_caret() {
     let mut fonts = Fonts::bundled();
     let laid = fonts.lay_out(&text(""));
     assert!(shape_bounds(&laid.outlines).is_none());
-    let carets = fonts.carets(&text(""));
+    let geometry = fonts.geometry(&text(""));
+    let carets = geometry.carets;
     assert_eq!(carets.len(), 1);
+    assert_eq!(
+        geometry.lines.len(),
+        1,
+        "an empty text has a line to type in"
+    );
     let c = carets[0];
     assert!((c.top[0] - 100.0).abs() < 1e-6);
     assert!(c.top[1] < 200.0 && c.bottom[1] > 200.0, "{c:?}");
@@ -150,7 +156,7 @@ fn empty_text_has_no_outlines_but_a_caret() {
 fn carets_follow_the_text_in_utf16_units() {
     let mut fonts = Fonts::bundled();
     let content = "ab\ncd😀";
-    let carets = fonts.carets(&text(content));
+    let carets = fonts.geometry(&text(content)).carets;
     assert_eq!(carets.len(), content.encode_utf16().count() + 1);
     // Along the first line, left to right.
     assert!(carets[0].top[0] < carets[1].top[0] && carets[1].top[0] < carets[2].top[0]);
@@ -159,4 +165,27 @@ fn carets_follow_the_text_in_utf16_units() {
     assert!((carets[3].top[1] - carets[0].top[1] - 60.0).abs() < 0.01);
     // The emoji's two UTF-16 units share the caret before it.
     assert_eq!(carets[5], carets[6]);
+}
+
+#[test]
+fn lines_give_their_places_and_boxes() {
+    let mut fonts = Fonts::bundled();
+    let content = "ab\ncd😀";
+    let geometry = fonts.geometry(&text(content));
+    let lines = &geometry.lines;
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    // The first line holds its line break; the second ends with the text (UTF-16 units).
+    assert_eq!((lines[0].start, lines[0].end), (0, 3));
+    assert!(lines[0].hard_break);
+    assert_eq!((lines[1].start, lines[1].end), (3, 7));
+    assert!(!lines[1].hard_break);
+    // Boxes: from the anchor, around the baseline, one line spacing apart, as the carets.
+    for (line, caret) in lines.iter().zip([geometry.carets[0], geometry.carets[3]]) {
+        assert!((line.left - 100.0).abs() < 1e-6, "{line:?}");
+        assert!(line.right > line.left + 20.0, "{line:?}");
+        assert!(line.top <= caret.top[1] + 1e-6 && line.bottom >= caret.bottom[1] - 1e-6);
+    }
+    assert!((lines[1].top - lines[0].top - 60.0).abs() < 0.01);
+    // The last caret of the first line stands at its end, before the break.
+    assert!((geometry.carets[2].top[0] - lines[0].right).abs() < 1.0);
 }
