@@ -74,8 +74,21 @@ respond("font_styles", () => [
 ]);
 respond("text_layout", (args, doc) => {
   const found = doc.layers.find((l) => l.id === args.id);
+  const content = found?.text?.content ?? "";
+  // Paragraph text: its box placed straight in the document; lines that pass it overflow.
+  const frame = found?.text?.frame ?? null;
+  const [x, y] = found?.text?.position ?? [0, 0];
   return {
-    ...layoutOf(found?.text?.content ?? ""),
+    ...layoutOf(content),
+    frame: frame
+      ? [
+          [x, y],
+          [x + frame[0], y],
+          [x + frame[0], y + frame[1]],
+          [x, y + frame[1]],
+        ]
+      : null,
+    overflow: frame !== null && content.split("\n").length * 16 > frame[1],
     missingFont: found?.text?.family === "Gone Font",
   };
 });
@@ -365,4 +378,86 @@ test("Edit > Copy, Cut, Paste and Select All act on the text being typed", async
   // Still typing.
   expect(sent("end_gesture")).toHaveLength(0);
   expect(screen.getByRole("textbox", { name: "Horizontal Type Tool" })).toBeInTheDocument();
+});
+
+// Paragraph text: a box drawn by a drag, resized by its handles while it is edited.
+
+test("a drag draws a box for paragraph text; its handles resize it while it is typed", async () => {
+  hit = null;
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await user.keyboard("t");
+  const svg = document.querySelector("svg.type-tool") as SVGSVGElement;
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: svg, coords: { clientX: 140, clientY: 100 } },
+    { target: svg, coords: { clientX: 100, clientY: 80 } },
+    { target: svg, coords: { clientX: 40, clientY: 50 } },
+    { keys: "[/MouseLeft]", target: svg, coords: { clientX: 40, clientY: 50 } },
+  ]);
+  await waitFor(() => expect(liveEdits()).toHaveLength(1));
+  // From the drag's top left, 100 by 50; no layer was looked for under the pointer.
+  expect(liveEdits()[0]).toEqual({
+    kind: "addText",
+    text: { ...text("", [40, 50]), frame: [100, 50] },
+    parent: null,
+    index: 1,
+  });
+  expect(sent("layer_at")).toHaveLength(0);
+  await screen.findByRole("textbox", { name: "Horizontal Type Tool" });
+  await waitFor(() => expect(document.querySelectorAll("rect.handle")).toHaveLength(8));
+  expect(document.querySelector("polygon.frame")?.getAttribute("points")).toBe(
+    "40,50 140,50 140,100 40,100",
+  );
+  // The right edge's handle, dragged 40 px right.
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: svg, coords: { clientX: 140, clientY: 75 } },
+    { target: svg, coords: { clientX: 180, clientY: 75 } },
+    { keys: "[/MouseLeft]", target: svg, coords: { clientX: 180, clientY: 75 } },
+  ]);
+  await waitFor(() =>
+    expect(liveEdits().at(-1)).toEqual({
+      kind: "setText",
+      id: 9,
+      text: { ...text("", [40, 50]), frame: [140, 50] },
+    }),
+  );
+  await user.keyboard("Hi");
+  await waitFor(() => expect(lastContent()).toBe("Hi"));
+  expect(liveEdits().at(-1)).toMatchObject({ text: { frame: [140, 50], position: [40, 50] } });
+  // A click in the box, away from the letters, keeps typing; outside, it commits.
+  await click(user, [170, 95]);
+  expect(sent("end_gesture")).toHaveLength(0);
+  await click(user, [300, 300]);
+  await waitFor(() => expect(sent("end_gesture")).toHaveLength(1));
+});
+
+test("a short drag is a click: point text", async () => {
+  hit = null;
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat")]));
+  await screen.findByText("cat.jpg");
+  await user.keyboard("t");
+  const svg = document.querySelector("svg.type-tool") as SVGSVGElement;
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: svg, coords: { clientX: 30, clientY: 40 } },
+    { target: svg, coords: { clientX: 31, clientY: 41 } },
+    { keys: "[/MouseLeft]", target: svg, coords: { clientX: 31, clientY: 41 } },
+  ]);
+  await waitFor(() => expect(liveEdits()).toHaveLength(1));
+  expect(liveEdits()[0]).toMatchObject({ kind: "addText", text: text("") });
+  expect((liveEdits()[0] as { text: TextDto }).text.frame ?? null).toBeNull();
+});
+
+test("a box too small for its lines shows a plus in its bottom right handle", async () => {
+  hit = 2;
+  const boxed: LayerView = {
+    ...textLayer(2, "a\nb\nc"),
+    text: { ...text("a\nb\nc", [30, 30]), frame: [80, 20] },
+  };
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), boxed]));
+  await screen.findByText("cat.jpg");
+  await user.keyboard("t");
+  await click(user, place(1));
+  await screen.findByRole("textbox", { name: "Horizontal Type Tool" });
+  await waitFor(() => expect(document.querySelectorAll("rect.handle")).toHaveLength(8));
+  expect(document.querySelector("path.overflow")).not.toBeNull();
 });

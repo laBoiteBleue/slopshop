@@ -589,7 +589,10 @@ export type TextDto = {
   /** Pixels; null: automatic (120 %). */
   leading: number | null;
   align: TextAlign;
+  /** Point text: the anchor; paragraph text: its box's top left corner. */
   position: [number, number];
+  /** Paragraph text: its box's width and height (layer pixels); absent or null: point text. */
+  frame?: [number, number] | null;
 };
 
 /** The fonts to choose from, and the default (bundled) family. */
@@ -615,6 +618,11 @@ export type TextLineView = {
 export type TextLayoutView = {
   carets: [number, number, number, number][];
   lines: TextLineView[];
+  /** Paragraph text's box: its corners in document pixels (top left, top right, bottom right,
+   * bottom left); null for point text. */
+  frame: [[number, number], [number, number], [number, number], [number, number]] | null;
+  /** Paragraph text whose last lines do not fit in its box. */
+  overflow: boolean;
   /** The layer's font is not installed: edited, it is set in the default family. */
   missingFont: boolean;
 };
