@@ -1,13 +1,15 @@
 <script lang="ts">
   // The dock's Properties panel: the settings of the active layer when it has some (an
-  // adjustment, a fill or a vector layer, ADR 0020, 0041), else a hint.
+  // adjustment, a fill or a vector layer, ADR 0020, 0041) and of its vector mask, else a hint.
   import PropertiesPanel from "../PropertiesPanel.svelte";
+  import VectorMaskProperties from "../VectorMaskProperties.svelte";
   import { hasProperties } from "../layerEdits";
   import { t } from "../i18n/index.svelte";
   import { panelContext } from "./context";
 
   const app = panelContext();
   const layer = $derived(hasProperties(app.activeLayer) ? app.activeLayer : null);
+  const masked = $derived(app.activeLayer?.vectorMask ? app.activeLayer : null);
 </script>
 
 {#if layer}
@@ -23,7 +25,11 @@
     onlive={app.live}
     ongestureend={app.gestureEnd}
   />
-{:else}
+{/if}
+{#if masked}
+  <VectorMaskProperties documentId={app.doc.id} layer={masked} onedit={app.edit} />
+{/if}
+{#if !layer && !masked}
   <p class="empty">{t("properties.empty")}</p>
 {/if}
 

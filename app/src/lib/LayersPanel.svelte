@@ -55,7 +55,9 @@
     type LayerSelection,
   } from "./layerSelection";
   import { isTextField } from "./keymap";
-  import type { SelectionMode } from "./engine";
+  import type { LayerPart, SelectionMode } from "./engine";
+  import VectorMaskThumbnail from "./VectorMaskThumbnail.svelte";
+  import { layerToDocument } from "./pathEdit";
   import type { Shape } from "./shapes";
   import { modeFromKeys } from "./selection";
   import {
@@ -111,10 +113,10 @@
     /** A double-click on a fill layer's thumbnail: the app lets its color be chosen. */
     onfillcolor?: (layer: LayerView) => void;
     /**
-     * Ctrl+click on a layer's thumbnail (its mask's: `mask`): its pixels become the selection,
-     * by `mode`.
+     * Ctrl+click on a layer's thumbnail (its mask's, its vector mask's, as `part` says): its
+     * pixels become the selection, by `mode`.
      */
-    onloadpixels?: (layerId: number, mask: boolean, mode: SelectionMode) => void;
+    onloadpixels?: (layerId: number, part: LayerPart, mode: SelectionMode) => void;
     /** A double-click on a pixel or fill layer's row, or on one of its effects: the app opens
      * Layer Style (ADR 0032) on `page`. */
     onstyle?: (layer: LayerView, page: StylePage) => void;
@@ -348,23 +350,52 @@
    * Photoshop: a click on a thumbnail chooses, a frame shows it on the active layer).
    */
   let maskTargets = $derived(ui.maskTargets);
+  /** Layers whose vector mask is targeted (ADR 0041): the Pen draws and edits in it. */
+  let vectorMaskTargets = $derived(ui.vectorMaskTargets);
 
-  function targetMask(id: number, mask: boolean) {
-    if (maskTargets.has(id) === mask) return;
-    const next = new Set(maskTargets);
-    if (mask) next.add(id);
-    else next.delete(id);
-    ui.maskTargets = next;
+  /** Which thumbnail of a row `thumb` is. */
+  function thumbPart(thumb: Element): LayerPart {
+    if (thumb.classList.contains("vector-mask-thumb")) return "vectorMask";
+    return thumb.classList.contains("mask-thumb") ? "mask" : "pixels";
+  }
+
+  function targetPart(id: number, part: LayerPart) {
+    const mask = part === "mask";
+    const vector = part === "vectorMask";
+    if (maskTargets.has(id) !== mask) {
+      const next = new Set(maskTargets);
+      if (mask) next.add(id);
+      else next.delete(id);
+      ui.maskTargets = next;
+    }
+    if (vectorMaskTargets.has(id) !== vector) {
+      const next = new Set(vectorMaskTargets);
+      if (vector) next.add(id);
+      else next.delete(id);
+      ui.vectorMaskTargets = next;
+    }
   }
 
   /** New masks become the target of painting, as in Photoshop. */
   export function targetMasks(ids: number[]) {
     ui.maskTargets = new Set([...maskTargets, ...ids]);
+    ui.vectorMaskTargets = new Set([...vectorMaskTargets].filter((id) => !ids.includes(id)));
+  }
+
+  /** New vector masks become the target (of the Pen), as in Photoshop. */
+  export function targetVectorMasks(ids: number[]) {
+    ui.vectorMaskTargets = new Set([...vectorMaskTargets, ...ids]);
+    ui.maskTargets = new Set([...maskTargets].filter((id) => !ids.includes(id)));
   }
 
   /** Painting reaches the active layer's mask rather than its pixels. */
   export function paintsMask(): boolean {
     return selected?.mask != null && maskTargets.has(selected.id);
+  }
+
+  /** The active layer's vector mask is targeted: the Pen draws and edits in it. */
+  export function targetsVectorMask(): boolean {
+    return selected?.vectorMask != null && vectorMaskTargets.has(selected.id);
   }
 
   /** Every selected layer, bottom to top. */
@@ -848,21 +879,21 @@
     }
     if ((e.target as HTMLElement).closest("button.eye")) return;
     list.focus({ preventScroll: true });
-    // A click on the layer's thumbnail or its mask's chooses what painting reaches; with Ctrl,
-    // its pixels (or its mask) become the selection, as in Photoshop (Shift adds, Alt
-    // subtracts, both intersect).
-    const thumb = (e.target as HTMLElement).closest(".thumb, .mask-thumb");
-    if (thumb && (e.ctrlKey || e.metaKey) && layer.kind !== "adjustment") {
+    // A click on the layer's thumbnail, its mask's or its vector mask's chooses what painting
+    // (or the Pen) reaches; with Ctrl, its pixels (or a mask) become the selection, as in
+    // Photoshop (Shift adds, Alt subtracts, both intersect).
+    const thumb = (e.target as HTMLElement).closest(".thumb, .mask-thumb, .vector-mask-thumb");
+    if (
+      thumb &&
+      (e.ctrlKey || e.metaKey) &&
+      (layer.kind !== "adjustment" || thumbPart(thumb) !== "pixels")
+    ) {
       e.preventDefault();
-      onloadpixels?.(
-        layer.id,
-        thumb.classList.contains("mask-thumb"),
-        modeFromKeys(e) ?? "replace",
-      );
+      onloadpixels?.(layer.id, thumbPart(thumb), modeFromKeys(e) ?? "replace");
       return;
     }
-    if (thumb && layer.mask && !e.shiftKey && !e.altKey) {
-      targetMask(layer.id, thumb.classList.contains("mask-thumb"));
+    if (thumb && (layer.mask || layer.vectorMask) && !e.shiftKey && !e.altKey) {
+      targetPart(layer.id, thumbPart(thumb));
     }
     // Alt+click on the line between two layers of a level clips the upper one to the lower
     // one, or releases it (Photoshop).
@@ -1112,7 +1143,7 @@
         ondblclick={(e) => {
           if (e.defaultPrevented || layer.kind === "adjustment") return;
           const on = e.target as HTMLElement;
-          if (on.closest(".name, .thumb, .mask-thumb, button, input")) return;
+          if (on.closest(".name, .thumb, .mask-thumb, .vector-mask-thumb, button, input")) return;
           onstyle?.(layer, "blending");
         }}
       >
@@ -1157,7 +1188,10 @@
           <!-- A double-click on a fill layer's thumbnail picks its color, as in Photoshop. -->
           <span
             class="thumb"
-            class:targeted={layer.mask && selected?.id === layer.id && !maskTargets.has(layer.id)}
+            class:targeted={(layer.mask || layer.vectorMask) &&
+              selected?.id === layer.id &&
+              !maskTargets.has(layer.id) &&
+              !vectorMaskTargets.has(layer.id)}
             role="presentation"
             ondblclick={(e) => {
               if (layer.kind !== "fill") return;
@@ -1190,6 +1224,35 @@
             }}
           >
             <LayerThumbnail {documentId} {layer} size={36} mask />
+          </button>
+        {/if}
+        {#if layer.vectorMask}
+          <!-- Shift+click toggles it, as in Photoshop. -->
+          <button
+            class="vector-mask-thumb"
+            class:disabled={!layer.vectorMask.enabled}
+            class:targeted={selected?.id === layer.id && vectorMaskTargets.has(layer.id)}
+            title={t("layers.vectorMask.hint")}
+            aria-label={t("layers.vectorMask.hint")}
+            onpointerdown={(e) => {
+              if (e.shiftKey) e.stopPropagation();
+            }}
+            onclick={(e) => {
+              if (e.shiftKey && layer.vectorMask) {
+                void edit({
+                  kind: "setVectorMaskEnabled",
+                  id: layer.id,
+                  enabled: !layer.vectorMask.enabled,
+                });
+              }
+            }}
+          >
+            <VectorMaskThumbnail
+              mask={layer.vectorMask}
+              matrix={layerToDocument(doc.layers, layer.id)}
+              document={doc}
+              size={36}
+            />
           </button>
         {/if}
         {#if renaming === layer.id}
@@ -1671,7 +1734,8 @@
     flex: none;
   }
 
-  .mask-thumb {
+  .mask-thumb,
+  .vector-mask-thumb {
     position: relative;
     display: flex;
     margin: 0 8px 0 0;
@@ -1683,13 +1747,15 @@
 
   /* What painting reaches on the active layer, when it has a mask: its pixels or its mask. */
   .thumb.targeted,
-  .mask-thumb.targeted {
+  .mask-thumb.targeted,
+  .vector-mask-thumb.targeted {
     outline: 2px solid var(--text);
     outline-offset: 1px;
   }
 
   /* A disabled mask is crossed out in red, as in Photoshop. */
-  .mask-thumb.disabled::after {
+  .mask-thumb.disabled::after,
+  .vector-mask-thumb.disabled::after {
     content: "";
     position: absolute;
     inset: 0;

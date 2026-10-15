@@ -541,16 +541,93 @@ test("Ctrl+click on a thumbnail loads the layer's pixels as the selection, the l
     row(name).querySelector(selector) as HTMLElement;
   await user.keyboard("[ControlLeft>]");
   await user.click(thumb("Sky"));
-  expect(onloadpixels).toHaveBeenLastCalledWith(3, false, "replace");
+  expect(onloadpixels).toHaveBeenLastCalledWith(3, "pixels", "replace");
   await user.keyboard("[ShiftLeft>]");
   await user.click(thumb("Sea"));
-  expect(onloadpixels).toHaveBeenLastCalledWith(4, false, "add");
+  expect(onloadpixels).toHaveBeenLastCalledWith(4, "pixels", "add");
   await user.keyboard("[/ShiftLeft]");
   await user.click(thumb("Masked", ".mask-thumb"));
-  expect(onloadpixels).toHaveBeenLastCalledWith(6, true, "replace");
+  expect(onloadpixels).toHaveBeenLastCalledWith(6, "mask", "replace");
   await user.keyboard("[/ControlLeft]");
   // The layers selected are as they were: Masked, the top one.
   expect(selectedNames()).toEqual(["Masked"]);
+});
+
+const VECTOR_MASK = {
+  enabled: true,
+  inverted: false,
+  feather: 0,
+  geometry: {
+    kind: "ellipse" as const,
+    center: [50, 40] as [number, number],
+    radii: [20, 10] as [number, number],
+  },
+  // The ellipse as anchors (the engine sends them), a diamond here.
+  livePath: {
+    kind: "path" as const,
+    rule: "nonzero" as const,
+    subpaths: [
+      {
+        start: [30, 40] as [number, number],
+        segments: [
+          [50, 30],
+          [70, 40],
+          [50, 50],
+        ] as [number, number][],
+        closed: true,
+      },
+    ],
+  },
+};
+
+test("a vector mask shows its thumbnail, targeted by a click, toggled by Shift+click", async () => {
+  const masked = layer(6, "Masked", {
+    mask: { enabled: true, contentKey: 6 },
+    vectorMask: VECTOR_MASK,
+  });
+  const { user, onedit, component } = open([...LAYERS, masked]);
+  const vector = () => row("Masked").querySelector(".vector-mask-thumb") as HTMLElement;
+  expect(vector()).toHaveAccessibleName(
+    "Vector mask: click to draw and edit it with the Pen, Shift+click to disable or enable it",
+  );
+  // Its outline in the document, white on gray.
+  expect(vector().querySelector("path.shown")).not.toBeNull();
+  expect(component.targetsVectorMask()).toBe(false);
+  await user.click(vector());
+  expect(vector()).toHaveClass("targeted");
+  expect(row("Masked").querySelector(".thumb")).not.toHaveClass("targeted");
+  expect(component.targetsVectorMask()).toBe(true);
+  expect(component.paintsMask()).toBe(false);
+  // The pixel mask's thumbnail takes the target back.
+  await user.click(row("Masked").querySelector(".mask-thumb") as HTMLElement);
+  expect(vector()).not.toHaveClass("targeted");
+  expect(component.targetsVectorMask()).toBe(false);
+  expect(component.paintsMask()).toBe(true);
+  await user.keyboard("[ShiftLeft>]");
+  await user.click(vector());
+  await user.keyboard("[/ShiftLeft]");
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setVectorMaskEnabled",
+    id: 6,
+    enabled: false,
+  });
+});
+
+test("a disabled vector mask is crossed out; Ctrl+click loads it as the selection", async () => {
+  const masked = layer(6, "Masked", { vectorMask: { ...VECTOR_MASK, enabled: false } });
+  const { user, onloadpixels, component } = open([...LAYERS, masked]);
+  const vector = row("Masked").querySelector(".vector-mask-thumb") as HTMLElement;
+  expect(vector).toHaveClass("disabled");
+  await user.keyboard("[ControlLeft>]");
+  await user.click(vector);
+  await user.keyboard("[/ControlLeft]");
+  expect(onloadpixels).toHaveBeenLastCalledWith(6, "vectorMask", "replace");
+  // Loading does not target it.
+  expect(component.targetsVectorMask()).toBe(false);
+  // New vector masks are targeted.
+  component.targetVectorMasks([6]);
+  await tick();
+  expect(vector).toHaveClass("targeted");
 });
 
 const LOCKED = { transparency: false, pixels: false, position: false, all: false };

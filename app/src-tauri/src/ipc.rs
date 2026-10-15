@@ -149,6 +149,9 @@ pub struct LayerView {
     pub has_alpha: bool,
     /// The layer's mask, if any (ADR 0014).
     pub mask: Option<MaskView>,
+    /// The layer's vector mask, if any (ADR 0041).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_mask: Option<VectorMaskView>,
     /// Display swatch, sRGB-encoded RGBA in `[0, 1]` (explicitly converted, see `color`).
     pub swatch: [f32; 4],
     /// An adjustment layer's adjustment (ADR 0020), for the Properties panel.
@@ -811,6 +814,7 @@ impl LayerView {
                 enabled: mask.enabled,
                 content_key: mask.image.id().get(),
             }),
+            vector_mask: layer.vector_mask.as_ref().map(VectorMaskView::of),
             swatch,
             adjustment: match &layer.content {
                 LayerContent::Adjustment { adjustment } => Some(AdjustmentView::new(adjustment)),
@@ -1014,6 +1018,36 @@ pub struct MaskView {
     pub enabled: bool,
     /// Changes when the mask's pixels change: time for a new mask thumbnail.
     pub content_key: u64,
+}
+
+/// A layer's vector mask (ADR 0041), as the Layers and Properties panels and the Pen read it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VectorMaskView {
+    pub enabled: bool,
+    /// The path hides what it encloses (Reveal All) rather than showing it.
+    pub inverted: bool,
+    /// Pixels of the layer's space.
+    pub feather: f64,
+    /// In the layer's space.
+    pub geometry: crate::shape::GeometryDto,
+    /// A live shape's outline as a regular path, as `LayerView::live_path`; none for a path.
+    pub live_path: Option<crate::shape::GeometryDto>,
+}
+
+impl VectorMaskView {
+    fn of(mask: &slopshop_core::shape::VectorMask) -> Self {
+        let geometry = mask.geometry();
+        Self {
+            enabled: mask.enabled,
+            inverted: mask.inverted(),
+            feather: mask.feather(),
+            geometry: crate::shape::GeometryDto::of(geometry),
+            live_path: (!matches!(geometry, slopshop_core::shape::Geometry::Path { .. })).then(
+                || crate::shape::GeometryDto::of(&slopshop_core::shape::path::as_path(geometry)),
+            ),
+        }
+    }
 }
 
 /// Identifier of a color space without a name (e.g. read from an ICC profile).
@@ -1443,6 +1477,32 @@ pub enum EditRequest {
     RemoveLayerMask {
         id: u64,
     },
+    /// Layer > Vector Mask > Reveal All (`revealAll`), Hide All (`hideAll`) on each of `ids`
+    /// that has none yet; Current Path (`currentPath`) gives `ids` the path of vector layer
+    /// `from`, placed where it is (ADR 0041).
+    AddVectorMask {
+        ids: Vec<u64>,
+        mask: String,
+        #[serde(default)]
+        from: Option<u64>,
+    },
+    /// A vector mask's path (the Pen), in the layer's space.
+    SetVectorMaskPath {
+        id: u64,
+        path: crate::shape::GeometryDto,
+    },
+    /// A vector mask's feather, layer pixels (the Properties panel).
+    SetVectorMaskFeather {
+        id: u64,
+        feather: f64,
+    },
+    SetVectorMaskEnabled {
+        id: u64,
+        enabled: bool,
+    },
+    RemoveVectorMask {
+        id: u64,
+    },
     /// Several edits as one: applied in order, all or none, undone together (e.g. an action on
     /// every selected layer).
     Batch {
@@ -1547,6 +1607,9 @@ impl EditRequest {
             Self::RevealAll => HistoryLabel::new("revealAll"),
             Self::Trim { .. } => HistoryLabel::new("trim"),
             Self::RemoveLayerMask { .. } => HistoryLabel::new("deleteMask"),
+            Self::AddVectorMask { .. } => HistoryLabel::new("addVectorMask"),
+            Self::SetVectorMaskEnabled { .. } => HistoryLabel::new("vectorMaskEnabled"),
+            Self::RemoveVectorMask { .. } => HistoryLabel::new("deleteVectorMask"),
             Self::Batch { edits } => return edits.first()?.history_label(),
             // Their edit says it (opacity, visibility, rename…).
             _ => return None,
@@ -1603,6 +1666,7 @@ impl EditRequest {
                             color: LinearRgba::from_srgb_encoded_to_working(r, g, b, a),
                         },
                         warp: None,
+                        vector_mask: None,
                     },
                 }
             }
@@ -1657,6 +1721,7 @@ impl EditRequest {
                         mask: None,
                         content: LayerContent::GradientFill { field },
                         warp: None,
+                        vector_mask: None,
                     },
                 }
             }
@@ -1696,6 +1761,7 @@ impl EditRequest {
                         mask: None,
                         content: LayerContent::vector(source),
                         warp: None,
+                        vector_mask: None,
                     },
                 }
             }
@@ -1733,6 +1799,7 @@ impl EditRequest {
                         content: LayerContent::vector(source),
                         locks: Default::default(),
                         warp: None,
+                        vector_mask: None,
                     },
                 }
             }
@@ -1804,6 +1871,7 @@ impl EditRequest {
                         mask: None,
                         content: LayerContent::blank(std::sync::Arc::new(image)),
                         warp: None,
+                        vector_mask: None,
                     },
                 }
             }
@@ -1875,6 +1943,7 @@ impl EditRequest {
                             mask: mask.clone(),
                             content: LayerContent::Adjustment { adjustment },
                             warp: None,
+                            vector_mask: None,
                         },
                     });
                 }
@@ -1988,6 +2057,7 @@ impl EditRequest {
                         mask: None,
                         content,
                         warp: None,
+                        vector_mask: None,
                     },
                 }
             }
@@ -2047,6 +2117,7 @@ impl EditRequest {
                         mask: None,
                         content: LayerContent::Adjustment { adjustment },
                         warp: None,
+                        vector_mask: None,
                     },
                 }
             }
@@ -2309,6 +2380,43 @@ impl EditRequest {
                 id: LayerId::from_raw(id),
                 mask: None,
             },
+            EditRequest::AddVectorMask { ids, mask, from } => {
+                add_vector_masks(session.document(), &ids, &mask, from)?
+            }
+            EditRequest::SetVectorMaskPath { id, path } => {
+                let id = LayerId::from_raw(id);
+                let geometry = path.geometry()?;
+                let mask = vector_mask_of(session.document(), id)?
+                    .with_geometry(geometry)
+                    .ok_or("invalid path")?;
+                Edit::SetVectorMask {
+                    id,
+                    mask: Some(mask),
+                }
+            }
+            EditRequest::SetVectorMaskFeather { id, feather } => {
+                let id = LayerId::from_raw(id);
+                let mask = vector_mask_of(session.document(), id)?
+                    .with_feather(feather)
+                    .ok_or("feather out of range")?;
+                Edit::SetVectorMask {
+                    id,
+                    mask: Some(mask),
+                }
+            }
+            EditRequest::SetVectorMaskEnabled { id, enabled } => {
+                let id = LayerId::from_raw(id);
+                let mut mask = vector_mask_of(session.document(), id)?;
+                mask.enabled = enabled;
+                Edit::SetVectorMask {
+                    id,
+                    mask: Some(mask),
+                }
+            }
+            EditRequest::RemoveVectorMask { id } => Edit::SetVectorMask {
+                id: LayerId::from_raw(id),
+                mask: None,
+            },
             EditRequest::Batch { edits } => Edit::Batch(
                 edits
                     .into_iter()
@@ -2322,6 +2430,71 @@ impl EditRequest {
 /// A new empty group, isolated (blend mode Normal), with a fresh id: an adjustment inside
 /// changes the group only. Photoshop passes through by default; the maintainer chose isolation,
 /// Pass Through stays one choice away in the blend modes.
+/// Layer `id`'s vector mask, to change.
+fn vector_mask_of(
+    doc: &slopshop_core::Document,
+    id: LayerId,
+) -> Result<slopshop_core::shape::VectorMask, String> {
+    doc.layer(id)
+        .ok_or("unknown layer")?
+        .vector_mask
+        .clone()
+        .ok_or_else(|| "the layer has no vector mask".to_owned())
+}
+
+/// Layer > Vector Mask > Reveal All, Hide All or Current Path (`mask`) on each of `ids` that
+/// has no vector mask yet, as one edit; Current Path takes vector layer `from`'s path, placed in
+/// each layer's space where it shows (ADR 0041).
+fn add_vector_masks(
+    doc: &slopshop_core::Document,
+    ids: &[u64],
+    mask: &str,
+    from: Option<u64>,
+) -> Result<Edit, String> {
+    use slopshop_core::shape::VectorMask;
+    let path = match mask {
+        "revealAll" | "hideAll" => None,
+        "currentPath" => {
+            let from = LayerId::from_raw(from.ok_or("no path to mask with")?);
+            let source = doc.layer(from).ok_or("unknown layer")?;
+            let LayerContent::Vector { source: shape, .. } = &source.content else {
+                return Err("not a vector layer".to_owned());
+            };
+            Some((
+                shape.shape().geometry.clone(),
+                source.transform.then(doc.parent_transform(from)),
+            ))
+        }
+        other => return Err(format!("unknown vector mask {other}")),
+    };
+    let mut edits = Vec::new();
+    for &raw in ids {
+        let id = LayerId::from_raw(raw);
+        let layer = doc.layer(id).ok_or("unknown layer")?;
+        if layer.vector_mask.is_some() {
+            continue;
+        }
+        let vector = match &path {
+            None if mask == "revealAll" => VectorMask::reveal_all(),
+            None => VectorMask::hide_all(),
+            Some((geometry, from)) => {
+                let to = layer.transform.then(doc.parent_transform(id));
+                slopshop_core::shape::mask::placed_path(geometry, *from, to)
+                    .and_then(|g| VectorMask::new(g, false))
+                    .ok_or("the path cannot be placed in perspective")?
+            }
+        };
+        edits.push(Edit::SetVectorMask {
+            id,
+            mask: Some(vector),
+        });
+    }
+    if edits.is_empty() {
+        return Err("every layer has a vector mask".to_owned());
+    }
+    Ok(Edit::Batch(edits))
+}
+
 fn new_group(session: &mut Session, name: String) -> Layer {
     Layer {
         locks: Default::default(),
@@ -2339,6 +2512,7 @@ fn new_group(session: &mut Session, name: String) -> Layer {
             pass_through: false,
         },
         warp: None,
+        vector_mask: None,
     }
 }
 
@@ -3887,6 +4061,7 @@ mod tests {
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut document)
@@ -3956,6 +4131,7 @@ mod tests {
                     transform: slopshop_core::Affine::IDENTITY.into(),
                     style: None,
                     warp: None,
+                    vector_mask: None,
                 },
             }
             .apply(&mut document)
@@ -4034,6 +4210,7 @@ mod tests {
                     transform: slopshop_core::Affine::IDENTITY.into(),
                     style: None,
                     warp: None,
+                    vector_mask: None,
                 },
             }
             .apply(&mut document)
@@ -4112,6 +4289,7 @@ mod tests {
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut document)
