@@ -35,3 +35,52 @@ test("the bend typed is sent, within -100 to 100 %", async () => {
   await fireEvent.input(field, { target: { value: "75" } });
   expect(onchange).toHaveBeenLastCalledWith({ style: "wave", bend: 75, vertical: false });
 });
+
+test("Custom is a choice of its own, without bend nor orientation", async () => {
+  const { onchange, user } = open({ style: "custom", bend: 50, vertical: false });
+  expect(screen.getByRole("combobox", { name: "Warp" })).toHaveValue("custom");
+  expect(screen.getByRole("combobox", { name: "Orientation" })).toBeDisabled();
+  // A style chosen from Custom starts at Photoshop's bend.
+  await user.selectOptions(screen.getByRole("combobox", { name: "Warp" }), "Bulge");
+  expect(onchange).toHaveBeenLastCalledWith({ style: "bulge", bend: 50, vertical: false });
+  await user.selectOptions(screen.getByRole("combobox", { name: "Warp" }), "Custom");
+  expect(onchange).toHaveBeenLastCalledWith({ style: "custom", bend: 50, vertical: false });
+});
+
+test("the grid's sizes: Default, 4 × 4, 5 × 5; another grid shows Custom", async () => {
+  const onchange = vi.fn();
+  const onsize = vi.fn();
+  const settings: WarpSettings = { style: null, bend: 50, vertical: false };
+  const { rerender } = render(WarpFields, { settings, size: 3, onchange, onsize });
+  const user = userEvent.setup();
+  const grid = screen.getByRole("combobox", { name: "Grid" });
+  expect(grid).toHaveValue("3");
+  expect([...grid.querySelectorAll("option")].map((o) => o.textContent)).toEqual([
+    "Default",
+    "4 × 4",
+    "5 × 5",
+  ]);
+  await user.selectOptions(grid, "5 × 5");
+  expect(onsize).toHaveBeenLastCalledWith(5);
+  await rerender({ settings, size: null, onchange, onsize });
+  expect(grid).toHaveValue("custom");
+});
+
+test("Split Warp's three modes toggle, and are off at the most patches", async () => {
+  const onchange = vi.fn();
+  const onsplit = vi.fn();
+  const settings: WarpSettings = { style: null, bend: 50, vertical: false };
+  const { rerender } = render(WarpFields, { settings, onchange, onsplit });
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Split Warp Crosswise" }));
+  expect(onsplit).toHaveBeenLastCalledWith("crosswise");
+  await rerender({ settings, onchange, onsplit, split: "crosswise" });
+  const crosswise = screen.getByRole("button", { name: "Split Warp Crosswise" });
+  expect(crosswise).toHaveAttribute("aria-pressed", "true");
+  await user.click(crosswise);
+  expect(onsplit).toHaveBeenLastCalledWith(null);
+  await user.click(screen.getByRole("button", { name: "Split Warp Horizontally" }));
+  expect(onsplit).toHaveBeenLastCalledWith("horizontal");
+  await rerender({ settings, onchange, onsplit, splittable: false });
+  expect(screen.getByRole("button", { name: "Split Warp Vertically" })).toBeDisabled();
+});

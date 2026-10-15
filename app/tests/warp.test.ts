@@ -1,8 +1,11 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
+import type { WarpGrid } from "../src/lib/engine";
 import {
   clampBend,
   DEFAULT_BEND,
+  gridRequest,
+  isStyle,
   linePath,
   sameWarp,
   settingsOf,
@@ -10,16 +13,50 @@ import {
   warpRequest,
 } from "../src/lib/warp";
 
-test("a layer without a warp starts at None with Photoshop's bend", () => {
-  assert.deepEqual(settingsOf({ style: null, bend: 0, vertical: false, lines: [] }), {
+const GRID: WarpGrid = {
+  style: null,
+  bend: 0,
+  vertical: false,
+  warped: false,
+  columns: 1,
+  rows: 1,
+  frame: [0, 0, 3, 3],
+  points: [],
+  toDocument: [1, 0, 0, 1, 0, 0, 0, 0, 1],
+};
+
+test("a layer without a warp starts at None with Photoshop's bend; an edited grid is Custom", () => {
+  assert.deepEqual(settingsOf(GRID), {
     style: null,
     bend: DEFAULT_BEND,
     vertical: false,
   });
-  assert.deepEqual(settingsOf({ style: "flag", bend: -0.255, vertical: true, lines: [] }), {
-    style: "flag",
-    bend: -25.5,
-    vertical: true,
+  assert.deepEqual(settingsOf({ ...GRID, warped: true }), {
+    style: "custom",
+    bend: DEFAULT_BEND,
+    vertical: false,
+  });
+  assert.deepEqual(
+    settingsOf({ ...GRID, warped: true, style: "flag", bend: -0.255, vertical: true }),
+    { style: "flag", bend: -25.5, vertical: true },
+  );
+});
+
+test("Custom and None are not styles", () => {
+  assert.ok(isStyle({ style: "arc", bend: 0, vertical: false }));
+  assert.ok(!isStyle({ style: "custom", bend: 0, vertical: false }));
+  assert.ok(!isStyle({ style: null, bend: 0, vertical: false }));
+});
+
+test("a grid edited point by point is sent whole", () => {
+  const points: [number, number][] = [
+    [0, 0],
+    [1, 0],
+  ];
+  assert.deepEqual(gridRequest(4, { columns: 2, rows: 1, points }), {
+    kind: "warpLayer",
+    id: 4,
+    grid: { columns: 2, rows: 1, points },
   });
 });
 
@@ -58,6 +95,9 @@ test("None is None whatever its bend; styles differ by every setting", () => {
   assert.ok(!sameWarp(arc, { ...arc, vertical: true }));
   assert.ok(!sameWarp(arc, { ...arc, style: "wave" }));
   assert.ok(!sameWarp(arc, { style: null, bend: 50, vertical: false }));
+  const custom = { style: "custom" as const, bend: 50, vertical: false };
+  assert.ok(sameWarp(custom, { ...custom, bend: 0 }));
+  assert.ok(!sameWarp(custom, arc));
 });
 
 test("Photoshop's five styles, in order", () => {

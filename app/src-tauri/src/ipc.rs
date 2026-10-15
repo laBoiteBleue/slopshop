@@ -1034,6 +1034,15 @@ pub fn named_space(id: &str) -> Option<ColorSpace> {
         .find(|space| space.id() == Some(id))
 }
 
+/// A warp grid edited point by point (ADR 0044): `columns × rows` Bézier patches, their control
+/// points in content pixels, row-major (`3·columns + 1` per row, `3·rows + 1` rows).
+#[derive(Debug, Deserialize)]
+pub struct WarpGridRequest {
+    pub columns: u32,
+    pub rows: u32,
+    pub points: Vec<[f64; 2]>,
+}
+
 /// Edits the UI can request. Translated into core [`Edit`]s; the engine validates them.
 #[derive(Debug, Deserialize)]
 #[serde(
@@ -1345,8 +1354,8 @@ pub enum EditRequest {
         matrix: Vec<f64>,
     },
     /// Edit > Transform > Warp (ADR 0044): pixel layer `id` warped by a style's grid (`style`
-    /// one of `arc`, `bulge`, `flag`, `wave`, `twist`; `bend` from -1 to 1), or its warp taken
-    /// away (no `style`).
+    /// one of `arc`, `bulge`, `flag`, `wave`, `twist`; `bend` from -1 to 1), by a grid edited
+    /// point by point (`grid`, Photoshop's Custom), or its warp taken away (neither).
     WarpLayer {
         id: u64,
         #[serde(default)]
@@ -1355,6 +1364,8 @@ pub enum EditRequest {
         bend: f64,
         #[serde(default)]
         vertical: bool,
+        #[serde(default)]
+        grid: Option<WarpGridRequest>,
     },
     /// Image > Image Size: the whole image resampled to `width` × `height` (ADR 0018).
     ResizeImage {
@@ -2135,9 +2146,22 @@ impl EditRequest {
             }
             EditRequest::WarpLayer {
                 id,
+                grid: Some(grid),
+                ..
+            } => Edit::warp_layer_grid(
+                session.document(),
+                LayerId::from_raw(id),
+                grid.columns,
+                grid.rows,
+                grid.points.into_iter().map(|[x, y]| (x, y)).collect(),
+            )
+            .map_err(|e| e.to_string())?,
+            EditRequest::WarpLayer {
+                id,
                 style,
                 bend,
                 vertical,
+                grid: None,
             } => {
                 let preset = match style {
                     None => None,

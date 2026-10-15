@@ -2,6 +2,7 @@
 // grid's lines as the overlay draws them. The engine makes the grid (slopshop_core::warp).
 
 import type { EditRequest, WarpGrid, WarpStyle } from "./engine";
+import type { Grid } from "./warpGrid";
 
 /** Warp's styles, in the options bar's order (Photoshop's, those SlopShop has). */
 export const WARP_STYLES: readonly WarpStyle[] = ["arc", "bulge", "flag", "wave", "twist"];
@@ -9,13 +10,26 @@ export const WARP_STYLES: readonly WarpStyle[] = ["arc", "bulge", "flag", "wave"
 /** Photoshop's bend when a style is first chosen, in %. */
 export const DEFAULT_BEND = 50;
 
-/** What the options bar shows: the style (null: None), the bend in % and the orientation. */
-export type WarpSettings = { style: WarpStyle | null; bend: number; vertical: boolean };
+/**
+ * What the options bar shows: the style (null: None; "custom": the grid edited point by point,
+ * Photoshop's Custom), the bend in % and the orientation.
+ */
+export type WarpSettings = { style: WarpStyle | "custom" | null; bend: number; vertical: boolean };
 
-/** The settings a layer's grid was made from (a layer without a warp: None, bend 50 %). */
+/**
+ * The settings a layer's grid was made from (a layer without a warp: None, bend 50 %; a grid
+ * edited point by point: Custom).
+ */
 export function settingsOf(grid: WarpGrid): WarpSettings {
-  if (!grid.style) return { style: null, bend: DEFAULT_BEND, vertical: false };
+  if (!grid.style) {
+    return { style: grid.warped ? "custom" : null, bend: DEFAULT_BEND, vertical: false };
+  }
   return { style: grid.style, bend: Math.round(grid.bend * 1000) / 10, vertical: grid.vertical };
+}
+
+/** Whether `settings` come from one of the styles (their bend and orientation apply). */
+export function isStyle(settings: WarpSettings): settings is WarpSettings & { style: WarpStyle } {
+  return settings.style !== null && settings.style !== "custom";
 }
 
 /** A bend in %, within -100 to 100 (not a number: 0). */
@@ -24,9 +38,12 @@ export function clampBend(bend: number): number {
   return Math.min(100, Math.max(-100, bend));
 }
 
-/** The request that warps layer `id` with `settings` (None takes its warp away). */
+/**
+ * The request that warps layer `id` with a style's `settings` (None takes its warp away; Custom
+ * sends its grid: gridRequest).
+ */
 export function warpRequest(id: number, settings: WarpSettings): EditRequest {
-  if (!settings.style) return { kind: "warpLayer", id };
+  if (!isStyle(settings)) return { kind: "warpLayer", id };
   return {
     kind: "warpLayer",
     id,
@@ -36,9 +53,21 @@ export function warpRequest(id: number, settings: WarpSettings): EditRequest {
   };
 }
 
-/** Whether two settings warp alike (None is None whatever its bend). */
+/** The request that warps layer `id` by `grid`, edited point by point (Custom). */
+export function gridRequest(id: number, grid: Grid): EditRequest {
+  return {
+    kind: "warpLayer",
+    id,
+    grid: { columns: grid.columns, rows: grid.rows, points: grid.points },
+  };
+}
+
+/**
+ * Whether two settings warp alike (None is None and Custom is Custom whatever their bend; the
+ * grids of Custom are compared apart).
+ */
 export function sameWarp(a: WarpSettings, b: WarpSettings): boolean {
-  if (!a.style || !b.style) return a.style === b.style;
+  if (!isStyle(a) || !isStyle(b)) return a.style === b.style;
   return a.style === b.style && a.bend === b.bend && a.vertical === b.vertical;
 }
 

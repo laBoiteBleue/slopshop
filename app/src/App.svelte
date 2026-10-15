@@ -33,6 +33,7 @@
     type DocumentView,
     type BakeRequest,
     type EditRequest,
+    type WarpGrid,
     type Guide,
     type LayerStyle,
     type FontsView,
@@ -264,7 +265,23 @@
   import TransformFields from "./lib/TransformFields.svelte";
   import WarpFields from "./lib/WarpFields.svelte";
   import WarpOverlay from "./lib/WarpOverlay.svelte";
-  import { sameWarp, settingsOf, warpRequest, type WarpSettings } from "./lib/warp";
+  import {
+    gridRequest,
+    isStyle,
+    sameWarp,
+    settingsOf,
+    warpRequest,
+    type WarpSettings,
+  } from "./lib/warp";
+  import {
+    identityGrid,
+    GRID_SIZES,
+    MAX_PATCHES,
+    regrid,
+    sameGrid,
+    type Grid,
+    type SplitMode,
+  } from "./lib/warpGrid";
   import ContextMenu from "./lib/ContextMenu.svelte";
   import CropBox from "./lib/CropBox.svelte";
   import * as affine from "./lib/affine";
@@ -3758,22 +3775,35 @@
     }
   }
 
-  // Edit > Transform > Warp (ADR 0044): the active pixel layer's warp grid over the image, which
-  // the options bar's style, orientation and bend change live, as one gesture replaced at each
-  // step; Enter applies it (one undo entry), Esc or undo cancels it. Another edit, another tab
-  // or Free Transform applies it first. Dragging the grid's points comes later.
+  // Edit > Transform > Warp (ADR 0044): the active pixel layer's warp grid over the image (its
+  // current grid on a warped layer: a warp stays editable). The options bar's style, orientation
+  // and bend, its grid size and Split Warp, and drags on the grid change it live, as one gesture
+  // replaced at each step (the whole grid sent each time); Enter applies it (one undo entry),
+  // Esc or undo cancels it. Another edit, another tab or Free Transform applies it first.
   type Warping = {
     document: number;
     id: number;
-    /** The settings when the warp began: unchanged, Enter changes nothing. */
+    /** The settings and grid when the warp began: unchanged, Enter changes nothing. */
     start: WarpSettings;
+    startGrid: Grid;
     settings: WarpSettings;
-    /** The grid's lines, in document pixels. */
-    lines: [number, number][][];
+    /** The grid, its points in the layer's content pixels. */
+    grid: Grid;
+    /** The content's frame the grid is made over, and the map placing it in the document. */
+    frame: number[];
+    toDocument: Homography;
+    /** Split Warp's mode: the next click on the grid splits it there. */
+    split: SplitMode | null;
   };
   let warping = $state<Warping | null>(null);
-  /** The latest grid asked for: older answers are dropped. */
+  /** Grid edits so far: a grid asked for before the latest one is dropped. */
   let warpGridAsked = 0;
+
+  const gridOf = (grid: WarpGrid): Grid => ({
+    columns: grid.columns,
+    rows: grid.rows,
+    points: grid.points,
+  });
 
   async function startWarp() {
     const doc = active;
@@ -3789,30 +3819,80 @@
     });
     if (!grid || active?.id !== doc.id || warping || transforming) return;
     const settings = settingsOf(grid);
-    warping = { document: doc.id, id: layer.id, start: settings, settings, lines: grid.lines };
+    warping = {
+      document: doc.id,
+      id: layer.id,
+      start: settings,
+      startGrid: gridOf(grid),
+      settings,
+      grid: gridOf(grid),
+      frame: grid.frame,
+      toDocument: grid.toDocument,
+      split: null,
+    };
   }
 
+  /** The options bar's style, orientation or bend. */
   function onWarpChange(settings: WarpSettings) {
     const current = warping;
     if (!current) return;
+    const before = current.settings;
     current.settings = settings;
-    const request = warpRequest(current.id, settings);
-    void sync(engine.performLive(current.document, request, true)).then(() =>
-      refreshWarpGrid(current),
+    const asked = ++warpGridAsked;
+    if (settings.style === "custom") {
+      // The grid as it is, from now on edited point by point.
+      if (isStyle(before)) sendWarpGrid(current);
+      return;
+    }
+    if (!settings.style)
+      current.grid = identityGrid(current.frame, current.grid.columns, current.grid.rows);
+    void sync(engine.performLive(current.document, warpRequest(current.id, settings), true)).then(
+      async () => {
+        if (!settings.style) return;
+        // A style's grid is the engine's.
+        const grid = await engine.warpGrid(current.document, current.id).catch(() => null);
+        if (grid && warping === current && asked === warpGridAsked) current.grid = gridOf(grid);
+      },
     );
   }
 
-  async function refreshWarpGrid(current: Warping) {
-    const asked = ++warpGridAsked;
-    const grid = await engine.warpGrid(current.document, current.id).catch(() => null);
-    if (grid && warping === current && asked === warpGridAsked) current.lines = grid.lines;
+  /** The grid edited on the canvas (a drag's step, a split): Custom. */
+  function onWarpGridEdit(grid: Grid) {
+    const current = warping;
+    if (!current) return;
+    ++warpGridAsked;
+    current.grid = grid;
+    current.split = null;
+    current.settings = { ...current.settings, style: "custom" };
+    sendWarpGrid(current);
+  }
+
+  /** The options bar's grid size: the grid's shape kept (a plain grid without a warp). */
+  function onWarpGridSize(size: number) {
+    const current = warping;
+    if (!current) return;
+    ++warpGridAsked;
+    if (!current.settings.style) {
+      current.grid = identityGrid(current.frame, size, size);
+      return;
+    }
+    current.grid = regrid(current.grid, size, size);
+    current.settings = { ...current.settings, style: "custom" };
+    sendWarpGrid(current);
+  }
+
+  function sendWarpGrid(current: Warping) {
+    void sync(engine.performLive(current.document, gridRequest(current.id, current.grid), true));
   }
 
   function commitWarp() {
     const current = warping;
     if (!current) return;
     warping = null;
-    if (sameWarp(current.settings, current.start)) void cancelGesture(current.document);
+    const unchanged =
+      sameWarp(current.settings, current.start) &&
+      (isStyle(current.settings) || sameGrid(current.grid, current.startGrid));
+    if (unchanged) void cancelGesture(current.document);
     else void endGesture(current.document);
   }
 
@@ -6198,7 +6278,18 @@
   </div>
   {#snippet warpBar()}
     {#if warping}
-      <WarpFields settings={warping.settings} onchange={onWarpChange} />
+      <WarpFields
+        settings={warping.settings}
+        size={warping.grid.columns === warping.grid.rows &&
+        GRID_SIZES.includes(warping.grid.columns)
+          ? warping.grid.columns
+          : null}
+        split={warping.split}
+        splittable={warping.grid.columns < MAX_PATCHES || warping.grid.rows < MAX_PATCHES}
+        onchange={onWarpChange}
+        onsize={onWarpGridSize}
+        onsplit={(mode) => warping && (warping.split = mode)}
+      />
     {/if}
   {/snippet}
   {#snippet transformBar()}
@@ -6424,7 +6515,10 @@
                 {:else if warping && warping.document === active?.id}
                   <WarpOverlay
                     {mapping}
-                    lines={warping.lines}
+                    grid={warping.grid}
+                    toDocument={warping.toDocument}
+                    split={warping.split}
+                    onchange={onWarpGridEdit}
                     oncommit={commitWarp}
                     oncancel={cancelWarp}
                   />
