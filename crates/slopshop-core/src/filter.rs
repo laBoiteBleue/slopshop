@@ -256,6 +256,30 @@ pub const MAX_SHARPEN_AMOUNT: f32 = 500.0;
 /// Unsharp Mask's threshold range, in levels of 8 bits (Photoshop's).
 pub const MAX_THRESHOLD: f32 = 255.0;
 
+/// The colors a filter stores (Clouds', Fibers'): sRGB-encoded 8 bits a channel, packed
+/// `0xRRGGBB` in one parameter, below this.
+pub const PACKED_COLORS: u32 = 1 << 24;
+
+/// The wavelength of Clouds' largest features, in the layer's pixels; each finer octave half
+/// the one before, down to [`CLOUDS_FINEST`].
+pub const CLOUDS_SCALE: f64 = 128.0;
+const CLOUDS_FINEST: f64 = 2.0;
+
+/// How much Clouds' and Fibers' noise, centered on 0.5, is stretched (their octaves averaged
+/// would stay close to the middle).
+const CLOUDS_CONTRAST: f64 = 1.8;
+const FIBERS_CONTRAST: f64 = 2.2;
+
+/// Fibers' Variance and Strength range (Photoshop's).
+pub const MAX_FIBERS_SETTING: f32 = 64.0;
+
+/// Fibers' finest streaks are half this many pixels long divided by Variance (Variance 16: 32
+/// pixels).
+pub const FIBERS_LENGTH: f64 = 1024.0;
+
+/// Fibers' octaves: the finest 2 pixels across, each next one twice as wide and long.
+const FIBERS_OCTAVES: u32 = 5;
+
 /// Up to this radius, the Gaussian is convolved exactly; beyond it, three box blurs approximate
 /// it (as the selection's Feather does), whatever the radius costs the same.
 const EXACT_UP_TO: f64 = 8.0;
@@ -422,12 +446,38 @@ pub enum Filter {
         midtone: f32,
         scale: f32,
     },
+    /// Photoshop's Clouds: the layer (the selection) replaced by soft clouds between
+    /// `foreground` (where the noise is 0) and `background` (1), opaque: fractal noise of the
+    /// layer's pixel and `seed` (see [`clouds`]). The colors are those of when it was applied,
+    /// sRGB-encoded.
+    Clouds {
+        foreground: [u8; 3],
+        background: [u8; 3],
+        seed: u32,
+    },
+    /// Photoshop's Difference Clouds: Clouds' colors blended with the layer in Difference mode
+    /// (each channel the difference), each pixel keeping its opacity.
+    DifferenceClouds {
+        foreground: [u8; 3],
+        background: [u8; 3],
+        seed: u32,
+    },
+    /// Photoshop's Fibers: the layer replaced by vertical fibers between `foreground` and
+    /// `background`, opaque: `variance` (1 to 64) the shorter the streaks the higher, `strength`
+    /// (1 to 64) a loose weave when low, short stringy fibers when high (see [`fibers`]).
+    Fibers {
+        variance: f32,
+        strength: f32,
+        foreground: [u8; 3],
+        background: [u8; 3],
+        seed: u32,
+    },
 }
 
 impl Filter {
     /// Every filter's identifier, in menu order.
     /// Shadows/Highlights last: it is in Image > Adjustments, not in the Filter menu.
-    pub const IDS: [&'static str; 28] = [
+    pub const IDS: [&'static str; 31] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -455,6 +505,9 @@ impl Filter {
         "ripple",
         "wave",
         "zigZag",
+        "clouds",
+        "differenceClouds",
+        "fibers",
         "shadowsHighlights",
     ];
 
@@ -489,6 +542,9 @@ impl Filter {
             Self::SmartBlur { .. } => "smartBlur",
             Self::Average => "average",
             Self::ShadowsHighlights { .. } => "shadowsHighlights",
+            Self::Clouds { .. } => "clouds",
+            Self::DifferenceClouds { .. } => "differenceClouds",
+            Self::Fibers { .. } => "fibers",
         }
     }
 
@@ -642,6 +698,29 @@ impl Filter {
                 midtone,
                 ..
             } => [shadows.as_slice(), &highlights, &[color, midtone]].concat(),
+            Self::Clouds {
+                foreground,
+                background,
+                seed,
+            }
+            | Self::DifferenceClouds {
+                foreground,
+                background,
+                seed,
+            } => vec![packed(foreground), packed(background), seed as f32],
+            Self::Fibers {
+                variance,
+                strength,
+                foreground,
+                background,
+                seed,
+            } => vec![
+                variance,
+                strength,
+                packed(foreground),
+                packed(background),
+                seed as f32,
+            ],
         }
     }
 
@@ -773,6 +852,23 @@ impl Filter {
                 },
             }),
             ("average", &[]) => Some(Self::Average),
+            ("clouds", &[foreground, background, seed]) => Some(Self::Clouds {
+                foreground: unpacked(foreground)?,
+                background: unpacked(background)?,
+                seed: whole_seed(seed)?,
+            }),
+            ("differenceClouds", &[foreground, background, seed]) => Some(Self::DifferenceClouds {
+                foreground: unpacked(foreground)?,
+                background: unpacked(background)?,
+                seed: whole_seed(seed)?,
+            }),
+            ("fibers", &[variance, strength, foreground, background, seed]) => Some(Self::Fibers {
+                variance,
+                strength,
+                foreground: unpacked(foreground)?,
+                background: unpacked(background)?,
+                seed: whole_seed(seed)?,
+            }),
             ("shadowsHighlights", &[sa, st, sr, ha, ht, hr, color, midtone]) => {
                 Some(Self::ShadowsHighlights {
                     shadows: [sa, st, sr],
@@ -894,6 +990,24 @@ impl Filter {
                 mode: SmartMode::Normal,
             }),
             "average" => Some(Self::Average),
+            // Photoshop's default colors.
+            "clouds" => Some(Self::Clouds {
+                foreground: [0; 3],
+                background: [255; 3],
+                seed: 0,
+            }),
+            "differenceClouds" => Some(Self::DifferenceClouds {
+                foreground: [0; 3],
+                background: [255; 3],
+                seed: 0,
+            }),
+            "fibers" => Some(Self::Fibers {
+                variance: 16.0,
+                strength: 4.0,
+                foreground: [0; 3],
+                background: [255; 3],
+                seed: 0,
+            }),
             "shadowsHighlights" => Some(Self::ShadowsHighlights {
                 shadows: [35.0, 50.0, 30.0],
                 highlights: [0.0, 50.0, 30.0],
@@ -1029,6 +1143,18 @@ impl Filter {
                     && (1.0..=MAX_ZIGZAG_RIDGES).contains(&ridges)
             }
             Self::PolarCoordinates { .. } | Self::Average => true,
+            Self::Clouds { seed, .. } | Self::DifferenceClouds { seed, .. } => seed < NOISE_SEEDS,
+            Self::Fibers {
+                variance,
+                strength,
+                seed,
+                ..
+            } => {
+                [variance, strength]
+                    .iter()
+                    .all(|v| v.fract() == 0.0 && (1.0..=MAX_FIBERS_SETTING).contains(v))
+                    && seed < NOISE_SEEDS
+            }
             Self::RadialBlur { amount, center, .. } => {
                 amount.fract() == 0.0
                     && (MIN_RADIAL_AMOUNT..=MAX_RADIAL_AMOUNT).contains(&amount)
@@ -1083,7 +1209,10 @@ impl Filter {
             | Self::RadialBlur { .. }
             | Self::SurfaceBlur { .. }
             | Self::SmartBlur { .. }
-            | Self::Average => None,
+            | Self::Average
+            | Self::Clouds { .. }
+            | Self::DifferenceClouds { .. }
+            | Self::Fibers { .. } => None,
         }
     }
 
@@ -1200,7 +1329,10 @@ impl Filter {
             | Self::Ripple { .. }
             | Self::Wave { .. }
             | Self::ZigZag { .. }
-            | Self::PolarCoordinates { .. } => *self,
+            | Self::PolarCoordinates { .. }
+            | Self::Clouds { .. }
+            | Self::DifferenceClouds { .. }
+            | Self::Fibers { .. } => *self,
             Self::ClarityTexture {
                 texture,
                 clarity,
@@ -1231,7 +1363,10 @@ impl Filter {
     pub fn reach(&self) -> f64 {
         match *self {
             Self::MotionBlur { distance, .. } => f64::from(distance) / 2.0 + 2.0,
-            Self::AddNoise { .. } => 0.0,
+            Self::AddNoise { .. }
+            | Self::Clouds { .. }
+            | Self::DifferenceClouds { .. }
+            | Self::Fibers { .. } => 0.0,
             Self::DustAndScratches { radius, .. }
             | Self::Median { radius }
             | Self::BoxBlur { radius }
@@ -1289,7 +1424,10 @@ impl Filter {
             Self::MotionBlur { angle, distance } => {
                 Plan::line(f64::from(angle), f64::from(distance))
             }
-            Self::AddNoise { .. } => Plan {
+            Self::AddNoise { .. }
+            | Self::Clouds { .. }
+            | Self::DifferenceClouds { .. }
+            | Self::Fibers { .. } => Plan {
                 factor: 1,
                 kernel: Kernel::Identity,
             },
@@ -1671,7 +1809,54 @@ impl Filter {
                 | Self::RadialBlur { .. }
                 | Self::SurfaceBlur { .. }
                 | Self::SmartBlur { .. }
+                | Self::Clouds { .. }
+                | Self::Fibers { .. }
         )
+    }
+
+    /// Whether the filter draws (Clouds, Difference Clouds, Fibers): each pixel's
+    /// [`Self::render`] its "blur".
+    pub fn renders(&self) -> bool {
+        self.colors().is_some()
+    }
+
+    /// The colors a drawing filter stores, foreground then background, sRGB-encoded.
+    pub fn colors(&self) -> Option<[[u8; 3]; 2]> {
+        match *self {
+            Self::Clouds {
+                foreground,
+                background,
+                ..
+            }
+            | Self::DifferenceClouds {
+                foreground,
+                background,
+                ..
+            }
+            | Self::Fibers {
+                foreground,
+                background,
+                ..
+            } => Some([foreground, background]),
+            _ => None,
+        }
+    }
+
+    /// What a drawing filter draws at layer point `p` (layer pixels): its two colors `colors`
+    /// (premultiplied blend values, opaque: [`Self::colors`] in the step's blend space) mixed by
+    /// its noise there. `colors[0]` for another filter.
+    pub fn render(&self, p: [f64; 2], colors: [[f64; 4]; 2]) -> [f64; 4] {
+        let v = match *self {
+            Self::Clouds { seed, .. } | Self::DifferenceClouds { seed, .. } => clouds(p, seed),
+            Self::Fibers {
+                variance,
+                strength,
+                seed,
+                ..
+            } => fibers(p, f64::from(variance), f64::from(strength), seed),
+            _ => 0.0,
+        };
+        std::array::from_fn(|c| colors[0][c] + (colors[1][c] - colors[0][c]) * v)
     }
 
     /// A pixel's result from its premultiplied value `original` and its blurs' `blurs` (one per
@@ -1711,7 +1896,12 @@ impl Filter {
             | Self::PolarCoordinates { .. }
             | Self::RadialBlur { .. }
             | Self::SurfaceBlur { .. }
-            | Self::SmartBlur { .. } => blurred,
+            | Self::SmartBlur { .. }
+            | Self::Clouds { .. }
+            | Self::Fibers { .. } => blurred,
+            // Each channel the difference of the pixel's color and the clouds' (`blurred`,
+            // opaque), its own opacity.
+            Self::DifferenceClouds { .. } => color(&|o, b| (o - b).abs()),
             // The average's color (premultiplied in `blurred`), the pixel's own opacity.
             Self::Average => {
                 if blurred[3] <= 0.0 {
@@ -1809,6 +1999,80 @@ impl Filter {
             }
         }
     }
+}
+
+/// `color` as a filter's parameter (see [`PACKED_COLORS`]).
+fn packed([r, g, b]: [u8; 3]) -> f32 {
+    ((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)) as f32
+}
+
+/// A packed color parameter back (see [`PACKED_COLORS`]); `None` when it is not one.
+fn unpacked(v: f32) -> Option<[u8; 3]> {
+    (v.fract() == 0.0 && (0.0..PACKED_COLORS as f32).contains(&v)).then(|| {
+        let n = v as u32;
+        [(n >> 16) as u8, (n >> 8) as u8, n as u8]
+    })
+}
+
+/// A seed parameter back: a whole number below [`NOISE_SEEDS`].
+fn whole_seed(v: f32) -> Option<u32> {
+    (v.fract() == 0.0 && (0.0..NOISE_SEEDS as f32).contains(&v)).then_some(v as u32)
+}
+
+/// Gradient (Perlin) noise at `p` (in lattice cells) for `seed` and `octave`, about -0.7 to
+/// 0.7, zero on the lattice: each corner's gradient a direction drawn from a hash of the
+/// corner, the seed and the octave, blended by a quintic.
+pub fn gradient_noise(p: [f64; 2], seed: u32, octave: u32) -> f64 {
+    let (x0, y0) = (p[0].floor(), p[1].floor());
+    let (fx, fy) = (p[0] - x0, p[1] - y0);
+    let (x0, y0) = (x0 as i64, y0 as i64);
+    let salt = hash(seed ^ hash(octave.wrapping_add(0x9e37_79b9)));
+    let corner = |dx: i64, dy: i64| {
+        let h = hash((x0 + dx) as i32 as u32 ^ hash((y0 + dy) as i32 as u32 ^ salt));
+        let angle = f64::from(h >> 8) / f64::from(1u32 << 24) * std::f64::consts::TAU;
+        let (sin, cos) = angle.sin_cos();
+        cos * (fx - dx as f64) + sin * (fy - dy as f64)
+    };
+    let fade = |t: f64| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    let (u, v) = (fade(fx), fade(fy));
+    let top = corner(0, 0) + (corner(1, 0) - corner(0, 0)) * u;
+    let bottom = corner(0, 1) + (corner(1, 1) - corner(0, 1)) * u;
+    top + (bottom - top) * v
+}
+
+/// Clouds' value at layer point `p` for `seed`, 0 to 1: octaves of gradient noise from
+/// [`CLOUDS_SCALE`] down to a couple of pixels, each half as strong as the one before
+/// (fractional Brownian motion), averaged and stretched around the middle.
+pub fn clouds(p: [f64; 2], seed: u32) -> f64 {
+    let (mut sum, mut total, mut amplitude, mut wavelength) = (0.0, 0.0, 1.0, CLOUDS_SCALE);
+    let mut octave = 0;
+    while wavelength >= CLOUDS_FINEST {
+        sum += amplitude * gradient_noise([p[0] / wavelength, p[1] / wavelength], seed, octave);
+        total += amplitude;
+        amplitude *= 0.5;
+        wavelength /= 2.0;
+        octave += 1;
+    }
+    (0.5 + sum / total * CLOUDS_CONTRAST).clamp(0.0, 1.0)
+}
+
+/// Fibers' value at layer point `p` for `seed`, 0 to 1: octaves of gradient noise stretched
+/// vertically, the finest 2 pixels across and [`FIBERS_LENGTH`] / `variance` / 2 long, each
+/// next one twice as wide and long, `2^(-strength / 8)` times as strong as the one before (a
+/// low strength weighs the broad weave about as much as the fine fibers, a high one the
+/// finest only).
+pub fn fibers(p: [f64; 2], variance: f64, strength: f64, seed: u32) -> f64 {
+    let length = FIBERS_LENGTH / variance.max(1.0) / 2.0;
+    let ratio = (-strength / 8.0).exp2();
+    let (mut sum, mut total, mut amplitude) = (0.0, 0.0, 1.0);
+    for octave in 0..FIBERS_OCTAVES {
+        let grow = f64::from(1u32 << octave);
+        let (across, along) = (2.0 * grow, length * grow);
+        sum += amplitude * gradient_noise([p[0] / across, p[1] / along], seed, octave);
+        total += amplitude;
+        amplitude *= ratio;
+    }
+    (0.5 + sum / total * FIBERS_CONTRAST).clamp(0.0, 1.0)
 }
 
 /// Rec. 709 luma of a straight color.
@@ -4110,5 +4374,125 @@ mod tests {
             Filter::from_params("smartBlur", &[3.0, 25.0, 2.0, 2.0]),
             Some(smart(3.0, 25.0))
         );
+    }
+
+    #[test]
+    fn drawing_filters_keep_their_colors_packed_and_their_seed() {
+        let clouds = Filter::Clouds {
+            foreground: [0x12, 0x34, 0x56],
+            background: [255, 128, 0],
+            seed: 99,
+        };
+        assert_eq!(clouds.params(), vec![1_193_046.0, 16_744_448.0, 99.0]);
+        assert_eq!(
+            Filter::from_params("clouds", &clouds.params()),
+            Some(clouds)
+        );
+        assert_eq!(clouds.colors(), Some([[0x12, 0x34, 0x56], [255, 128, 0]]));
+        assert!(clouds.renders() && !Filter::Average.renders());
+        // Not a color, not a seed: not this filter's.
+        for wrong in [
+            [-1.0, 0.0, 0.0],
+            [16_777_216.0, 0.0, 0.0],
+            [0.5, 0.0, 0.0],
+            [0.0, 0.0, NOISE_SEEDS as f32],
+        ] {
+            assert_eq!(Filter::from_params("differenceClouds", &wrong), None);
+        }
+        let fibers = |variance, strength| Filter::Fibers {
+            variance,
+            strength,
+            foreground: [0; 3],
+            background: [255; 3],
+            seed: 0,
+        };
+        assert!(fibers(1.0, 64.0).is_valid() && fibers(64.0, 1.0).is_valid());
+        for wrong in [fibers(0.0, 4.0), fibers(16.0, 65.0), fibers(16.5, 4.0)] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        // Drawn in the layer's pixels whatever the level, reading nothing around.
+        assert_eq!(fibers(16.0, 4.0).scaled(4.0), fibers(16.0, 4.0));
+        assert_eq!(clouds.reach(), 0.0);
+    }
+
+    /// `f` at the `n` × `n` pixel centers of a grid from the origin.
+    fn field(n: usize, f: impl Fn([f64; 2]) -> f64) -> Vec<f64> {
+        (0..n * n)
+            .map(|i| f([(i % n) as f64 + 0.5, (i / n) as f64 + 0.5]))
+            .collect()
+    }
+
+    #[test]
+    fn clouds_are_smooth_spread_and_the_seeds() {
+        let n = 256;
+        let a = field(n, |p| clouds(p, 1));
+        assert_eq!(a, field(n, |p| clouds(p, 1)), "the same again");
+        assert!(a.iter().all(|v| (0.0..=1.0).contains(v)));
+        let mean = a.iter().sum::<f64>() / a.len() as f64;
+        let deviation = (a.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / a.len() as f64).sqrt();
+        assert!((0.4..0.6).contains(&mean), "{mean}");
+        assert!(deviation > 0.15, "spread: {deviation}");
+        // Soft: next pixels close, on average much closer than pixels far apart.
+        let step = |d: usize| {
+            (0..n * (n - d))
+                .map(|i| (a[i] - a[i + d * n]).abs())
+                .sum::<f64>()
+                / (n * (n - d)) as f64
+        };
+        assert!(
+            step(1) < 0.05 && step(64) > 4.0 * step(1),
+            "{} {}",
+            step(1),
+            step(64)
+        );
+        let b = field(n, |p| clouds(p, 2));
+        let apart = a.iter().zip(&b).map(|(a, b)| (a - b).abs()).sum::<f64>() / a.len() as f64;
+        assert!(apart > 0.1, "another seed: {apart}");
+    }
+
+    #[test]
+    fn fibers_streak_down_and_shorten_with_variance_and_strength() {
+        let n = 256;
+        // How much pixels `d` apart down (or across) differ, on average.
+        let change = |f: &[f64], d: usize, down: bool| {
+            let mut sum = 0.0;
+            for y in 0..n - d {
+                for x in 0..n - d {
+                    let o = if down { d * n } else { d };
+                    sum += (f[y * n + x] - f[y * n + x + o]).abs();
+                }
+            }
+            sum / ((n - d) * (n - d)) as f64
+        };
+        let usual = field(n, |p| fibers(p, 16.0, 4.0, 5));
+        assert!(usual.iter().all(|v| (0.0..=1.0).contains(v)));
+        assert!(change(&usual, 1, false) > 4.0 * change(&usual, 1, true));
+        // A high variance: shorter streaks, more change down a few pixels.
+        let varied = field(n, |p| fibers(p, 64.0, 4.0, 5));
+        let long = field(n, |p| fibers(p, 2.0, 4.0, 5));
+        assert!(change(&varied, 8, true) > 2.0 * change(&long, 8, true));
+        // A high strength: the finest fibers only, more change across a few pixels.
+        let stringy = field(n, |p| fibers(p, 16.0, 64.0, 5));
+        let loose = field(n, |p| fibers(p, 16.0, 1.0, 5));
+        assert!(change(&stringy, 2, false) > change(&loose, 2, false));
+    }
+
+    #[test]
+    fn difference_clouds_take_each_channel_apart_and_keep_alpha() {
+        let filter = Filter::DifferenceClouds {
+            foreground: [0; 3],
+            background: [255; 3],
+            seed: 0,
+        };
+        // A half-transparent (0.8, 0.2, 0.5) under clouds of (0.3, 0.3, 0.3).
+        let original = [0.4, 0.1, 0.25, 0.5];
+        let out = filter.finish(original, &[[0.3, 0.3, 0.3, 1.0]], [0, 0]);
+        for (o, e) in out.iter().zip([0.25, 0.05, 0.1, 0.5]) {
+            assert!((o - e).abs() < 1e-12, "{out:?}");
+        }
+        let colors = [[0.0, 0.0, 0.0, 1.0], [1.0, 0.5, 0.0, 1.0]];
+        let p = [12.5, 40.5];
+        let v = clouds(p, 0);
+        assert_eq!(filter.render(p, colors), [v, v * 0.5, 0.0, 1.0]);
     }
 }
