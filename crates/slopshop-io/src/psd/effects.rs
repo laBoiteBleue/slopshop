@@ -12,9 +12,9 @@ use slopshop_core::color::LinearRgba;
 use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
 use slopshop_core::selection::StrokeLocation;
 use slopshop_core::style::{
-    BevelEmboss, BevelStyle, ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle,
-    MAX_BEVEL_DEPTH, MAX_BEVEL_SOFTEN, MAX_GRADIENT_SCALE, MAX_SATIN_DISTANCE, MAX_SIZE,
-    MIN_BEVEL_DEPTH, MIN_GRADIENT_SCALE, Satin, Stroke,
+    BevelEmboss, BevelStyle, ColorOverlay, DropShadow, GlobalLight, Glow, GradientOverlay,
+    LayerStyle, MAX_BEVEL_DEPTH, MAX_BEVEL_SOFTEN, MAX_GRADIENT_SCALE, MAX_SATIN_DISTANCE,
+    MAX_SIZE, MIN_BEVEL_DEPTH, MIN_GRADIENT_SCALE, Satin, Stroke,
 };
 
 use super::descriptor::{self, Descriptor, Value};
@@ -72,8 +72,8 @@ pub(crate) struct ImportedStyle {
 /// What reading one effect gathers.
 struct Read {
     approximated: bool,
-    /// The global light's angle, for effects that use it.
-    global_angle: f64,
+    /// The document's global light, for effects that use it.
+    light: GlobalLight,
     /// The style's scale (Layer Style > Scale Effects), applied to its sizes.
     scale: f64,
     /// The master switch (`masterFXSwitch`): off, the effects are hidden, each keeping its own
@@ -138,10 +138,11 @@ impl Read {
 
     fn shadow(&mut self, d: &Descriptor) -> DropShadow {
         self.noise(d);
-        let angle = if d.bool(b"uglg").unwrap_or(false) {
-            self.global_angle
+        let use_global_light = d.bool(b"uglg").unwrap_or(false);
+        let angle = if use_global_light {
+            self.light.angle
         } else {
-            d.number(b"lagl").unwrap_or(self.global_angle)
+            d.number(b"lagl").unwrap_or(self.light.angle)
         };
         DropShadow {
             enabled: self.enabled(d),
@@ -149,6 +150,7 @@ impl Read {
             mode: self.mode(d),
             opacity: Self::opacity(d),
             angle,
+            use_global_light,
             distance: (d.number(b"Dstn").unwrap_or(0.0) * self.scale)
                 .clamp(0.0, slopshop_core::style::MAX_DISTANCE),
             spread: Self::spread(d),
@@ -289,10 +291,14 @@ impl Read {
         {
             self.approximated = true;
         }
-        let angle = if d.bool(b"uglg").unwrap_or(false) {
-            self.global_angle
+        let use_global_light = d.bool(b"uglg").unwrap_or(false);
+        let (angle, altitude) = if use_global_light {
+            (self.light.angle, self.light.altitude)
         } else {
-            d.number(b"lagl").unwrap_or(120.0)
+            (
+                d.number(b"lagl").unwrap_or(120.0),
+                d.number(b"Lald").unwrap_or(30.0).clamp(0.0, 90.0),
+            )
         };
         let part = |read: &mut Self, mode: &[u8], color: &[u8], opacity: &[u8], default| {
             let mode = match d.enumerated(mode).and_then(mode_of) {
@@ -332,7 +338,8 @@ impl Read {
             size: self.size(d, b"blur"),
             soften: (d.number(b"Sftn").unwrap_or(0.0) * self.scale).clamp(0.0, MAX_BEVEL_SOFTEN),
             angle,
-            altitude: d.number(b"Lald").unwrap_or(30.0).clamp(0.0, 90.0),
+            altitude,
+            use_global_light,
             highlight_color,
             highlight_mode,
             highlight_opacity,
@@ -402,13 +409,13 @@ fn effect<'a>(
 }
 
 /// The style of an `lfx2` or `lmfx` block (`version`, descriptor version, descriptor), with the
-/// document's global light angle (degrees). `None` when the block cannot be read.
-pub(crate) fn read(block: &[u8], global_angle: f64) -> Option<ImportedStyle> {
+/// document's global light. `None` when the block cannot be read.
+pub(crate) fn read(block: &[u8], light: GlobalLight) -> Option<ImportedStyle> {
     // lfx2: object effects version (0), descriptor version (16). lmfx: the same.
     let d = descriptor::read(block.get(8..)?)?;
     let mut read = Read {
         approximated: false,
-        global_angle,
+        light,
         scale: d.number(b"Scl ").map_or(1.0, |s| s / 100.0),
         on: d.bool(b"masterFXSwitch").unwrap_or(true),
     };
@@ -532,7 +539,7 @@ fn common(enabled: bool, mode: BlendMode, c: LinearRgba, opacity: f32) -> Vec<It
 fn shadow(s: DropShadow) -> Vec<Item> {
     let mut items = common(s.enabled, s.mode, s.color, s.opacity);
     items.extend([
-        (&b"uglg"[..], b"bool", vec![0]),
+        (&b"uglg"[..], b"bool", vec![u8::from(s.use_global_light)]),
         (b"lagl", b"UntF", unit(b"#Ang", s.angle)),
         (b"Dstn", b"UntF", unit(b"#Pxl", s.distance)),
         (b"Ckmt", b"UntF", unit(b"#Pxl", s.spread)),
@@ -714,7 +721,7 @@ pub(crate) fn write(style: &LayerStyle) -> Option<Vec<u8>> {
             ),
             (b"bvlT", b"enum", enumerated(b"bvlT", b"SfBL")),
             (b"bvlS", b"enum", enumerated(b"BESl", style)),
-            (b"uglg", b"bool", vec![0]),
+            (b"uglg", b"bool", vec![u8::from(b.use_global_light)]),
             (b"lagl", b"UntF", unit(b"#Ang", b.angle)),
             (b"Lald", b"UntF", unit(b"#Ang", b.altitude)),
             (b"srgR", b"UntF", unit(b"#Prc", b.depth)),
@@ -757,12 +764,21 @@ pub(crate) fn write(style: &LayerStyle) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// A global light from `angle`, 30° high.
+    fn light(angle: f64) -> GlobalLight {
+        GlobalLight {
+            angle,
+            altitude: 30.0,
+        }
+    }
+
     #[test]
     fn every_effect_round_trips_through_lfx2() {
         let style = LayerStyle {
             fill_opacity: 1.0,
             drop_shadow: Some(DropShadow {
                 angle: 75.0,
+                use_global_light: false,
                 distance: 12.0,
                 spread: 20.0,
                 size: 9.0,
@@ -823,6 +839,7 @@ mod tests {
                 soften: 3.0,
                 angle: 45.0,
                 altitude: 60.0,
+                use_global_light: false,
                 highlight_mode: BlendMode::Overlay,
                 shadow_opacity: 0.4,
                 ..BevelEmboss::default()
@@ -836,7 +853,7 @@ mod tests {
             effects_visible: true,
         };
         let block = write(&style).unwrap();
-        let read = read(&block, 120.0).unwrap();
+        let read = read(&block, GlobalLight::default()).unwrap();
         assert!(!read.approximated);
         let close = |a: LinearRgba, b: LinearRgba| {
             [a.r - b.r, a.g - b.g, a.b - b.b]
@@ -849,6 +866,9 @@ mod tests {
             (s.angle, s.distance, s.spread, s.size, s.mode, s.enabled),
             (t.angle, t.distance, t.spread, t.size, t.mode, t.enabled)
         );
+        // Its own light, and the global light for the others (`uglg`).
+        assert!(!t.use_global_light);
+        assert!(back.inner_shadow.unwrap().use_global_light);
         assert!((s.opacity - t.opacity).abs() < 1e-6);
         assert!(close(s.color, t.color));
         assert_eq!(back.inner_shadow.unwrap().mode, BlendMode::Overlay);
@@ -928,14 +948,14 @@ mod tests {
                 ),
             ],
         ));
-        let read = read(&block, 30.0).unwrap();
+        let read = read(&block, light(30.0)).unwrap();
         assert!(read.style.drop_shadow.unwrap().enabled);
         assert!(!read.style.effects_visible);
         assert!(!read.style.shows());
         // Back as it was.
-        let back = super::read(&write(&read.style).unwrap(), 30.0).unwrap();
+        let back = super::read(&write(&read.style).unwrap(), light(30.0)).unwrap();
         assert!(!back.style.effects_visible);
-        assert_eq!(super::read(&block[..10], 30.0), None);
+        assert_eq!(super::read(&block[..10], light(30.0)), None);
     }
 
     #[test]
@@ -952,7 +972,11 @@ mod tests {
                 (b"DrSh", b"Objc", object(b"DrSh", &uses_global)),
             ],
         ));
-        let s = read(&block, 30.0).unwrap().style.drop_shadow.unwrap();
+        let s = read(&block, light(30.0))
+            .unwrap()
+            .style
+            .drop_shadow
+            .unwrap();
         assert_eq!(s.angle, 30.0);
         assert_eq!((s.distance, s.size), (10.0, 10.0));
     }

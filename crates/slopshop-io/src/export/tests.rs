@@ -3327,11 +3327,25 @@ fn layer_styles_round_trip_through_a_layered_psd() {
         .find(|l| matches!(l.content, LayerContent::Raster { .. }))
         .unwrap()
         .id;
+    // The document's global light (resources 1037 and 1049), which the shadow uses; the
+    // inner shadow has its own.
+    Edit::SetGlobalLight {
+        light: slopshop_core::style::GlobalLight {
+            angle: 45.0,
+            altitude: 40.0,
+        },
+    }
+    .apply(&mut doc)
+    .unwrap();
     let style = LayerStyle {
         fill_opacity: 0.6,
         drop_shadow: Some(DropShadow {
-            angle: 45.0,
             distance: 8.0,
+            ..DropShadow::default()
+        }),
+        inner_shadow: Some(DropShadow {
+            angle: -30.0,
+            use_global_light: false,
             ..DropShadow::default()
         }),
         inner_glow: Some(Glow::default()),
@@ -3400,6 +3414,11 @@ fn layer_styles_round_trip_through_a_layered_psd() {
     assert!((back.fill_opacity - 0.6).abs() < 0.01);
     let shadow = back.drop_shadow.unwrap();
     assert_eq!((shadow.angle, shadow.distance), (45.0, 8.0));
+    assert!(shadow.use_global_light);
+    let inner = back.inner_shadow.unwrap();
+    assert_eq!((inner.angle, inner.use_global_light), (-30.0, false));
+    let light = opened.document.global_light();
+    assert_eq!((light.angle, light.altitude), (45.0, 40.0));
     assert!(back.inner_glow.is_some());
     assert_eq!(back.stroke.unwrap().size, 4.0);
     let group_back = style_of(true);

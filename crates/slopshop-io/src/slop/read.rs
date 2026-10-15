@@ -18,6 +18,7 @@ use slopshop_core::geom::Size;
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
 use slopshop_core::selection::Selection;
 use slopshop_core::shape::ShapeSource;
+use slopshop_core::style::GlobalLight;
 use slopshop_core::{BlendMode, BlendSpace};
 
 use super::format::{
@@ -314,6 +315,15 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
     .and_then(|document| document.with_resolution(document_resolution(doc)))
     .and_then(|document| document.with_saved_selections(saved, next_saved))
     .and_then(|document| document.with_guides(guides))
+    .and_then(|document| {
+        let light = doc
+            .global_light
+            .map_or_else(GlobalLight::default, |[angle, altitude]| GlobalLight {
+                angle,
+                altitude,
+            });
+        document.with_global_light(light)
+    })
     .map_err(FileError::Document)?;
     Ok((document, index, records, residue))
 }

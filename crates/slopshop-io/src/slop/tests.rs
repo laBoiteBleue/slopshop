@@ -1718,6 +1718,12 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
     use slopshop_core::selection::StrokeLocation;
     use slopshop_core::style::{ColorOverlay, DropShadow, Glow, LayerStyle, Stroke};
     let mut doc = Document::new(Size::new(40, 30));
+    // The global light (schema 0.37), which the effects using it follow.
+    let light = slopshop_core::style::GlobalLight {
+        angle: 75.5,
+        altitude: 45.0,
+    };
+    Edit::SetGlobalLight { light }.apply(&mut doc).unwrap();
     let format = PixelFormat {
         layout: ChannelLayout::Rgba,
         sample: SampleType::U8,
@@ -1772,6 +1778,8 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
             }),
             inner_shadow: Some(DropShadow {
                 distance: 11.0,
+                angle: 12.0,
+                use_global_light: false,
                 ..DropShadow::default()
             }),
             inner_glow: Some(Glow {
@@ -1801,7 +1809,33 @@ fn layer_styles_round_trip_and_bad_ones_are_refused() {
     SlopFile::create(&path, &doc).unwrap();
     let (loaded, _) = SlopFile::open(&path).unwrap();
     assert_same(&doc, &loaded);
+    assert_eq!(loaded.global_light(), light);
+    let shadow = |doc: &Document, id: u64| {
+        let layer = doc.layer(slopshop_core::LayerId::from_raw(id)).unwrap();
+        let style = layer.style.as_ref().unwrap().settings().clone();
+        (style.drop_shadow, style.inner_shadow)
+    };
+    let (drop, _) = shadow(&loaded, photo);
+    assert_eq!(
+        drop.map(|s| (s.angle, s.use_global_light)),
+        Some((75.5, true))
+    );
+    let (_, inner) = shadow(&loaded, fill);
+    assert_eq!(
+        inner.map(|s| (s.angle, s.use_global_light)),
+        Some((12.0, false))
+    );
     fs::remove_file(&path).ok();
+
+    // Effects of before the global light have their own angle.
+    let before = serde_json::json!({ "fill_opacity": 1.0, "drop_shadow": {
+        "enabled": true, "color": [0, 0, 0], "mode": "multiply", "opacity": 0.75,
+        "angle": 33, "distance": 5, "spread": 0, "size": 5 } });
+    let read = super::style::from_json(&before, &|_| None).unwrap();
+    assert_eq!(
+        read.drop_shadow.map(|s| (s.angle, s.use_global_light)),
+        Some((33.0, false))
+    );
 
     // Styles are refused when they are out of range.
     let mut bad = serde_json::json!({ "fill_opacity": 2.0 });
