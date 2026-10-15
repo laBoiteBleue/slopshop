@@ -19,6 +19,8 @@ export class LayersUi {
    * click on a thumbnail chooses).
    */
   maskTargets = $state<ReadonlySet<number>>(new Set());
+  /** Layers whose vector mask is targeted (ADR 0041): the Pen draws and edits in it. */
+  vectorMaskTargets = $state<ReadonlySet<number>>(new Set());
   /** How far the list is scrolled, CSS pixels. */
   scroll = 0;
 }

@@ -12,7 +12,8 @@ export function batchOf(edits: EditRequest[]): EditRequest {
   return edits.length === 1 ? edits[0] : { kind: "batch", edits };
 }
 
-function batchOrNone(edits: EditRequest[]): EditRequest | null {
+/** One edit, one batch for several, or null when there is none. */
+export function batchOrNone(edits: EditRequest[]): EditRequest | null {
   return edits.length > 0 ? batchOf(edits) : null;
 }
 

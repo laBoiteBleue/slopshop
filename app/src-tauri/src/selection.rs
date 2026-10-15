@@ -8,8 +8,7 @@ use std::sync::{Arc, Mutex};
 use serde::Deserialize;
 use slopshop_core::selection::{self, Combine, EdgeOptions, PixelSource, Selection, Shape};
 use slopshop_core::{
-    Document, Edit, LayerContent, LayerId, LayerMask, RasterImage, Rect, SavedSelection,
-    SavedSelectionId, Size,
+    Document, Edit, LayerId, LayerMask, RasterImage, Rect, SavedSelection, SavedSelectionId, Size,
 };
 use slopshop_render::Renderer;
 use tauri::State;
@@ -1107,18 +1106,25 @@ pub async fn load_selection(
     )
 }
 
-/// Ctrl+click on a layer's thumbnail (its mask's with `mask`): the selection its pixels make
-/// (or its mask), combined with the current one by `mode` (Shift adds, Alt subtracts, both
-/// intersect, as in Photoshop); one undo entry, "Load Selection".
+/// Ctrl+click on a layer's thumbnail (`part`: `pixels`, `mask` or `vectorMask`): the selection
+/// its pixels make (or its mask, its vector mask), combined with the current one by `mode`
+/// (Shift adds, Alt subtracts, both intersect, as in Photoshop); one undo entry, "Load
+/// Selection".
 #[tauri::command]
 pub async fn select_layer_pixels(
     state: State<'_, AppState>,
     document_id: u64,
     layer_id: u64,
-    mask: bool,
+    part: String,
     mode: String,
 ) -> Result<DocumentView, String> {
     let how = combine(&mode)?;
+    let part = match part.as_str() {
+        "pixels" => selection::LayerPart::Pixels,
+        "mask" => selection::LayerPart::Mask,
+        "vectorMask" => selection::LayerPart::VectorMask,
+        other => return Err(format!("unknown layer part {other}")),
+    };
     let doc = {
         let mut documents = state.documents()?;
         documents.get_mut(document_id)?.session.document().clone()
@@ -1127,7 +1133,7 @@ pub async fn select_layer_pixels(
         let id = slopshop_core::LayerId::from_raw(layer_id);
         let current = doc.selection().map(|s| Arc::clone(s.image()));
         // `None`: nothing to change (no pixels there, and not replacing, which deselects).
-        Ok(match selection::from_layer(&doc, id, mask) {
+        Ok(match selection::from_layer(&doc, id, part) {
             None if how == Combine::Replace => Some(None),
             None => None,
             Some(pixels) if how == Combine::Replace => Some(Some(pixels)),
@@ -1156,8 +1162,11 @@ fn path_selection(
     doc: &Document,
     path: Option<&crate::shape::GeometryDto>,
     layer_id: Option<u64>,
+    vector_mask: bool,
 ) -> Result<Shape, String> {
     match (path, layer_id) {
+        (None, Some(id)) if vector_mask => selection::vector_mask_path(doc, LayerId::from_raw(id))
+            .ok_or_else(|| "the layer has no vector mask".to_owned()),
         (Some(path), _) => {
             let geometry = path.geometry()?;
             if !geometry.is_valid() {
@@ -1176,19 +1185,21 @@ fn path_selection(
 
 /// Make Selection (Ctrl+Enter with the Pen, as Photoshop's): the area a path encloses,
 /// anti-aliased, replacing the selection; one undo entry, "Make Selection". The path is the
-/// one being drawn (`path`, document pixels) or, without it, vector layer `layer_id`'s, placed
-/// where the layer is.
+/// one being drawn (`path`, document pixels) or, without it, vector layer `layer_id`'s (its
+/// vector mask's with `vector_mask`, ADR 0041), placed where the layer is.
 #[tauri::command]
 pub async fn make_selection(
     state: State<'_, AppState>,
     document_id: u64,
     path: Option<crate::shape::GeometryDto>,
     layer_id: Option<u64>,
+    vector_mask: Option<bool>,
 ) -> Result<DocumentView, String> {
     let (canvas, shape) = {
         let mut documents = state.documents()?;
         let doc = documents.get_mut(document_id)?.session.document();
-        (doc.size(), path_selection(doc, path.as_ref(), layer_id)?)
+        let shape = path_selection(doc, path.as_ref(), layer_id, vector_mask.unwrap_or(false))?;
+        (doc.size(), shape)
     };
     let image = on_worker(move || {
         selection::select_shape(
@@ -1323,34 +1334,17 @@ pub(crate) fn quick_mask(
     Ok(document.view())
 }
 
-/// The size of a new mask for `layer`: its pixels', or for fills, groups and adjustments the
-/// canvas as seen from the layer.
+/// The size of a new mask for `layer`: its pixels', or for fills, groups, adjustments and
+/// shapes the canvas as seen from the layer ([`slopshop_core::Layer::mask_size`]).
 pub(crate) fn mask_size(
     doc: &slopshop_core::Document,
     layer: &slopshop_core::Layer,
 ) -> Result<Size, String> {
-    match &layer.content {
-        LayerContent::Raster { image, .. } => Ok(image.size()),
-        _ => {
-            let canvas = doc.size();
-            let to_document = layer.transform.then(doc.parent_transform(layer.id));
-            let inverse = to_document
-                .inverse()
-                .ok_or("a layer transform is not invertible")?;
-            let [_, _, mut x1, mut y1] =
-                inverse.map_rect([0.0, 0.0, f64::from(canvas.width), f64::from(canvas.height)]);
-            // A shape reaching beyond the canvas keeps showing there (ADR 0041).
-            if let LayerContent::Vector { source, .. } = &layer.content
-                && let Some([_, _, sx1, sy1]) =
-                    slopshop_core::shape::path::shape_bounds(source.shape())
-            {
-                x1 = x1.max(sx1);
-                y1 = y1.max(sy1);
-            }
-            let side = |v: f64| v.ceil().clamp(1.0, f64::from(u32::MAX)) as u32;
-            Ok(Size::new(side(x1), side(y1)))
-        }
+    let to_document = layer.transform.then(doc.parent_transform(layer.id));
+    if to_document.inverse().is_none() {
+        return Err("a layer transform is not invertible".to_owned());
     }
+    Ok(layer.mask_size(to_document, doc.size()))
 }
 
 /// Layer > Layer Mask > Reveal All, Hide All, Reveal Selection or Hide Selection (`kind`:
@@ -1517,7 +1511,7 @@ pub async fn selection_outline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use slopshop_core::{LinearRgba, Session};
+    use slopshop_core::{LayerContent, LinearRgba, Session};
 
     #[test]
     fn make_selection_selects_the_path_drawn_or_a_vector_layers() {
@@ -1538,7 +1532,7 @@ mod tests {
             .unwrap()
             .unwrap()
         };
-        let shape = path_selection(s.document(), Some(&path), None).unwrap();
+        let shape = path_selection(s.document(), Some(&path), None, false).unwrap();
         // The triangle the open path encloses once joined.
         assert_eq!(
             selection::bounds(&select(&shape)),
@@ -1569,23 +1563,42 @@ mod tests {
                     "Shape 1",
                 )),
                 warp: None,
+                vector_mask: None,
             },
         })
         .unwrap();
-        let shape = path_selection(s.document(), None, Some(id.get())).unwrap();
+        let shape = path_selection(s.document(), None, Some(id.get()), false).unwrap();
         assert_eq!(
             selection::bounds(&select(&shape)),
             Some(Rect::new(60, 10, 100, 50))
         );
+        // Its vector mask's path (ADR 0041), once it has one, even hiding what it encloses.
+        assert!(path_selection(s.document(), None, Some(id.get()), true).is_err());
+        let mask = slopshop_core::shape::VectorMask::reveal_all()
+            .with_geometry(slopshop_core::shape::Geometry::Rectangle {
+                rect: [0.0, 0.0, 20.0, 30.0],
+                radii: [0.0; 4],
+            })
+            .unwrap();
+        s.perform(Edit::SetVectorMask {
+            id,
+            mask: Some(mask),
+        })
+        .unwrap();
+        let shape = path_selection(s.document(), None, Some(id.get()), true).unwrap();
+        assert_eq!(
+            selection::bounds(&select(&shape)),
+            Some(Rect::new(50, 0, 20, 30))
+        );
         // No path, an unknown layer, or a path out of range: refused.
-        assert!(path_selection(s.document(), None, None).is_err());
-        assert!(path_selection(s.document(), None, Some(999)).is_err());
+        assert!(path_selection(s.document(), None, None, false).is_err());
+        assert!(path_selection(s.document(), None, Some(999), false).is_err());
         let far: crate::shape::GeometryDto = serde_json::from_str(
             r#"{"kind":"path","rule":"nonzero","subpaths":[
                 {"start":[1e9,0],"segments":[[0,0]],"closed":false}]}"#,
         )
         .unwrap();
-        assert!(path_selection(s.document(), Some(&far), None).is_err());
+        assert!(path_selection(s.document(), Some(&far), None, false).is_err());
     }
 
     #[test]
@@ -1618,6 +1631,7 @@ mod tests {
                 color: LinearRgba::new(0.8, 0.1, 0.1, 1.0),
             },
             warp: None,
+            vector_mask: None,
         };
         s.perform(Edit::InsertLayer {
             parent: None,
@@ -1691,6 +1705,7 @@ mod tests {
                 transform: Projective::IDENTITY,
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)

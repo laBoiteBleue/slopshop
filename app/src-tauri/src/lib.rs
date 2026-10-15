@@ -624,6 +624,7 @@ fn session_with_layer(size: Size, name: &str, content: LayerContent) -> Session 
             mask: None,
             content,
             warp: None,
+            vector_mask: None,
         },
     };
     // Invariant: a fresh id at index 0 of an empty document with valid content is accepted.
@@ -1059,6 +1060,7 @@ fn insert_image(
                         layer_name,
                     )),
                     warp: None,
+                    vector_mask: None,
                 },
             };
             session
@@ -1896,6 +1898,7 @@ fn shape_thumbnail(
             mask: None,
             content: LayerContent::vector(Arc::clone(shape)),
             warp: None,
+            vector_mask: None,
         },
     }
     .apply(&mut doc)
@@ -2686,6 +2689,7 @@ mod tests {
                 },
                 mask: Some(mask),
                 warp: None,
+                vector_mask: None,
             },
         })
         .unwrap();
@@ -2888,6 +2892,7 @@ mod tests {
                 transform: slopshop_core::Affine::translation(1000.0, 1000.0).into(),
                 content: LayerContent::raster(Arc::clone(&small)),
                 warp: None,
+                vector_mask: None,
             };
             document
                 .session
@@ -3019,6 +3024,7 @@ mod tests {
                         content: LayerContent::raster(Arc::clone(&pixels)),
                         mask: None,
                         warp: None,
+                        vector_mask: None,
                     },
                 })
                 .unwrap();
@@ -3110,6 +3116,7 @@ mod tests {
                         },
                         mask: Some(mask),
                         warp: None,
+                        vector_mask: None,
                     },
                 })
                 .unwrap();
@@ -3973,6 +3980,7 @@ mod tests {
                         color: slopshop_core::LinearRgba::new(0.0, 1.0, 0.0, 1.0),
                     },
                     warp: None,
+                    vector_mask: None,
                 },
             })
             .unwrap();
@@ -4039,6 +4047,7 @@ mod tests {
                 color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
             },
             warp: None,
+            vector_mask: None,
         };
         let index = document.session.document().layers().len();
         document
@@ -4987,6 +4996,121 @@ mod tests {
     }
 
     #[test]
+    fn vector_masks_are_added_shown_edited_and_deleted() {
+        let mut s = blank_session();
+        let perform = |s: &mut Session, json: &str| {
+            let request: EditRequest = serde_json::from_str(json).unwrap();
+            let edit = request.into_edit(s)?;
+            s.perform(edit).map_err(|e| e.to_string())
+        };
+        let background = s.document().layers()[0].id.get();
+        // An ellipse moved right by 5: its path for Current Path.
+        let shape = r#"{"geometry":{"kind":"ellipse","center":[50.0,40.0],"radii":[20.0,10.0]},"fill":[1.0,0.0,0.0,1.0],"stroke":null}"#;
+        perform(
+            &mut s,
+            &format!(r#"{{"kind":"addShape","name":"Ellipse 1","shape":{shape}}}"#),
+        )
+        .unwrap();
+        let ellipse = s.document().layers()[1].id;
+        s.perform(Edit::SetLayerTransform {
+            id: ellipse,
+            transform: slopshop_core::Affine::translation(5.0, 0.0).into(),
+        })
+        .unwrap();
+        let request: EditRequest = serde_json::from_str(&format!(
+            r#"{{"kind":"addVectorMask","ids":[{background}],"mask":"currentPath","from":{}}}"#,
+            ellipse.get()
+        ))
+        .unwrap();
+        assert_eq!(
+            request.history_label().map(|l| l.kind),
+            Some("addVectorMask")
+        );
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let shown = serde_json::to_value(view.layers[0].vector_mask.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            shown["geometry"],
+            serde_json::json!({"kind":"ellipse","center":[55.0,40.0],"radii":[20.0,10.0]})
+        );
+        assert_eq!(shown["inverted"], false);
+        assert_eq!(shown["feather"], 0.0);
+        assert_eq!(shown["enabled"], true);
+        assert!(
+            shown["livePath"].is_object(),
+            "the ellipse's anchors: {shown}"
+        );
+        // A second mask is refused; Reveal All on the vector layer.
+        assert!(
+            perform(
+                &mut s,
+                &format!(r#"{{"kind":"addVectorMask","ids":[{background}],"mask":"hideAll"}}"#),
+            )
+            .is_err()
+        );
+        perform(
+            &mut s,
+            &format!(
+                r#"{{"kind":"addVectorMask","ids":[{}],"mask":"revealAll"}}"#,
+                ellipse.get()
+            ),
+        )
+        .unwrap();
+        let mask = s
+            .document()
+            .layer(ellipse)
+            .unwrap()
+            .vector_mask
+            .clone()
+            .unwrap();
+        assert!(mask.inverted());
+        // The Pen's path, the feather, disabled, then deleted.
+        let path = r#"{"kind":"path","rule":"evenodd","subpaths":[{"start":[0,0],"segments":[[10,0],[10,10]],"closed":true}]}"#;
+        perform(
+            &mut s,
+            &format!(r#"{{"kind":"setVectorMaskPath","id":{background},"path":{path}}}"#),
+        )
+        .unwrap();
+        perform(
+            &mut s,
+            &format!(r#"{{"kind":"setVectorMaskFeather","id":{background},"feather":3.5}}"#),
+        )
+        .unwrap();
+        perform(
+            &mut s,
+            &format!(r#"{{"kind":"setVectorMaskEnabled","id":{background},"enabled":false}}"#),
+        )
+        .unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let shown = serde_json::to_value(view.layers[0].vector_mask.as_ref().unwrap()).unwrap();
+        assert_eq!(shown["geometry"]["kind"], "path");
+        assert_eq!(shown["livePath"], serde_json::Value::Null);
+        assert_eq!(shown["feather"], 3.5);
+        assert_eq!(shown["enabled"], false);
+        assert!(
+            perform(
+                &mut s,
+                &format!(r#"{{"kind":"setVectorMaskFeather","id":{background},"feather":-1}}"#),
+            )
+            .is_err()
+        );
+        perform(
+            &mut s,
+            &format!(r#"{{"kind":"removeVectorMask","id":{background}}}"#),
+        )
+        .unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert!(view.layers[0].vector_mask.is_none());
+        assert!(
+            serde_json::to_value(&view.layers[0])
+                .unwrap()
+                .get("vectorMask")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn a_shape_is_added_as_a_vector_layer_shown_and_changed() {
         let mut s = blank_session();
         let shape = r#"{"geometry":{"kind":"rectangle","rect":[10.0,20.0,110.0,70.0],"radii":[4.0,4.0,4.0,4.0]},"fill":[1.0,0.0,0.0,1.0],"stroke":null}"#;
@@ -5095,6 +5219,7 @@ mod tests {
                     pattern: PatternFill::new(Arc::clone(&source)),
                 },
                 warp: None,
+                vector_mask: None,
             },
         })
         .unwrap();
@@ -5220,6 +5345,7 @@ mod tests {
                 mask: None,
                 content: LayerContent::raster(slopshop_io::patterns::built_in("dots").unwrap()),
                 warp: None,
+                vector_mask: None,
             },
         })
         .unwrap();
@@ -5397,6 +5523,7 @@ mod tests {
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 content: LayerContent::raster(image),
                 warp: None,
+                vector_mask: None,
             };
             document
                 .session
@@ -5559,6 +5686,7 @@ mod tests {
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 content: LayerContent::raster(image),
                 warp: None,
+                vector_mask: None,
             };
             let insert = Edit::InsertLayer {
                 parent: None,
