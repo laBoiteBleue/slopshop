@@ -143,7 +143,8 @@ fn hit(layers: &[Layer], parent: Projective, x: i64, y: i64) -> Option<LayerId> 
             LayerContent::Fill { .. }
             | LayerContent::GradientFill { .. }
             | LayerContent::PatternFill { .. }
-                if !layer.mask.as_ref().is_some_and(|m| m.enabled) => {}
+                if !layer.mask.as_ref().is_some_and(|m| m.enabled)
+                    && !layer.vector_mask.as_ref().is_some_and(|m| m.enabled) => {}
             _ if covers(layer, transform, x, y) => return Some(layer.id),
             _ => {}
         }
@@ -193,8 +194,18 @@ fn covers(layer: &Layer, transform: Projective, x: i64, y: i64) -> bool {
     }
 }
 
-/// Whether the layer's enabled mask, if any, lets (`x`, `y`) show.
+/// Whether the layer's enabled masks, if any, let (`x`, `y`) show: its pixel mask and its
+/// vector mask (ADR 0041).
 fn mask_shows(layer: &Layer, transform: Projective, x: i64, y: i64) -> bool {
+    if let Some(vector) = layer.vector_mask.as_ref().filter(|m| m.enabled) {
+        let Some(to_layer) = transform.inverse() else {
+            return false;
+        };
+        let (lx, ly) = to_layer.apply(x as f64 + 0.5, y as f64 + 0.5);
+        if !vector.shows([lx, ly]) {
+            return false;
+        }
+    }
     match layer.mask.as_ref().filter(|m| m.enabled) {
         None => true,
         Some(mask) => {
@@ -472,6 +483,7 @@ mod tests {
                 mask: None,
                 content: LayerContent::raster(Arc::new(image)),
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
@@ -502,6 +514,7 @@ mod tests {
             transform: crate::transform::Projective::IDENTITY,
             content,
             warp: None,
+            vector_mask: None,
         }
     }
 

@@ -56,6 +56,7 @@ fn document(size: Size) -> Session {
                     color: LinearRgba::new(0.5, 0.5, 0.5, 1.0),
                 },
                 warp: None,
+                vector_mask: None,
             },
         })
         .unwrap();

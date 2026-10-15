@@ -74,6 +74,11 @@ impl BakePlan {
             Some(mask) => Some(grown_mask(mask, self.shift)?),
             None => None,
         };
+        // The vector mask stays the layer's, moved with its content space (ADR 0041).
+        baked.vector_mask = match &layer.vector_mask {
+            Some(mask) => Some(shifted_vector_mask(mask, self.shift)?),
+            None => None,
+        };
         replace(doc, baked).map(Some)
     }
 }
@@ -98,6 +103,22 @@ fn replace(doc: &Document, layer: Layer) -> Result<Edit, EditError> {
 fn shifted(transform: Projective, (cols, rows): (u32, u32)) -> Projective {
     let t = f64::from(TILE_SIZE);
     Projective::translation(-f64::from(cols) * t, -f64::from(rows) * t).then(transform)
+}
+
+/// A vector mask's path in a content space shifted by `shift` tiles.
+fn shifted_vector_mask(
+    mask: &crate::shape::VectorMask,
+    (cols, rows): (u32, u32),
+) -> Result<crate::shape::VectorMask, EditError> {
+    if (cols, rows) == (0, 0) {
+        return Ok(mask.clone());
+    }
+    let t = f64::from(TILE_SIZE);
+    let by = crate::transform::Affine::translation(f64::from(cols) * t, f64::from(rows) * t);
+    mask.geometry()
+        .transformed(by)
+        .and_then(|g| mask.with_geometry(g))
+        .ok_or(EditError::InvalidShape)
 }
 
 /// `mask` in a content space shifted by `shift` tiles (its tiles shared), its paint baked.
@@ -142,7 +163,7 @@ pub fn can_rasterize(layer: &Layer) -> bool {
 /// A warped pixel layer (ADR 0044) without a mask: Rasterize resamples it into its pixels, its
 /// warp gone. (With a mask, the mask would have to be warped alike: left for later.)
 fn bakes_warp(layer: &Layer) -> bool {
-    layer.warp.is_some() && layer.mask.is_none()
+    layer.warp.is_some() && layer.mask.is_none() && layer.vector_mask.is_none()
 }
 
 /// Rasterize, for the pixel layers among `ids` (outermost) that carry a stack or a painted
@@ -188,6 +209,7 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
                 opacity: 1.0,
                 blend_mode: BlendMode::Normal,
                 mask: None,
+                vector_mask: None,
                 clipped: false,
                 transform: Projective::IDENTITY,
                 // Its effects stay the layer's (ADR 0032), drawn from the pixels it becomes.
@@ -202,6 +224,7 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
                 opacity: 1.0,
                 blend_mode: BlendMode::Normal,
                 mask: None,
+                vector_mask: None,
                 clipped: false,
                 transform: Projective::IDENTITY,
                 style: None,
@@ -348,6 +371,7 @@ pub fn merge_preview(
             pass_through: false,
         },
         warp: None,
+        vector_mask: None,
     };
     let mut edits = vec![Edit::group_layers(doc, group, &removed)?];
     for &id in &removed {
@@ -495,6 +519,7 @@ mod tests {
             transform: crate::transform::Projective::IDENTITY,
             content,
             warp: None,
+            vector_mask: None,
         }
     }
 
@@ -836,6 +861,69 @@ mod tests {
             .fold(0.0f32, f32::max);
         assert!(worst < 0.01, "differ by {worst}");
         assert!(after.iter().any(|&v| v > 0.0));
+    }
+
+    #[test]
+    fn rasterizing_keeps_the_vector_mask_in_place_and_merging_bakes_it() {
+        use crate::shape::{Geometry, VectorMask};
+        let mut doc = Document::new(Size::new(100, 100));
+        let mut layer = plain(&mut doc, "fill", fill());
+        // Moved right: rasterizing starts its image a tile before the origin.
+        layer.transform = Affine::translation(10.0, 0.0).into();
+        layer.vector_mask = VectorMask::new(
+            Geometry::Ellipse {
+                center: [30.0, 50.0],
+                radii: [20.5, 30.0],
+            },
+            false,
+        );
+        let id = push(&mut doc, layer);
+        let region = Rect::new(0, 0, 100, 100);
+        let mut before = vec![0.0f32; 100 * 100 * 4];
+        crate::composite::composite_region(&doc, region, &mut before).unwrap();
+        let plans = rasterize_plans(&doc, &[id]).unwrap();
+        bake(&mut doc, plans.into_iter().next().unwrap());
+        let layer = doc.layer(id).unwrap();
+        assert!(matches!(layer.content, LayerContent::Raster { .. }));
+        // Still a vector mask, moved with the content space, applied once.
+        let t = f64::from(TILE_SIZE);
+        assert_eq!(
+            layer.vector_mask.as_ref().unwrap().geometry(),
+            &Geometry::Ellipse {
+                center: [30.0 + t, 50.0],
+                radii: [20.5, 30.0],
+            }
+        );
+        let mut after = vec![0.0f32; 100 * 100 * 4];
+        crate::composite::composite_region(&doc, region, &mut after).unwrap();
+        let worst = before
+            .iter()
+            .zip(&after)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-3, "differ by {worst}");
+        // Merged with the layer below, the mask goes into the pixels.
+        // (A pixel at the corner, which the comparison leaves out.)
+        let under = plain(&mut doc, "under", boxed(Rect::new(0, 0, 1, 1)));
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: under,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        merged(&mut doc, Merge::Down(id));
+        let merged = doc.layers().last().unwrap();
+        assert!(merged.vector_mask.is_none());
+        let mut flat = vec![0.0f32; 100 * 100 * 4];
+        crate::composite::composite_region(&doc, region, &mut flat).unwrap();
+        let worst = before
+            .iter()
+            .zip(&flat)
+            .skip(4)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 0.01, "differ by {worst}");
     }
 
     #[test]

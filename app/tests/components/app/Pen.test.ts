@@ -105,6 +105,7 @@ test("Ctrl+Enter selects the path being drawn, else the active vector layer's", 
       ],
     },
     layerId: null,
+    vectorMask: false,
   });
   // No layer was added.
   expect(sent("perform")).toHaveLength(0);
@@ -112,7 +113,12 @@ test("Ctrl+Enter selects the path being drawn, else the active vector layer's", 
   await user.click(row("Shape 1"));
   await user.keyboard("{Control>}{Enter}{/Control}");
   await waitFor(() => expect(sent("make_selection")).toHaveLength(2));
-  expect(sent("make_selection")[1]).toEqual({ documentId: 1, path: null, layerId: 2 });
+  expect(sent("make_selection")[1]).toEqual({
+    documentId: 1,
+    path: null,
+    layerId: 2,
+    vectorMask: false,
+  });
   // A pixel layer has no path: nothing is sent.
   await user.click(row("Cat"));
   await user.keyboard("{Control>}{Enter}{/Control}");

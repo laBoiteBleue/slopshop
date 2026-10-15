@@ -71,6 +71,7 @@ fn layer(s: &mut Session, content: LayerContent) -> Layer {
         mask: None,
         content,
         warp: None,
+        vector_mask: None,
     }
 }
 

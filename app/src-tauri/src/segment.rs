@@ -875,6 +875,7 @@ mod tests {
             clipped: false,
             transform: Affine::translation(30.0, 40.0).into(),
             warp: None,
+            vector_mask: None,
         };
         Edit::InsertLayer {
             parent: None,

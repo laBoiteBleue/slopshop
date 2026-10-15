@@ -200,14 +200,23 @@ pub fn combined(
     finish(canvas, current, Mask::from_image(canvas, other)?, how)
 }
 
+/// What of a layer makes a selection (Ctrl+click on one of its thumbnails).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerPart {
+    Pixels,
+    Mask,
+    VectorMask,
+}
+
 /// The selection a layer's pixels make (Photoshop's Ctrl+click on its thumbnail): how opaque
 /// the layer alone is at each pixel of the canvas, placed by its transform and its groups', its
-/// opacity, blending, clipping, mask and effects left out; with `mask`, its mask's grays
-/// instead (enabled or not). `None`: nothing selected, no such layer, or no mask to read.
+/// opacity, blending, clipping, masks and effects left out; or what its mask, or its vector
+/// mask (ADR 0041), shows, alone and enabled or not. `None`: nothing selected, no such layer,
+/// or no such mask.
 pub fn from_layer(
     document: &crate::document::Document,
     id: crate::document::LayerId,
-    mask: bool,
+    part: LayerPart,
 ) -> Option<RasterImage> {
     use crate::document::{Document, LayerContent};
     let mut layer = document.layer(id)?.clone();
@@ -216,19 +225,33 @@ pub fn from_layer(
     layer.opacity = 1.0;
     layer.blend_mode = crate::blend::BlendMode::Normal;
     layer.style = None;
-    if mask {
-        let mut m = layer.mask.take()?;
-        m.enabled = true;
-        m.replaces_alpha = false;
-        layer.mask = Some(m);
-        layer.content = LayerContent::Fill {
-            color: crate::color::LinearRgba::new(1.0, 1.0, 1.0, 1.0),
-        };
-    } else {
-        if matches!(layer.content, LayerContent::Adjustment { .. }) {
-            return None;
+    let white = LayerContent::Fill {
+        color: crate::color::LinearRgba::new(1.0, 1.0, 1.0, 1.0),
+    };
+    match part {
+        LayerPart::Mask => {
+            let mut m = layer.mask.take()?;
+            m.enabled = true;
+            m.replaces_alpha = false;
+            layer.mask = Some(m);
+            layer.vector_mask = None;
+            layer.content = white;
         }
-        layer.mask = None;
+        LayerPart::VectorMask => {
+            let mut m = layer.vector_mask.take()?;
+            m.enabled = true;
+            layer.vector_mask = Some(m);
+            layer.mask = None;
+            layer.warp = None;
+            layer.content = white;
+        }
+        LayerPart::Pixels => {
+            if matches!(layer.content, LayerContent::Adjustment { .. }) {
+                return None;
+            }
+            layer.mask = None;
+            layer.vector_mask = None;
+        }
     }
     let size = document.size();
     let alone = Document::restore(
@@ -288,6 +311,19 @@ pub fn layer_path(
     Some(path_shape(&source.shape().geometry, transform))
 }
 
+/// What a layer's vector mask path selects (Make Selection with the vector mask targeted): the
+/// area its path encloses (whether it shows or hides it), placed by the layer's transform and
+/// its groups'. `None` when the layer has no vector mask.
+pub fn vector_mask_path(
+    document: &crate::document::Document,
+    id: crate::document::LayerId,
+) -> Option<Shape> {
+    let layer = document.layer(id)?;
+    let mask = layer.vector_mask.as_ref()?;
+    let transform = layer.transform.then(document.parent_transform(id));
+    Some(path_shape(mask.geometry(), transform))
+}
+
 /// The selection shape of `geometry` placed by `transform` (Make Selection).
 pub fn path_shape(
     geometry: &crate::shape::Geometry,
@@ -298,6 +334,61 @@ pub fn path_shape(
         rings,
         even_odd: rule == crate::shape::FillRule::EvenOdd,
     }
+}
+
+/// A vector mask's coverage (ADR 0041, point 4) over `size` pixels of its layer's space, from
+/// the layer's origin: what `geometry` encloses (open subpaths joined, its fill rule kept),
+/// anti-aliased as Make Selection covers it, softened by `feather` (a Gaussian's standard
+/// deviation, as a selection's feather), its complement when `inverted` (Reveal All: the path
+/// hides what it encloses), then multiplied by `pixel` (the layer's pixel mask, read at the
+/// same pixels; nothing shows outside it). Always an image, even one hiding everything.
+pub fn vector_mask(
+    geometry: &crate::shape::Geometry,
+    size: Size,
+    inverted: bool,
+    feather: f64,
+    pixel: Option<&RasterImage>,
+) -> Result<RasterImage, SelectionError> {
+    if !feather.is_finite() || !(0.0..=MAX_FEATHER).contains(&feather) {
+        return Err(SelectionError::InvalidShape);
+    }
+    let (rings, rule) =
+        crate::shape::selection_rings(geometry, crate::transform::Projective::IDENTITY);
+    let mut mask = rasterize(size, &rings, true, rule == crate::shape::FillRule::EvenOdd)?;
+    if feather > 0.0 {
+        mask = self::feather(&mask, feather);
+    }
+    if inverted {
+        for tile in &mut mask.tiles {
+            *tile = match &*tile {
+                Tile::Const(v) => Tile::Const(FULL - v),
+                other => Tile::Data(other.values().iter().map(|v| FULL - v).collect()),
+            };
+        }
+    }
+    if let Some(pixel) = pixel {
+        let pixel = Mask::from_image(size, pixel)?;
+        for (tile, other) in mask.tiles.iter_mut().zip(&pixel.tiles) {
+            *tile = match (tile.constant(), other.constant()) {
+                (Some(0), _) | (_, Some(0)) => Tile::Const(0),
+                (Some(FULL), _) => other.clone(),
+                (_, Some(FULL)) => continue,
+                _ => {
+                    let (a, b) = (tile.values(), other.values());
+                    Tile::Data(
+                        a.iter()
+                            .zip(b.iter())
+                            .map(|(&a, &b)| {
+                                ((u32::from(a) * u32::from(b) + u32::from(FULL) / 2)
+                                    / u32::from(FULL)) as u16
+                            })
+                            .collect(),
+                    )
+                }
+            };
+        }
+    }
+    mask.build(true).ok_or(SelectionError::EmptyCanvas)
 }
 
 /// Everything `current` leaves out (Select > Inverse); `None` selects everything.
@@ -3872,6 +3963,7 @@ mod tests {
                 style: None,
                 locks: Default::default(),
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
@@ -4338,6 +4430,7 @@ mod tests {
                 clipped: false,
                 transform: crate::transform::Projective::IDENTITY,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
@@ -5416,6 +5509,7 @@ mod tests {
             transform: Affine::translation(10.0, 0.0).into(),
             content: LayerContent::raster(Arc::new(image)),
             warp: None,
+            vector_mask: None,
         };
         let id = layer.id;
         Edit::InsertLayer {
@@ -5427,7 +5521,7 @@ mod tests {
         .unwrap();
         let at = |image: &RasterImage, x: u32, y: u32| image.gray_at(x, y);
         // The pixels: opacity, blending and mask left out.
-        let pixels = from_layer(&doc, id, false).unwrap();
+        let pixels = from_layer(&doc, id, LayerPart::Pixels).unwrap();
         assert_eq!(at(&pixels, 5, 5), 0.0, "left of the layer");
         assert_eq!(
             at(&pixels, 15, 15),
@@ -5436,11 +5530,43 @@ mod tests {
         );
         assert!((at(&pixels, 40, 5) - 128.0 / 255.0).abs() < 0.01);
         // Its mask: the top half of where the layer is.
-        let masked = from_layer(&doc, id, true).unwrap();
+        let masked = from_layer(&doc, id, LayerPart::Mask).unwrap();
         assert_eq!(at(&masked, 15, 5), 1.0);
         assert_eq!(at(&masked, 15, 15), 0.0);
         assert_eq!(at(&masked, 5, 5), 0.0);
+        // No vector mask yet; then one over the layer's first ten columns (its space starts at
+        // x 10), disabled: what it shows all the same, its pixel mask left out.
+        assert!(from_layer(&doc, id, LayerPart::VectorMask).is_none());
+        let mut vector = crate::shape::VectorMask::new(
+            crate::shape::Geometry::Rectangle {
+                rect: [0.0, 0.0, 10.0, 1000.0],
+                radii: [0.0; 4],
+            },
+            false,
+        )
+        .unwrap();
+        vector.enabled = false;
+        Edit::SetVectorMask {
+            id,
+            mask: Some(vector),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let path = from_layer(&doc, id, LayerPart::VectorMask).unwrap();
+        assert_eq!(at(&path, 15, 15), 1.0);
+        assert_eq!(at(&path, 25, 15), 0.0);
+        assert_eq!(at(&path, 5, 15), 0.0);
+        // The pixels leave it out.
+        let pixels_again = from_layer(&doc, id, LayerPart::Pixels).unwrap();
+        assert_eq!(at(&pixels_again, 25, 15), 1.0);
         // No such layer.
-        assert!(from_layer(&doc, crate::document::LayerId::from_raw(999), false).is_none());
+        assert!(
+            from_layer(
+                &doc,
+                crate::document::LayerId::from_raw(999),
+                LayerPart::Pixels
+            )
+            .is_none()
+        );
     }
 }

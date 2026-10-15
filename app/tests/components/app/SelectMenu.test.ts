@@ -351,7 +351,7 @@ test("Load Selection loads the active layer's transparency; its mask needs one",
   await user.click(transparency as HTMLElement);
   await vi.waitFor(() =>
     expect(sent("select_layer_pixels")).toEqual([
-      { documentId: 1, layerId: 1, mask: false, mode: "replace" },
+      { documentId: 1, layerId: 1, part: "pixels", mode: "replace" },
     ]),
   );
 });
@@ -366,7 +366,7 @@ test("Load Selection loads the active layer's mask", async () => {
   await user.click(await screen.findByText("Layer Mask", { selector: ".label" }));
   await vi.waitFor(() =>
     expect(sent("select_layer_pixels")).toEqual([
-      { documentId: 1, layerId: 1, mask: true, mode: "replace" },
+      { documentId: 1, layerId: 1, part: "mask", mode: "replace" },
     ]),
   );
 });
@@ -585,7 +585,7 @@ test("Ctrl+click on a layer's thumbnail loads its pixels as the selection (Shift
   await user.keyboard("[/ShiftLeft][/ControlLeft]");
   await vi.waitFor(() => expect(sent("select_layer_pixels")).toHaveLength(2));
   expect(sent("select_layer_pixels")).toEqual([
-    { documentId: 1, layerId: 1, mask: false, mode: "replace" },
-    { documentId: 1, layerId: 1, mask: false, mode: "add" },
+    { documentId: 1, layerId: 1, part: "pixels", mode: "replace" },
+    { documentId: 1, layerId: 1, part: "pixels", mode: "add" },
   ]);
 });

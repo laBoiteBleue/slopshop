@@ -426,6 +426,17 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     `{"style": "arc" | "bulge" | "flag" | "wave" | "twist", "bend": -1 to 1, "vertical"}`; the
     points are what is drawn either way. Another `kind` comes from a newer SlopShop and is
     refused. The layer's mask is warped with it. Only those nodes are written at v18.
+  - v19 (schema 0.37, [ADR 0041](adr/0041-vector-content.md)) is a node of any type with a
+    vector mask: `params.vector_mask` is `{"geometry", "inverted", "feather", "enabled"}`,
+    `geometry` a path or a live shape in the layer's own space, written as a shape's (see
+    `shapes`), `inverted` that the path hides what it encloses (Reveal All) rather than
+    showing it, `feather` the standard deviation of a Gaussian softening its edge in the
+    layer's pixels (0 to 250), `enabled` whether it applies. Its coverage, what the geometry
+    encloses (open subpaths joined, its fill rule kept) anti-aliased by exact area, is drawn
+    in the layer's space from its origin over the pixels of its mask (the mask's when it has
+    one, else its image's for a raster, else the canvas seen from the layer and a shape's
+    bounds), feathered, inverted, and multiplied with the layer's enabled mask. A node of v19
+    reads every parameter of the versions before it. Only those nodes are written at v19.
   - From schema 0.21 ([ADR 0034](adr/0034-editable-operations.md)), a stack entry may be a
     filter entry, `{"filter": [steps]}`: steps of one kind applied in order, each
     `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier

@@ -23,6 +23,8 @@ export type EditablePath = {
   live: boolean;
   /** From the layer's space to the document's; null in perspective (not editable). */
   matrix: Matrix | null;
+  /** The layer's vector mask (ADR 0041) rather than its shape. Absent: its shape. */
+  vectorMask?: boolean;
 };
 
 /** What the Pen edits of `layer` (a vector layer among `layers`), null for other layers. */

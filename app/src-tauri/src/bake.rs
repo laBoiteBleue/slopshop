@@ -100,6 +100,7 @@ fn start(session: &mut Session, request: BakeRequest, baked: Vec<Edit>) -> Resul
                     pass_through: false,
                 },
                 warp: None,
+                vector_mask: None,
             };
             let copies = session.insert_layer_copies(&[group], None).map_err(err)?;
             let group = *copies.ids.first().ok_or("nothing copied")?;
@@ -394,6 +395,7 @@ mod tests {
                 transform: slopshop_core::Affine::IDENTITY.into(),
                 content: LayerContent::raster(Arc::new(image)),
                 warp: None,
+                vector_mask: None,
             };
             let index = s.document().layers().len();
             s.perform(Edit::InsertLayer {

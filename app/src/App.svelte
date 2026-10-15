@@ -26,6 +26,8 @@
     type CopyRequest,
     type PasteKind,
     type PaintTarget,
+    type LayerPart,
+    type VectorMaskKind,
     type AppInfo,
     type UpdateInfo,
     type DocumentInfo,
@@ -232,6 +234,15 @@
   import ShapeTool from "./lib/ShapeTool.svelte";
   import PenTool from "./lib/PenTool.svelte";
   import { editablePath } from "./lib/pathEdit";
+  import type { PathGeometry } from "./lib/pen";
+  import {
+    editableVectorMask,
+    referenceVectorMask,
+    vectorMaskAddition,
+    vectorMaskEnabledToggle,
+    vectorMaskRemoval,
+    withPathAdded,
+  } from "./lib/vectorMask";
   import TypeTool from "./lib/TypeTool.svelte";
   import type { TextLayout } from "./lib/textEditing";
   import {
@@ -1448,23 +1459,69 @@
    */
   function makeSelection(path: ShapeGeometry | null) {
     const layer = activeLayer;
-    if (path === null && layer?.kind !== "vector") return;
+    // The targeted vector mask's path (ADR 0041), else the active vector layer's.
+    const masked = path === null && penEditable?.vectorMask === true;
+    if (path === null && !masked && layer?.kind !== "vector") return;
     selectionCommand((id) =>
-      engine.makeSelection(id, path, path === null ? (layer?.id ?? null) : null),
+      engine.makeSelection(id, path, path === null ? (layer?.id ?? null) : null, masked),
     );
   }
 
-  /** The path the Pen edits: the active vector layer's (ADR 0041). */
-  let penEditable = $derived(active ? editablePath(active.layers, activeLayer) : null);
+  /**
+   * The path the Pen edits: the active layer's vector mask when it is targeted, else the active
+   * vector layer's (ADR 0041).
+   */
+  let penEditable = $derived.by(() => {
+    if (!active) return null;
+    if (layersPanel?.targetsVectorMask()) return editableVectorMask(active.layers, activeLayer);
+    return editablePath(active.layers, activeLayer);
+  });
+
+  /**
+   * A path the Pen finished: a vector layer of it, or with the active layer's vector mask
+   * targeted, a part of that mask's path (as Photoshop's Pen draws in a vector mask).
+   */
+  function finishPath(geometry: PathGeometry) {
+    const target = penEditable;
+    if (!target?.vectorMask) {
+      addShape(geometry);
+      return;
+    }
+    const doc = active;
+    if (target.live) {
+      // Its live shape becomes a path first, as when its anchors are edited.
+      if (doc) turningIntoPath = { documentId: doc.id, layerId: target.layerId, vectorMask: true };
+      return;
+    }
+    const path = withPathAdded(target, geometry);
+    if (!doc || !path) {
+      showError(t("pen.edit.perspective"));
+      return;
+    }
+    void edit(doc.id, { kind: "setVectorMaskPath", id: target.layerId, path });
+  }
 
   /** A live shape the Pen was about to edit, turned into a regular path once confirmed. */
-  let turningIntoPath = $state<{ documentId: number; layerId: number } | null>(null);
+  let turningIntoPath = $state<{
+    documentId: number;
+    layerId: number;
+    /** The layer's vector mask's (ADR 0041), not its shape. */
+    vectorMask?: boolean;
+  } | null>(null);
 
-  /** The Pen edited a vector layer's path: its new shape, one undo entry (linked copies too). */
+  /**
+   * The Pen edited a vector layer's path: its new shape, one undo entry (linked copies too); or
+   * the path of the layer's vector mask, when that is what it edits.
+   */
   function reshapePath(layerId: number, geometry: ShapeGeometry) {
     const doc = active;
-    const shape = doc ? findLayer(doc.layers, layerId)?.shape : null;
-    if (!doc || !shape) return;
+    if (!doc) return;
+    if (penEditable?.vectorMask && penEditable.layerId === layerId) {
+      void edit(doc.id, { kind: "setVectorMaskPath", id: layerId, path: geometry });
+      return;
+    }
+    const shape = findLayer(doc.layers, layerId)?.shape;
+    if (!shape) return;
     void edit(doc.id, { kind: "setShape", id: layerId, shape: { ...shape, geometry } });
   }
 
@@ -1474,7 +1531,13 @@
     turningIntoPath = null;
     const doc = tabs.find((d) => d.id === target?.documentId);
     const layer = target && doc ? findLayer(doc.layers, target.layerId) : null;
-    if (!target || !layer?.shape || !layer.livePath) return;
+    if (!target || !layer) return;
+    if (target.vectorMask) {
+      const path = layer.vectorMask?.livePath;
+      if (path) void edit(target.documentId, { kind: "setVectorMaskPath", id: layer.id, path });
+      return;
+    }
+    if (!layer.shape || !layer.livePath) return;
     void edit(target.documentId, {
       kind: "setShape",
       id: layer.id,
@@ -3003,8 +3066,8 @@
    * A layer's pixels (its transparency) or its mask as the selection, by `mode`: Ctrl+click on
    * its thumbnail, or Select > Load Selection.
    */
-  function loadLayerPixels(layerId: number, mask: boolean, mode: SelectionMode) {
-    if (active) selectionCommand((id) => engine.selectLayerPixels(id, layerId, mask, mode));
+  function loadLayerPixels(layerId: number, part: LayerPart, mode: SelectionMode) {
+    if (active) selectionCommand((id) => engine.selectLayerPixels(id, layerId, part, mode));
   }
 
   /** A saved selection loaded into the image (`mode`: Shift adds, Alt subtracts, both intersect). */
@@ -3089,6 +3152,23 @@
   function cropImage() {
     if (active?.selectionKey != null) selectionCommand(engine.cropToSelection);
     else selectTool("crop");
+  }
+
+  /**
+   * Layer > Vector Mask's new masks (ADR 0041): Reveal All and Hide All on the selected layers
+   * without one, Current Path on the active layer from the other selected (vector) layer.
+   */
+  function addVectorMasks(kind: VectorMaskKind) {
+    const doc = active;
+    const request = vectorMaskAddition(
+      layersPanel?.selectedLayers() ?? [],
+      layersPanel?.selectedLayer() ?? null,
+      kind,
+    );
+    if (!doc || request?.kind !== "addVectorMask") return;
+    // As in Photoshop, the new vector masks are what the Pen reaches.
+    layersPanel?.targetVectorMasks(request.ids);
+    void edit(doc.id, request);
   }
 
   /** Layer > Layer Mask's new masks, on the selected layers that have none. */
@@ -5502,6 +5582,47 @@
         undefined,
         !mask,
       ),
+      vectorMaskRevealAll: command(
+        t("menu.layer.vectorMaskRevealAll"),
+        () => addVectorMasks("revealAll"),
+        undefined,
+        vectorMaskAddition(selection, layer, "revealAll") === null,
+      ),
+      vectorMaskHideAll: command(
+        t("menu.layer.vectorMaskHideAll"),
+        () => addVectorMasks("hideAll"),
+        undefined,
+        vectorMaskAddition(selection, layer, "hideAll") === null,
+      ),
+      // The other selected layer's path (a vector layer's) masks the active one.
+      vectorMaskCurrentPath: command(
+        t("menu.layer.vectorMaskCurrentPath"),
+        () => addVectorMasks("currentPath"),
+        undefined,
+        vectorMaskAddition(selection, layer, "currentPath") === null,
+      ),
+      vectorMaskToggle: command(
+        t(
+          referenceVectorMask(selection, layer)?.enabled === false
+            ? "menu.layer.maskEnable"
+            : "menu.layer.maskDisable",
+        ),
+        () => {
+          const request = vectorMaskEnabledToggle(selection, layer);
+          if (doc && request) void edit(doc.id, request);
+        },
+        undefined,
+        !referenceVectorMask(selection, layer),
+      ),
+      vectorMaskDelete: command(
+        t("menu.layer.maskDelete"),
+        () => {
+          const request = vectorMaskRemoval(selection);
+          if (doc && request) void edit(doc.id, request);
+        },
+        undefined,
+        !referenceVectorMask(selection, layer),
+      ),
     };
   });
 
@@ -5860,6 +5981,19 @@
               layerCommands.maskDelete,
             ],
           },
+          {
+            kind: "submenu",
+            label: t("menu.layer.vectorMask"),
+            disabled: !layer,
+            items: [
+              layerCommands.vectorMaskRevealAll,
+              layerCommands.vectorMaskHideAll,
+              layerCommands.vectorMaskCurrentPath,
+              separator,
+              layerCommands.vectorMaskToggle,
+              layerCommands.vectorMaskDelete,
+            ],
+          },
           layerCommands.clipping,
           layerCommands.deletePaint,
           layerCommands.makeUnique,
@@ -5986,13 +6120,13 @@
             items: [
               cmd(
                 t("menu.select.load.transparency"),
-                () => activeLayer && loadLayerPixels(activeLayer.id, false, "replace"),
+                () => activeLayer && loadLayerPixels(activeLayer.id, "pixels", "replace"),
                 undefined,
                 !activeLayer || activeLayer.kind === "adjustment",
               ),
               cmd(
                 t("menu.select.load.mask"),
-                () => activeLayer && loadLayerPixels(activeLayer.id, true, "replace"),
+                () => activeLayer && loadLayerPixels(activeLayer.id, "mask", "replace"),
                 undefined,
                 !activeLayer?.mask,
               ),
@@ -6612,13 +6746,18 @@
                     documentId={active.id}
                     onpath={(geometry, documentId) => {
                       // Another tab shown meanwhile: the path is not added there.
-                      if (active?.id === documentId) addShape(geometry);
+                      if (active?.id === documentId) finishPath(geometry);
                     }}
                     onmakeselection={makeSelection}
                     editable={penEditable}
                     onreshape={reshapePath}
                     onlive={(layerId) => {
-                      if (active) turningIntoPath = { documentId: active.id, layerId };
+                      if (active)
+                        turningIntoPath = {
+                          documentId: active.id,
+                          layerId,
+                          vectorMask: penEditable?.vectorMask === true,
+                        };
                     }}
                     onrefused={() => showError(t("pen.edit.perspective"))}
                   />

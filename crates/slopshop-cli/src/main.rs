@@ -230,6 +230,7 @@ fn demo_document(size: Size) -> Result<Session, String> {
                     mask: None,
                     content: LayerContent::Fill { color },
                     warp: None,
+                    vector_mask: None,
                 },
             })
             .map_err(|e| e.to_string())?;

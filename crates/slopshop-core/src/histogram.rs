@@ -154,6 +154,7 @@ mod tests {
             transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::raster(Arc::new(image)),
             warp: None,
+            vector_mask: None,
         };
         Edit::InsertLayer {
             parent: None,
@@ -243,6 +244,7 @@ mod tests {
             transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::Adjustment { adjustment: curves },
             warp: None,
+            vector_mask: None,
         };
         Edit::InsertLayer {
             parent: None,

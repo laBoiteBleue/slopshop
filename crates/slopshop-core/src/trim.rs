@@ -203,6 +203,7 @@ mod tests {
             transform: crate::transform::Projective::IDENTITY,
             content,
             warp: None,
+            vector_mask: None,
         };
         let index = doc.layers().len();
         Edit::InsertLayer {
@@ -260,6 +261,7 @@ mod tests {
                     color: LinearRgba::new(1.0, 1.0, 1.0, 1.0),
                 },
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut opaque)

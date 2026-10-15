@@ -1432,6 +1432,7 @@ mod tests {
             clipped: false,
             transform: Affine::IDENTITY.into(),
             warp: None,
+            vector_mask: None,
         };
         let mut session = Session::new(
             Document::restore(

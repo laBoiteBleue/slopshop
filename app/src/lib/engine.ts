@@ -148,6 +148,8 @@ export type LayerView = {
   hasAlpha: boolean;
   /** The layer's mask (ADR 0014); `contentKey` changes with its pixels. */
   mask: { enabled: boolean; contentKey: number } | null;
+  /** Its vector mask (ADR 0041). Absent: none. */
+  vectorMask?: VectorMaskView | null;
   /** A group's layers, bottom to top (ADR 0015); empty for other layers. */
   children: LayerView[];
   /** A group whose layers blend through it. */
@@ -816,6 +818,12 @@ export type EditRequest =
   | { kind: "setGuides"; guides: Guide[] }
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }
   | { kind: "removeLayerMask"; id: number }
+  /** Layer > Vector Mask (ADR 0041); Current Path takes vector layer `from`'s path. */
+  | { kind: "addVectorMask"; ids: number[]; mask: VectorMaskKind; from?: number }
+  | { kind: "setVectorMaskPath"; id: number; path: ShapeGeometry }
+  | { kind: "setVectorMaskFeather"; id: number; feather: number }
+  | { kind: "setVectorMaskEnabled"; id: number; enabled: boolean }
+  | { kind: "removeVectorMask"; id: number }
   /** Several edits as one undo entry, applied in order: all or none. */
   /** Image > Auto Tone, Auto Contrast, Auto Color: Levels computed from the visible image. */
   | { kind: "autoLevels"; ids: number[]; correction: AutoCorrection }
@@ -1491,6 +1499,24 @@ export type BrushRequest = {
 /** The tones Dodge and Burn change most. */
 export type ToneRange = "shadows" | "midtones" | "highlights";
 
+/** A layer's vector mask (ADR 0041): a path in the layer's space showing what it encloses. */
+export type VectorMaskView = {
+  enabled: boolean;
+  /** The path hides what it encloses (Reveal All) rather than showing it. */
+  inverted: boolean;
+  /** Layer pixels (0 to 250). */
+  feather: number;
+  geometry: ShapeGeometry;
+  /** A live shape's outline as a regular path (the Pen's anchors); null for a path. */
+  livePath: ShapeGeometry | null;
+};
+
+/** Layer > Vector Mask's new masks. */
+export type VectorMaskKind = "revealAll" | "hideAll" | "currentPath";
+
+/** What of a layer a selection is loaded from (Ctrl+click on one of its thumbnails). */
+export type LayerPart = "pixels" | "mask" | "vectorMask";
+
 /** What a stroke paints (see `paint::PaintTarget`): masks and the selection in gray. */
 /** A raster layer's pixels, its mask, or Quick Mask's image. */
 export type PaintTarget = "layer" | "mask" | "quickMask";
@@ -1931,17 +1957,23 @@ export const engine = {
       invoke<DocumentView>("paint_gradient", { documentId, layerId, target, gradient, opacity }),
     ),
   /**
-   * Ctrl+click on a layer's thumbnail (its mask's with `mask`): the selection its pixels make,
-   * combined with the current one by `mode` (one undo entry).
+   * Ctrl+click on a layer's thumbnail (its mask's, its vector mask's, as `part` says): the
+   * selection its pixels make, combined with the current one by `mode` (one undo entry).
    */
-  selectLayerPixels: (documentId: number, layerId: number, mask: boolean, mode: SelectionMode) =>
-    serial(() => invoke<DocumentView>("select_layer_pixels", { documentId, layerId, mask, mode })),
+  selectLayerPixels: (documentId: number, layerId: number, part: LayerPart, mode: SelectionMode) =>
+    serial(() => invoke<DocumentView>("select_layer_pixels", { documentId, layerId, part, mode })),
   /**
    * Make Selection (Ctrl+Enter with the Pen): the area `path` encloses (document pixels), or
-   * with `path` null vector layer `layerId`'s path, anti-aliased, replacing the selection.
+   * with `path` null vector layer `layerId`'s path (its vector mask's with `vectorMask`),
+   * anti-aliased, replacing the selection.
    */
-  makeSelection: (documentId: number, path: ShapeGeometry | null, layerId: number | null) =>
-    serial(() => invoke<DocumentView>("make_selection", { documentId, path, layerId })),
+  makeSelection: (
+    documentId: number,
+    path: ShapeGeometry | null,
+    layerId: number | null,
+    vectorMask = false,
+  ) =>
+    serial(() => invoke<DocumentView>("make_selection", { documentId, path, layerId, vectorMask })),
   /**
    * The Healing Brush's Patch: the selection healed from the pixels `offset` away (every layer,
    * or `sourceLayer` alone), on `target` (one undo entry).

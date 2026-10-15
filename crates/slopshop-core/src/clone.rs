@@ -148,6 +148,7 @@ impl CloneSource {
                 pattern: crate::pattern::PatternFill::new(source),
             },
             warp: None,
+            vector_mask: None,
         };
         let document = Document::restore(
             size,
@@ -416,6 +417,7 @@ mod tests {
             transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::raster(Arc::new(image)),
             warp: None,
+            vector_mask: None,
         };
         crate::edit::Edit::InsertLayer {
             parent: None,
@@ -610,6 +612,7 @@ mod tests {
             transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::raster(Arc::clone(&image)),
             warp: None,
+            vector_mask: None,
         };
         crate::edit::Edit::InsertLayer {
             parent: None,
