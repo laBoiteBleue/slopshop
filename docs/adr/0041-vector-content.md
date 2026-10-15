@@ -315,6 +315,6 @@ Point 4, as built:
 6. **Edits**: `Edit::SetVectorMask` adds, replaces or removes it (Lock All refuses it); Free
    Transform transforms a layer with a vector mask (rather than reshaping a vector layer), so
    that its mask follows; Rasterize keeps it (moved with the content space), the merges bake
-   it into their pixels. `.slop` 0.37 writes it as `params.vector_mask` at node version 19;
+   it into their pixels. `.slop` 0.38 writes it as `params.vector_mask` at node version 19;
    PSD export writes it into the layer's pixel mask (Photoshop's `vmsk` import and export,
    Rasterize > Vector Mask and a Density setting are left for later).
