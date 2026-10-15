@@ -712,6 +712,36 @@ fn new_document(
     Ok((slopshop_core::Session::new(document), copied.warnings))
 }
 
+/// Copy or Cut of characters with the Type tool: `text` on the system clipboard, replacing
+/// SlopShop's own copy (a paste then brings the text, not layers copied before).
+#[tauri::command]
+pub async fn copy_text(app: AppHandle, text: String) -> Result<(), String> {
+    *app.state::<AppState>()
+        .layer_clipboard
+        .lock()
+        .map_err(|_| "clipboard state is poisoned".to_owned())? = None;
+    on_worker(move || {
+        arboard::Clipboard::new()
+            .and_then(|mut c| c.set_text(text))
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Paste with the Type tool: the text on the system clipboard, if it holds some.
+#[tauri::command]
+pub async fn paste_text() -> Result<Option<String>, String> {
+    on_worker(|| {
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        match clipboard.get_text() {
+            Ok(text) => Ok(Some(text)),
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
