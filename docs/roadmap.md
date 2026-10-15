@@ -453,9 +453,11 @@ Raised on 2026-10-05, to schedule:
           (word), triple (line), quadruple (paragraph) or fifth click (all), Shift+arrows and
           Ctrl+A, drawn from the engine's layout (parley's carets and lines); Up, Down, Home
           and End by the lines drawn; Cut, Copy and Paste of characters (keys and Edit menu)
-    - [ ] Part 2b: box (paragraph) text, per-character styles, the Character settings in
-          Properties (family, style, size, tracking, leading, color, alignment), embedded
-          fonts
+    - [x] Part 2b, paragraph text: a box drawn with the Type tool, lines wrapped and
+          aligned in it, those past its height hidden (a plus in its handle), resized by its
+          handles while it is edited; `.slop` 0.36
+    - [ ] Part 2c: per-character styles, the Character settings in Properties (family,
+          style, size, tracking, leading, color, alignment), embedded fonts
 - [ ] Patterns (ADR 0042)
   - [x] Pattern fill layers: an image source repeated across the plane, scaled and turned,
         sampled with wrapping on the CPU and the GPU alike; `.slop` 0.31
