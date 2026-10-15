@@ -225,13 +225,13 @@
   import PenTool from "./lib/PenTool.svelte";
   import { editablePath } from "./lib/pathEdit";
   import TypeTool from "./lib/TypeTool.svelte";
+  import type { TextLayout } from "./lib/textEditing";
   import {
     caretIndexAt,
     defaultTypeOptions,
     newText,
     optionsOf,
     withOptions,
-    type Caret,
     type TypeOptions,
   } from "./lib/typeText";
   import {
@@ -1242,10 +1242,17 @@
     layerId: number;
     created: boolean;
     text: TextDto;
-    carets: Caret[];
+    /** The engine's layout of the text: its carets and lines. */
+    layout: TextLayout;
     /** Where the caret starts (UTF-16 units); absent: at the end. */
     start?: number;
+    /** The characters selected (UTF-16 units). */
+    selection: [number, number];
   } | null>(null);
+  let typeTool = $state<ReturnType<typeof TypeTool> | null>(null);
+  /** A text is typed in the document shown. */
+  const typingHere = $derived(typing !== null && typing.documentId === active?.id);
+  const NO_LAYOUT: TextLayout = { carets: [], lines: [] };
   let typingKey = 0;
 
   const defaultFamily = () => fonts?.defaultFamily ?? "Inter Variable";
@@ -1325,10 +1332,11 @@
     });
   });
 
-  /** The new text's layout: where the caret can stand. */
+  /** The new text's layout: where the caret can stand, its lines. */
   async function refreshCarets(documentId: number, layerId: number) {
     const layout = await engine.textLayout(documentId, layerId).catch(() => null);
-    if (layout && typing?.layerId === layerId) typing.carets = layout.carets;
+    if (layout && typing?.layerId === layerId)
+      typing.layout = { carets: layout.carets, lines: layout.lines };
   }
 
   /** What is typed, sent live (the whole text: a newer one replaces one still waiting). */
@@ -1351,14 +1359,16 @@
       // The caret where the text was clicked.
       const layout = await engine.textLayout(doc.id, hitLayer.id).catch(() => null);
       const carets = layout?.carets ?? [];
+      const start = caretIndexAt(carets, point, Infinity) ?? hitLayer.text.content.length;
       typing = {
         key: ++typingKey,
         documentId: doc.id,
         layerId: hitLayer.id,
         created: false,
         text: hitLayer.text,
-        carets,
-        start: caretIndexAt(carets, point, Infinity) ?? undefined,
+        layout: layout ? { carets, lines: layout.lines } : NO_LAYOUT,
+        start,
+        selection: [start, start],
       };
       return;
     }
@@ -1377,7 +1387,8 @@
       layerId: added.id,
       created: true,
       text,
-      carets: [],
+      layout: NO_LAYOUT,
+      selection: [0, 0],
     };
     await refreshCarets(doc.id, added.id);
   }
@@ -4843,6 +4854,9 @@
     const merging = layersPanel?.mergeKindSelected() ?? null;
     // Image > Adjustments: on the pixel layers shown (ADR 0029).
     const adjustable = adjustTargets().length > 0;
+    // A text being typed: Cut, Copy, Paste and Select All act on its characters (Photoshop's).
+    const typed = typing !== null && typing.documentId === doc?.id ? typing : null;
+    const charactersSelected = typed !== null && typed.selection[0] !== typed.selection[1];
     return {
       newDocument: { label: t("menu.file.new"), run: () => void newDocument(), whileTyping: true },
       open: { label: t("menu.file.open"), run: () => void openWithDialog(), whileTyping: true },
@@ -4900,25 +4914,32 @@
       redo: { label: t("menu.edit.redo"), run: redo, disabled: !doc?.canRedo, repeats: true },
       cut: {
         label: t("menu.edit.cut"),
-        run: () => void copySelection(true),
-        disabled: !doc || (noSelection && selectedCount === 0),
+        run: () => (typed ? typeTool?.edit("cut") : void copySelection(true)),
+        disabled: typed ? !charactersSelected : !doc || (noSelection && selectedCount === 0),
       },
       copy: {
         label: t("menu.edit.copy"),
-        run: () => void copySelection(false),
-        disabled: !doc || (noSelection && selectedCount === 0),
+        run: () => (typed ? typeTool?.edit("copy") : void copySelection(false)),
+        disabled: typed ? !charactersSelected : !doc || (noSelection && selectedCount === 0),
       },
       copyMerged: {
         label: t("menu.edit.copyMerged"),
         run: () => void copyMerged(),
         disabled: !doc,
       },
-      paste: { label: t("menu.edit.paste"), run: () => void paste("paste") },
-      pasteInPlace: { label: t("menu.edit.pasteInPlace"), run: () => void paste("inPlace") },
+      paste: {
+        label: t("menu.edit.paste"),
+        run: () => (typed ? typeTool?.edit("paste") : void paste("paste")),
+      },
+      pasteInPlace: {
+        label: t("menu.edit.pasteInPlace"),
+        run: () => void paste("inPlace"),
+        disabled: typed !== null,
+      },
       pasteInto: {
         label: t("menu.edit.pasteInto"),
         run: () => void paste("into"),
-        disabled: noSelection,
+        disabled: typed !== null || noSelection,
       },
       fill: {
         label: t("menu.edit.fill"),
@@ -5105,7 +5126,7 @@
       },
       selectAll: {
         label: t("menu.select.all"),
-        run: () => selectionCommand(engine.selectAll),
+        run: () => (typed ? typeTool?.edit("selectAll") : selectionCommand(engine.selectAll)),
         disabled: !doc,
       },
       deselect: {
@@ -5254,7 +5275,8 @@
       run: c.run,
       shortcut: shortcuts[0],
       shortcuts,
-      disabled: c.disabled || pasteUnfit(clipboard, id),
+      // Typing: Paste takes the clipboard's text, which `clipboard` does not tell.
+      disabled: c.disabled || (!typingHere && pasteUnfit(clipboard, id)),
       checked: c.checked,
     };
   }
@@ -6454,13 +6476,19 @@
                       ? {
                           key: typing.key,
                           content: typing.text.content,
-                          carets: typing.carets,
+                          layout: typing.layout,
                           start: typing.start,
                         }
                       : null}
+                    bind:this={typeTool}
                     onplace={(point) => void placeText(point)}
                     oninput={typeText}
                     oncommit={commitText}
+                    onselect={(start, end) => {
+                      if (typing) typing.selection = [start, end];
+                    }}
+                    oncopy={(text) => void engine.copyText(text).catch((e) => showError(String(e)))}
+                    onpaste={() => engine.pasteText().catch(() => null)}
                   />
                 {:else if shapeKindOf(tool)}
                   <ShapeTool

@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/svelte";
 import { expect, test } from "vitest";
-import type { EditRequest, LayerView, TextDto } from "../../../src/lib/engine";
+import type { EditRequest, LayerView, TextDto, TextLineView } from "../../../src/lib/engine";
 import { documentView, layer, open, respond, row, sent } from "./harness";
 
 // The Type tool (T, ADR 0041): a click places a text layer and types into it, live, until the
@@ -32,6 +32,37 @@ function textLayer(id: number, content: string, family = FAMILY): LayerView {
   };
 }
 
+/**
+ * The engine's layout, as the mock draws texts: characters 7 px wide from x = 30, lines 16 px
+ * apart from y = 30 (a caret 14 px tall).
+ */
+function layoutOf(content: string) {
+  const carets: [number, number, number, number][] = [];
+  const lines: TextLineView[] = [];
+  let start = 0;
+  content.split("\n").forEach((line, l, all) => {
+    const top = 30 + 16 * l;
+    const hardBreak = l < all.length - 1;
+    // The last one stands before the line break, or at the text's end.
+    for (let i = 0; i <= line.length; i++) carets.push([30 + 7 * i, top, 30 + 7 * i, top + 14]);
+    const end = start + line.length + (hardBreak ? 1 : 0);
+    const right = 30 + 7 * line.length;
+    lines.push({
+      start,
+      end,
+      hardBreak,
+      corners: [
+        [30, top],
+        [right, top],
+        [right, top + 14],
+        [30, top + 14],
+      ],
+    });
+    start = end;
+  });
+  return { carets, lines };
+}
+
 /** The layer under the pointer, for the tool's clicks: none unless a test says so. */
 let hit: number | null = null;
 
@@ -43,9 +74,8 @@ respond("font_styles", () => [
 ]);
 respond("text_layout", (args, doc) => {
   const found = doc.layers.find((l) => l.id === args.id);
-  const length = found?.text?.content.length ?? 0;
   return {
-    carets: Array.from({ length: length + 1 }, (_, i) => [30 + 7 * i, 30, 30 + 7 * i, 44]),
+    ...layoutOf(found?.text?.content ?? ""),
     missingFont: found?.text?.family === "Gone Font",
   };
 });
@@ -206,4 +236,133 @@ test("a text layer whose font is not installed says so in the options bar", asyn
   expect(
     await screen.findByText("Missing font: Gone Font. Edited, the text is set in Inter Variable."),
   ).toBeInTheDocument();
+});
+
+// Editing comfort: selections drawn from the engine's layout, keys by drawn lines, clipboard.
+
+/** What the clipboard holds for `paste_text`. */
+let clipboardText: string | null = null;
+respond("paste_text", () => clipboardText);
+
+/** Start editing text layer 2, which holds `content`, its caret at its end. */
+async function editText(content: string) {
+  hit = 2;
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), textLayer(2, content)]));
+  await screen.findByText("cat.jpg");
+  await user.keyboard("t");
+  // Right of the last line's end: the caret at the end.
+  const lines = content.split("\n");
+  await click(user, [30 + 7 * lines.at(-1)!.length + 3, 37 + 16 * (lines.length - 1)]);
+  const field = await screen.findByRole("textbox", { name: "Horizontal Type Tool" });
+  await waitFor(() => expect(field).toHaveFocus());
+  return { user, field };
+}
+
+/** The last text sent live. */
+const lastContent = () => {
+  const edit = liveEdits().at(-1);
+  return edit?.kind === "setText" ? edit.text.content : null;
+};
+
+/** The place of character `i` of line `l` in the mock's layout (its caret, mid-height). */
+const place = (i: number, l = 0): [number, number] => [30 + 7 * i, 37 + 16 * l];
+
+test("a drag selects characters, drawn as a highlight; typing replaces them", async () => {
+  const { user } = await editText("Title");
+  const svg = document.querySelector("svg.type-tool") as SVGSVGElement;
+  await user.pointer([
+    { keys: "[MouseLeft>]", target: svg, coords: { clientX: place(1)[0], clientY: 37 } },
+    { target: svg, coords: { clientX: place(4)[0], clientY: 37 } },
+    { keys: "[/MouseLeft]", target: svg, coords: { clientX: place(4)[0], clientY: 37 } },
+  ]);
+  // One highlight from "i" to "l", no caret while characters are selected.
+  const highlight = document.querySelectorAll("polygon.selected");
+  expect(highlight).toHaveLength(1);
+  expect(highlight[0].getAttribute("points")).toBe("37,30 58,30 58,44 37,44");
+  expect(document.querySelector("line.caret")).toBeNull();
+  await user.keyboard("X");
+  await waitFor(() => expect(lastContent()).toBe("TXe"));
+  expect(document.querySelectorAll("polygon.selected")).toHaveLength(0);
+});
+
+test("a double click selects a word, a triple click a line; Shift+click extends", async () => {
+  const { user } = await editText("Hello world\nagain");
+  const svg = document.querySelector("svg.type-tool") as SVGSVGElement;
+  const at = (p: [number, number]) => ({ target: svg, coords: { clientX: p[0], clientY: p[1] } });
+  await user.pointer({ keys: "[MouseLeft][MouseLeft]", ...at(place(8)) });
+  await user.keyboard("X");
+  await waitFor(() => expect(lastContent()).toBe("Hello X\nagain"));
+  // Away in time: a new count.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await user.pointer({ keys: "[MouseLeft][MouseLeft][MouseLeft]", ...at(place(2)) });
+  await user.keyboard("Y");
+  await waitFor(() => expect(lastContent()).toBe("Y\nagain"));
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  // From the second line's start, Shift+click after "ag".
+  await user.pointer({ keys: "[MouseLeft]", ...at(place(0, 1)) });
+  await user.keyboard("{Shift>}");
+  await user.pointer({ keys: "[MouseLeft]", ...at(place(2, 1)) });
+  await user.keyboard("{/Shift}Z");
+  await waitFor(() => expect(lastContent()).toBe("Y\nZain"));
+});
+
+test("Up, Down, Home and End follow the drawn lines; with Shift they select", async () => {
+  const { user } = await editText("abcdef\nab");
+  // From the end of "ab" up: under it on the first line.
+  await user.keyboard("{ArrowUp}1");
+  await waitFor(() => expect(lastContent()).toBe("ab1cdef\nab"));
+  await user.keyboard("{End}2");
+  await waitFor(() => expect(lastContent()).toBe("ab1cdef2\nab"));
+  await user.keyboard("{ArrowDown}{Home}3");
+  await waitFor(() => expect(lastContent()).toBe("ab1cdef2\n3ab"));
+  // Shift+Up from after "3": up to the first line's place above it.
+  await user.keyboard("{Shift>}{ArrowUp}{/Shift}");
+  await waitFor(() => expect(document.querySelectorAll("polygon.selected")).toHaveLength(2));
+  await user.keyboard("4");
+  await waitFor(() => expect(lastContent()).toBe("a4ab"));
+});
+
+test("Ctrl+A selects the whole text; Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste", async () => {
+  const { user } = await editText("Hello");
+  await user.keyboard("{Control>}a{/Control}");
+  expect(document.querySelectorAll("polygon.selected")).toHaveLength(1);
+  // Nothing else selected: the image's layers are not.
+  expect(sent("select_all")).toHaveLength(0);
+  await user.keyboard("{Control>}c{/Control}");
+  await waitFor(() => expect(sent("copy_text")).toEqual([{ text: "Hello" }]));
+  expect(sent("copy")).toHaveLength(0);
+  await user.keyboard("{Control>}x{/Control}");
+  await waitFor(() => expect(sent("copy_text")).toHaveLength(2));
+  await waitFor(() => expect(lastContent()).toBe(""));
+  // Another system's line breaks become the text's.
+  clipboardText = "two\r\nlines";
+  await user.keyboard("{Control>}v{/Control}");
+  await waitFor(() => expect(lastContent()).toBe("two\nlines"));
+  expect(sent("paste")).toHaveLength(0);
+});
+
+test("Edit > Copy, Cut, Paste and Select All act on the text being typed", async () => {
+  const { user } = await editText("Hi there");
+  const edit = async (entry: string) => {
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    await user.click(screen.getByRole("menuitem", { name: new RegExp(`^${entry}`) }));
+  };
+  // Nothing selected: nothing to copy.
+  await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+  expect(screen.getByRole("menuitem", { name: /^Copy Ctrl/ })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+  await user.click(screen.getByRole("menuitem", { name: "Select" }));
+  await user.click(screen.getByText("All", { selector: ".label" }));
+  expect(sent("select_all")).toHaveLength(0);
+  await edit("Copy Ctrl");
+  await waitFor(() => expect(sent("copy_text")).toEqual([{ text: "Hi there" }]));
+  clipboardText = "Yo";
+  await edit("Paste Ctrl");
+  await waitFor(() => expect(lastContent()).toBe("Yo"));
+  // Still typing.
+  expect(sent("end_gesture")).toHaveLength(0);
+  expect(screen.getByRole("textbox", { name: "Horizontal Type Tool" })).toBeInTheDocument();
 });

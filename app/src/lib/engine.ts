@@ -572,9 +572,26 @@ export type TextDto = {
 /** The fonts to choose from, and the default (bundled) family. */
 export type FontsView = { families: string[]; defaultFamily: string };
 
-/** Where the caret can stand in a text layer: one per UTF-16 place, in document pixels. */
+/**
+ * A line of a text: its first place and the place after its last character (UTF-16 units; a
+ * line ended by a line break holds it), and its box's corners in document pixels (top left,
+ * top right, bottom right, bottom left).
+ */
+export type TextLineView = {
+  start: number;
+  end: number;
+  /** It ends at a line break, not where the text wrapped. */
+  hardBreak: boolean;
+  corners: [[number, number], [number, number], [number, number], [number, number]];
+};
+
+/**
+ * Where the caret can stand in a text layer, one caret per UTF-16 place (top and bottom, in
+ * document pixels), and its lines.
+ */
 export type TextLayoutView = {
   carets: [number, number, number, number][];
+  lines: TextLineView[];
   /** The layer's font is not installed: edited, it is set in the default family. */
   missingFont: boolean;
 };
@@ -2028,6 +2045,10 @@ export const engine = {
   ) => serial(() => invoke<Pasted>("paste", { documentId, name, kind, view, at })),
   /** What a paste would bring, for the menus to gray what does not apply. */
   clipboardContents: () => invoke<ClipboardContents>("clipboard_contents"),
+  /** Copy or Cut of characters with the Type tool: `text` on the system clipboard. */
+  copyText: (text: string) => invoke<void>("copy_text", { text }),
+  /** Paste with the Type tool: the system clipboard's text, if it holds some. */
+  pasteText: () => invoke<string | null>("paste_text"),
   /**
    * Edit > Copy (layers, or the selected pixels of a layer or its mask) and Copy Merged: kept
    * whole for Paste, and an 8-bit image of it for other applications. Resolves with whether
