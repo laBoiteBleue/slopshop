@@ -33,6 +33,7 @@ fn push_layer(doc: &mut Document, content: LayerContent, opacity: f32) -> LayerI
         mask: None,
         content,
         warp: None,
+        vector_mask: None,
     };
     Edit::InsertLayer {
         parent: None,
@@ -1260,6 +1261,7 @@ fn layered_document() -> Document {
                 mask: None,
                 content,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(doc)
@@ -1662,6 +1664,7 @@ fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
                 mask: None,
                 content: LayerContent::Adjustment { adjustment },
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
@@ -3463,6 +3466,7 @@ fn vector_layers_are_written_to_a_layered_psd_as_their_pixels() {
             transform: slopshop_core::Projective::IDENTITY,
             style: None,
             warp: None,
+            vector_mask: None,
         },
     }
     .apply(&mut doc)
@@ -3490,6 +3494,61 @@ fn vector_layers_are_written_to_a_layered_psd_as_their_pixels() {
     let top = back.layers().last().unwrap();
     assert_eq!(top.name, "Ellipse 1");
     assert!(matches!(top.content, LayerContent::Raster { .. }));
+    let (a, b) = (composite_all(&doc), composite_all(back));
+    let worst = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0f32, f32::max);
+    assert!(worst < 0.004, "composites differ by {worst}");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn vector_masks_are_written_to_a_layered_psd_in_the_layer_mask() {
+    use slopshop_core::shape::{Geometry, VectorMask};
+    let mut doc = fill_document(Size::new(40, 30), LinearRgba::new(1.0, 1.0, 1.0, 1.0));
+    let id = push_layer(
+        &mut doc,
+        LayerContent::Fill {
+            color: LinearRgba::new(0.5, 0.3, 0.2, 1.0),
+        },
+        1.0,
+    );
+    Edit::SetVectorMask {
+        id,
+        mask: VectorMask::new(
+            Geometry::Ellipse {
+                center: [20.0, 15.0],
+                radii: [12.5, 9.0],
+            },
+            false,
+        ),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("vector-mask.psd");
+    let options = PsdOptions {
+        depth: PsdDepth::U16,
+        space: ColorSpace::SRGB,
+        dither: false,
+        large: false,
+    };
+    export_psd(
+        &path,
+        &doc,
+        &options,
+        &mut cpu_render,
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .unwrap();
+    let crate::Opened::Layers(opened) = crate::open_file(&path).unwrap() else {
+        panic!("layers expected");
+    };
+    let back = &opened.document;
+    let top = back.layers().last().unwrap();
+    assert!(top.mask.as_ref().is_some_and(|m| m.enabled), "a layer mask");
     let (a, b) = (composite_all(&doc), composite_all(back));
     let worst = a
         .iter()

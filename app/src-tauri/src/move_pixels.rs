@@ -476,6 +476,7 @@ fn lift_edit(
         clipped,
         transform: Projective::from(extracted.to_document).then(to_parent),
         warp: None,
+        vector_mask: None,
     };
     // The hole: the selected pixels erased, as Cut does.
     let erase = crate::paint::PaintRequest {
@@ -547,6 +548,7 @@ mod tests {
             clipped: false,
             transform: Affine::translation(4.0, 2.0).into(),
             warp: None,
+            vector_mask: None,
         };
         let document = Document::restore(
             CANVAS,

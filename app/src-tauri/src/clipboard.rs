@@ -189,6 +189,7 @@ fn raster_layer(name: String, image: Arc<RasterImage>, transform: Affine) -> Lay
         clipped: false,
         transform: transform.into(),
         warp: None,
+        vector_mask: None,
     }
 }
 

@@ -178,14 +178,19 @@ fn step_reach(
     mask: Option<&RasterPlan<'_>>,
     canvas: Area,
 ) -> Option<Area> {
-    let Step::Layer { layer, .. } = step else {
+    let Step::Layer {
+        layer,
+        mask: applied,
+        ..
+    } = step
+    else {
         return None;
     };
     let mut reach = match &layer.content {
         slopshop_core::LayerContent::Raster { .. } => plan_reach(plan?)?,
         _ => canvas,
     };
-    if crate::enabled_mask(layer).is_some() {
+    if applied.is_some() {
         let mask = plan_reach(mask?)?;
         reach = [
             reach[0].max(mask[0]),
@@ -1227,6 +1232,7 @@ mod tests {
             mask: None,
             content,
             warp: None,
+            vector_mask: None,
         }
     }
 

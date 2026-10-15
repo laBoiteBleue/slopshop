@@ -66,6 +66,7 @@ pub fn save(args: &[String]) -> Result<(), String> {
                 layer_name(input),
             )),
             warp: None,
+            vector_mask: None,
         };
         Edit::InsertLayer {
             parent: None,

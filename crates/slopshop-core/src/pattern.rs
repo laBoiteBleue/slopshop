@@ -153,6 +153,7 @@ mod tests {
                 transform,
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
@@ -196,6 +197,7 @@ mod tests {
                 transform: Projective::IDENTITY,
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut plain)
@@ -327,6 +329,7 @@ mod tests {
                 transform: crate::transform::Affine::translation(10.0, 5.0).into(),
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
@@ -386,6 +389,7 @@ mod tests {
                 transform: Projective::IDENTITY,
                 style: None,
                 warp: None,
+                vector_mask: None,
             },
         }
         .apply(&mut doc)
