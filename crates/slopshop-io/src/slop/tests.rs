@@ -2837,6 +2837,7 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         align,
         position: [10.0, 30.0],
         frame: None,
+        spans: Vec::new(),
     };
     let mut doc = Document::new(Size::new(64, 48));
     let a = push(
@@ -2845,6 +2846,7 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         LayerContent::vector(ShapeSource::text(
             text(None, TextAlign::Left),
             outlines.clone(),
+            Vec::new(),
             "",
         )),
         1.0,
@@ -2855,6 +2857,7 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         LayerContent::vector(ShapeSource::text(
             text(Some(30.0), TextAlign::Center),
             outlines.clone(),
+            Vec::new(),
             "",
         )),
         1.0,
@@ -2869,6 +2872,42 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
                 ..text(None, TextAlign::Right)
             },
             outlines.clone(),
+            Vec::new(),
+            "",
+        )),
+        1.0,
+    );
+    // Characters set otherwise (schema 0.39), in two colors: their glyphs by color.
+    let spans = text(None, TextAlign::Left)
+        .styled(
+            Some(2..5),
+            &slopshop_core::shape::CharStyle {
+                weight: Some(800.0),
+                color: Some(LinearRgba::new(0.0, 0.5, 1.0, 1.0)),
+                leading: Some(None),
+                family: Some("Other".to_owned()),
+                ..Default::default()
+            },
+        )
+        .styled(
+            Some(0..1),
+            &slopshop_core::shape::CharStyle {
+                size: Some(40.0),
+                tracking: Some(50.0),
+                italic: Some(false),
+                ..Default::default()
+            },
+        );
+    assert_eq!(spans.spans.len(), 2);
+    let mut blue = outlines.clone();
+    blue.fill = Some(Paint::Solid(LinearRgba::new(0.0, 0.5, 1.0, 1.0)));
+    let d = push(
+        &mut doc,
+        "d",
+        LayerContent::vector(ShapeSource::text(
+            spans,
+            outlines.clone(),
+            vec![outlines.clone(), blue],
             "",
         )),
         1.0,
@@ -2880,8 +2919,9 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         LayerContent::Vector { source, .. } => Arc::clone(source),
         _ => panic!("not a vector layer"),
     };
-    for id in [a, b, c] {
+    for id in [a, b, c, d] {
         let (before, after) = (source(&doc, id), source(&loaded, id));
+        assert_eq!(after.paints(), before.paints());
         assert_eq!(after.shape(), before.shape());
         assert_eq!(after.text_of(), before.text_of());
         assert!(after.text_of().is_some());
@@ -2908,6 +2948,14 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
     assert!(super::shape::text_from_json(&value).is_none());
     value["frame"] = serde_json::json!([10.0]);
     assert!(super::shape::text_from_json(&value).is_none());
+    value.as_object_mut().unwrap().remove("frame");
+    // Spans out of the content, or setting nothing.
+    value["spans"] = serde_json::json!([{ "start": 0, "end": 99, "weight": 700 }]);
+    assert!(super::shape::text_from_json(&value).is_none());
+    value["spans"] = serde_json::json!([{ "start": 0, "end": 1 }]);
+    assert!(super::shape::text_from_json(&value).is_none());
+    value["spans"] = serde_json::json!([{ "start": 0, "end": 1, "weight": 700 }]);
+    assert!(super::shape::text_from_json(&value).is_some());
 }
 
 #[test]

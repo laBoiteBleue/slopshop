@@ -283,7 +283,8 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   alignment point, in the layer's own space; paragraph text: its box's top left corner),
   "frame" (from 0.38: paragraph text's box, `[width, height]` in the layer's own space, both
   positive; its lines wrap at its width, are aligned in it, and those whose letters pass its
-  height are hidden; absent: point text) }`. A reader older than 0.38 draws paragraph text
+  height are hidden; absent: point text) }`. A reader older than 0.38
+ draws paragraph text
   from its outlines and, edited, takes it as point text. A text that is not valid makes the
   file invalid. A
   reader that lays text out again (to edit it) uses the outlines until then, and the default

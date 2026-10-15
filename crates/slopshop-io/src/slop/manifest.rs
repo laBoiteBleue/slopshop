@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 40;
+pub(crate) const SCHEMA_MINOR: u32 = 41;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -209,6 +209,10 @@ pub(crate) struct ShapeDto {
     /// shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<Value>,
+    /// A text in several colors (schema 0.39): its glyphs by color, each a shape, drawn instead
+    /// of `shape` (which keeps them all in the text's own color, for older readers).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paints: Vec<Value>,
 }
 
 /// A guide (schema 0.22): `axis` is `vertical` (at a distance from the left edge) or
