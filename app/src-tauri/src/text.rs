@@ -49,7 +49,11 @@ pub struct TextDto {
     #[serde(default)]
     pub leading: Option<f64>,
     pub align: TextAlignDto,
+    /// Point text: the anchor; paragraph text: its box's top left corner.
     pub position: [f64; 2],
+    /// Paragraph text: its box's width and height; none: point text.
+    #[serde(default)]
+    pub frame: Option<[f64; 2]>,
 }
 
 impl TextDto {
@@ -71,6 +75,7 @@ impl TextDto {
                 TextAlignDto::Right => TextAlign::Right,
             },
             position: self.position,
+            frame: self.frame,
         };
         if text.is_valid() {
             Ok(text)
@@ -96,6 +101,7 @@ impl TextDto {
                 TextAlign::Right => TextAlignDto::Right,
             },
             position: text.position,
+            frame: text.frame,
         }
     }
 }
@@ -159,6 +165,11 @@ pub struct TextLayoutView {
     pub carets: Vec<[f64; 4]>,
     /// The lines, in order (see [`TextLineView`]).
     pub lines: Vec<TextLineView>,
+    /// Paragraph text's box: its corners in document pixels, clockwise from the top left
+    /// (the layer's top left, top right, bottom right, bottom left); none for point text.
+    pub frame: Option<[[f64; 2]; 4]>,
+    /// Paragraph text whose last lines do not fit in its box.
+    pub overflow: bool,
     /// The layer's font is not installed: it is drawn as saved, and set in the default family
     /// if it is edited.
     pub missing_font: bool,
@@ -219,9 +230,20 @@ pub fn text_layout_of(document: &Document, id: LayerId) -> Result<TextLayoutView
             ],
         })
         .collect();
+    let frame = text.frame.map(|[w, h]| {
+        let [x, y] = text.position;
+        [
+            point(x, y),
+            point(x + w, y),
+            point(x + w, y + h),
+            point(x, y + h),
+        ]
+    });
     Ok(TextLayoutView {
         carets,
         lines,
+        frame,
+        overflow: geometry.overflow,
         missing_font,
     })
 }

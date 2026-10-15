@@ -4895,6 +4895,41 @@ mod tests {
     }
 
     #[test]
+    fn paragraph_text_is_laid_out_in_its_box() {
+        let mut s = blank_session();
+        // A box 150 px wide and 40 px tall at (20, 10): two lines wrap, the second hidden.
+        let json = format!(
+            r#"{{"kind":"addText","text":{{"content":"one two three four five six","family":"{}","weight":400,"italic":false,"size":20,"color":[0,0,0,1],"align":"left","position":[20,10],"frame":[150,40]}}}}"#,
+            slopshop_text::DEFAULT_FAMILY
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let layer = &view.layers[1];
+        assert_eq!(layer.text.as_ref().unwrap().frame, Some([150.0, 40.0]));
+        let layout = text::text_layout_of(s.document(), LayerId::from_raw(layer.id)).unwrap();
+        assert_eq!(
+            layout.frame,
+            Some([[20.0, 10.0], [170.0, 10.0], [170.0, 50.0], [20.0, 50.0]])
+        );
+        assert_eq!(layout.lines.len(), 2, "{:?}", layout.lines);
+        assert!(layout.overflow);
+        // Point text has no box.
+        let json = format!(
+            r#"{{"kind":"setText","id":{},"text":{{"content":"one","family":"{}","weight":400,"italic":false,"size":20,"color":[0,0,0,1],"align":"left","position":[20,30]}}}}"#,
+            layer.id,
+            slopshop_text::DEFAULT_FAMILY
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let layout = text::text_layout_of(s.document(), LayerId::from_raw(layer.id)).unwrap();
+        assert_eq!(layout.frame, None);
+        assert!(!layout.overflow);
+    }
+
+    #[test]
     fn a_shape_is_added_as_a_vector_layer_shown_and_changed() {
         let mut s = blank_session();
         let shape = r#"{"geometry":{"kind":"rectangle","rect":[10.0,20.0,110.0,70.0],"radii":[4.0,4.0,4.0,4.0]},"fill":[1.0,0.0,0.0,1.0],"stroke":null}"#;
