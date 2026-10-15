@@ -304,6 +304,8 @@ export type StyleBevel = {
   angle: number;
   /** Degrees above the plane, 0 to 90. */
   altitude: number;
+  /** Lit by the document's global light: its angle and altitude follow it. Absent: false. */
+  useGlobalLight?: boolean;
   highlightColor: [number, number, number];
   highlightMode: BlendModeId;
   highlightOpacity: number;
@@ -350,6 +352,8 @@ export type StyleShadow = {
   opacity: number;
   /** Degrees, where the light comes from. */
   angle: number;
+  /** Lit by the document's global light: its angle follows it. Absent: false. */
+  useGlobalLight?: boolean;
   distance: number;
   /** Percent. */
   spread: number;
@@ -508,6 +512,8 @@ export type DocumentView = {
   savedSelections: SavedSelectionView[];
   /** The guides (View > Rulers), in the order they were placed. */
   guides: Guide[];
+  /** Layer > Layer Style > Global Light: `[angle, altitude]`, degrees. Absent: 120, 30. */
+  globalLight?: [number, number];
   /**
    * What the pixel layers show (ADR 0040), in the order the layers first show them: the Sources
    * panel. Absent: none.
@@ -678,6 +684,8 @@ export type EditRequest =
   | { kind: "scaleLayerStyle"; ids: number[]; scale: number }
   /** Layer > Layer Style > Hide All Effects (`visible` false) or Show All Effects. */
   | { kind: "setAllEffectsVisible"; visible: boolean }
+  /** Layer > Layer Style > Global Light (degrees): every effect using it follows. */
+  | { kind: "setGlobalLight"; angle: number; altitude: number }
   /** Delete source `source` and the layers showing it (the Sources panel, ADR 0040). */
   | { kind: "deleteSource"; source: number }
   /** A new layer showing source `source` (the Sources panel), at `index` in `parent`. */

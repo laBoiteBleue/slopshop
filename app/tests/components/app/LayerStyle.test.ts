@@ -32,13 +32,14 @@ test("Layer > Layer Style lists the effects, then the commands on styles, as Pho
   const user = open(documentView(1, "cat.jpg", [styled(1, "Cat")]));
   await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
   await styleItem(user, "Copy Layer Style");
-  expect(styleMenuLabels().slice(-8)).toEqual([
+  expect(styleMenuLabels().slice(-9)).toEqual([
     "Drop Shadow…",
     "—",
     "Copy Layer Style",
     "Paste Layer Style",
     "Clear Layer Style",
     "—",
+    "Global Light…",
     "Hide All Effects",
     "Scale Effects…",
   ]);
@@ -139,6 +140,60 @@ test("a right-click on a layer's fx mark offers Layer Style's commands", async (
     expect(sent("perform")).toContainEqual({
       documentId: 1,
       edit: { kind: "setLayerStyle", id: 2, style: null },
+    }),
+  );
+});
+
+test("Global Light sets the document's light live; OK keeps it as one undo entry", async () => {
+  const doc = {
+    ...documentView(1, "cat.jpg", [styled(1, "Cat")]),
+    globalLight: [90, 30] as [number, number],
+  };
+  const user = open(doc);
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(await styleItem(user, "Global Light…"));
+  const dialog = await screen.findByRole("dialog", { name: "Global Light" });
+  const angle = within(dialog).getByRole("spinbutton", { name: "Angle:" });
+  expect(angle).toHaveValue(90);
+  await user.clear(angle);
+  await user.type(angle, "45");
+  await vi.waitFor(() =>
+    expect(sent("perform_live").at(-1)).toEqual({
+      documentId: 1,
+      edit: { kind: "setGlobalLight", angle: 45, altitude: 30 },
+      replace: true,
+    }),
+  );
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(sent("end_gesture")).toEqual([{ documentId: 1 }]));
+});
+
+test("in Layer Style, a shadow's angle on the global light moves the document's light with it", async () => {
+  const user = open(documentView(1, "cat.jpg", [styled(1, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(await styleItem(user, "Drop Shadow…"));
+  const dialog = await screen.findByRole("dialog", { name: "Layer Style" });
+  const settings = within(dialog).getByRole("region", { name: "Drop Shadow" });
+  const angle = within(settings).getAllByRole("spinbutton")[1];
+  await user.clear(angle);
+  await user.type(angle, "30");
+  await user.tab();
+  await vi.waitFor(() =>
+    expect(sent("perform_live").at(-1)).toEqual({
+      documentId: 1,
+      edit: {
+        kind: "batch",
+        edits: [
+          { kind: "setGlobalLight", angle: 30, altitude: 30 },
+          expect.objectContaining({
+            kind: "setLayerStyle",
+            style: expect.objectContaining({
+              dropShadow: expect.objectContaining({ angle: 30, useGlobalLight: true }),
+            }),
+          }),
+        ],
+      },
+      replace: false,
     }),
   );
 });

@@ -6,10 +6,15 @@ import LayerStyleDialog, { type StylePage } from "../../src/lib/LayerStyleDialog
 import { withEffect, withPatternOverlay } from "../../src/lib/layerStyle";
 import { forgetDialogPlaces } from "../../src/lib/dialogDrag";
 
-function open(style: LayerStyle | null, page: StylePage = "blending") {
+function open(
+  style: LayerStyle | null,
+  page: StylePage = "blending",
+  globalLight: [number, number] = [120, 30],
+) {
   const props = {
     documentId: 1,
     style,
+    globalLight,
     page,
     onchange: vi.fn(),
     onpage: vi.fn(),
@@ -24,6 +29,58 @@ function open(style: LayerStyle | null, page: StylePage = "blending") {
 
 /** The style of the last change sent. */
 const last = (fn: ReturnType<typeof vi.fn>) => fn.mock.lastCall?.[0] as LayerStyle;
+/** The global light of the last change sent. */
+const lastLight = (fn: ReturnType<typeof vi.fn>) => fn.mock.lastCall?.[1] as [number, number];
+
+test("a shadow added takes the global light; its angle moved moves it for every effect using it", async () => {
+  const style = withEffect(null, "innerShadow", true);
+  const { onchange, user } = open(
+    { ...style, innerShadow: { ...style.innerShadow!, angle: 90 } },
+    "dropShadow",
+    [90, 30],
+  );
+  await user.click(screen.getByRole("checkbox", { name: "Drop Shadow" }));
+  expect(last(onchange).dropShadow).toMatchObject({ angle: 90, useGlobalLight: true });
+  expect(lastLight(onchange)).toEqual([90, 30]);
+  const settings = screen.getByRole("region", { name: "Drop Shadow" });
+  expect(within(settings).getByRole("checkbox", { name: "Use Global Light" })).toBeChecked();
+  const angle = within(settings).getAllByRole("spinbutton")[1];
+  await user.clear(angle);
+  await user.type(angle, "45");
+  await user.tab();
+  // Sent once, both shadows on the new light.
+  expect(last(onchange).dropShadow?.angle).toBe(45);
+  expect(last(onchange).innerShadow?.angle).toBe(45);
+  expect(lastLight(onchange)).toEqual([45, 30]);
+});
+
+test("a shadow on its own light leaves the global light; turned back on, it takes it", async () => {
+  const { onchange, user } = open(withEffect(null, "dropShadow", true), "dropShadow", [120, 30]);
+  const settings = screen.getByRole("region", { name: "Drop Shadow" });
+  await user.click(within(settings).getByRole("checkbox", { name: "Use Global Light" }));
+  const angle = within(settings).getAllByRole("spinbutton")[1];
+  await user.clear(angle);
+  await user.type(angle, "10");
+  await user.tab();
+  expect(last(onchange).dropShadow).toMatchObject({ angle: 10, useGlobalLight: false });
+  expect(lastLight(onchange)).toEqual([120, 30]);
+  await user.click(within(settings).getByRole("checkbox", { name: "Use Global Light" }));
+  expect(last(onchange).dropShadow).toMatchObject({ angle: 120, useGlobalLight: true });
+  expect(lastLight(onchange)).toEqual([120, 30]);
+});
+
+test("Bevel and Emboss's Use Global Light takes the light's angle and altitude", async () => {
+  const bevel = withEffect(null, "bevel", true);
+  const { onchange, user } = open(
+    { ...bevel, bevel: { ...bevel.bevel!, useGlobalLight: false, angle: 0, altitude: 80 } },
+    "bevel",
+    [30, 50],
+  );
+  const settings = screen.getByRole("region", { name: "Bevel & Emboss" });
+  await user.click(within(settings).getByRole("checkbox", { name: "Use Global Light" }));
+  expect(last(onchange).bevel).toMatchObject({ angle: 30, altitude: 50, useGlobalLight: true });
+  expect(lastLight(onchange)).toEqual([30, 50]);
+});
 
 test("an effect's checkbox turns it on at its defaults and shows its settings", async () => {
   const { onchange, onpage, user } = open(null);

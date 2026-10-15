@@ -107,10 +107,15 @@
   import FillDialog, { type FillSettings } from "./lib/FillDialog.svelte";
   import LayerStyleDialog, { type StylePage } from "./lib/LayerStyleDialog.svelte";
   import ScaleEffectsDialog from "./lib/ScaleEffectsDialog.svelte";
+  import GlobalLightDialog from "./lib/GlobalLightDialog.svelte";
   import {
+    DEFAULT_LIGHT,
     EFFECTS,
     allEffectsCommand,
+    litStyle,
+    sameLight,
     styleEdit,
+    type GlobalLight,
     withEffect,
     withPatternOverlay,
     type EffectId,
@@ -2190,6 +2195,8 @@
     documentId: number;
     layerId: number;
     style: LayerStyle | null;
+    /** The global light as the dialog sets it (an effect using it moves it). */
+    light: GlobalLight;
     page: StylePage;
     picking: boolean;
   } | null>(null);
@@ -2199,19 +2206,40 @@
     const doc = active;
     if (!doc || layer.kind === "adjustment") return;
     let style = layer.style ?? null;
+    const light = doc.globalLight ?? DEFAULT_LIGHT;
     if (page !== "blending" && !style?.[page]?.enabled) {
-      style = withEffect(style, page, true);
+      style = litStyle(withEffect(style, page, true), light);
       live(doc.id, styleEdit(layer.id, style));
     }
-    styleDialog = { documentId: doc.id, layerId: layer.id, style, page, picking: false };
+    styleDialog = {
+      documentId: doc.id,
+      layerId: layer.id,
+      style,
+      light,
+      page,
+      picking: false,
+    };
     // A Pattern Overlay starts with its pattern chosen.
     if (page === "patternOverlay" && !style?.patternOverlay) pickStylePattern();
   }
 
-  function changeStyle(style: LayerStyle) {
-    if (!styleDialog) return;
-    styleDialog.style = style;
-    live(styleDialog.documentId, styleEdit(styleDialog.layerId, style));
+  /** The dialog's style, and the global light when an effect using it moved it. */
+  function changeStyle(style: LayerStyle, light = styleDialog?.light ?? DEFAULT_LIGHT) {
+    const dialog = styleDialog;
+    if (!dialog) return;
+    const request = styleEdit(dialog.layerId, style);
+    const moved = !sameLight(light, dialog.light);
+    dialog.style = style;
+    dialog.light = light;
+    live(
+      dialog.documentId,
+      moved
+        ? {
+            kind: "batch",
+            edits: [{ kind: "setGlobalLight", angle: light[0], altitude: light[1] }, request],
+          }
+        : request,
+    );
   }
 
   function closeStyle(keep: boolean) {
@@ -2304,6 +2332,30 @@
   function closeScaleEffects(keep: boolean) {
     const dialog = scaleEffects;
     scaleEffects = null;
+    if (dialog) void (keep ? endGesture : cancelGesture)(dialog.documentId);
+  }
+
+  /** Layer > Layer Style > Global Light under way: the document and its light as it opened. */
+  let globalLightDialog = $state<{ documentId: number; light: GlobalLight } | null>(null);
+
+  function openGlobalLight() {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    globalLightDialog = { documentId: doc.id, light: doc.globalLight ?? DEFAULT_LIGHT };
+  }
+
+  /** The whole gesture so far: each light replaces the one before. */
+  function globalLightLive([angle, altitude]: GlobalLight) {
+    const dialog = globalLightDialog;
+    if (!dialog) return;
+    const request: EditRequest = { kind: "setGlobalLight", angle, altitude };
+    void sync(engine.performLive(dialog.documentId, request, true));
+  }
+
+  function closeGlobalLight(keep: boolean) {
+    const dialog = globalLightDialog;
+    globalLightDialog = null;
     if (dialog) void (keep ? endGesture : cancelGesture)(dialog.documentId);
   }
 
@@ -5481,6 +5533,7 @@
       ),
       command(t("menu.layer.style.clear"), clearStyles, undefined, !styled),
       separator,
+      command(t("menu.layer.style.globalLight"), openGlobalLight, undefined, !doc),
       command(
         t(allEffects === "show" ? "menu.layer.style.showAll" : "menu.layer.style.hideAll"),
         () => allEffects && setAllEffectsVisible(allEffects === "show"),
@@ -6924,6 +6977,7 @@
   <LayerStyleDialog
     documentId={styleDialog.documentId}
     style={styleDialog.style}
+    globalLight={styleDialog.light}
     page={styleDialog.page}
     onchange={changeStyle}
     onpage={(page) => styleDialog && (styleDialog.page = page)}
@@ -6931,6 +6985,15 @@
     onpickpattern={pickStylePattern}
     onok={() => closeStyle(true)}
     oncancel={() => closeStyle(false)}
+  />
+{/if}
+
+{#if globalLightDialog}
+  <GlobalLightDialog
+    light={globalLightDialog.light}
+    onchange={globalLightLive}
+    onok={() => closeGlobalLight(true)}
+    oncancel={() => closeGlobalLight(false)}
   />
 {/if}
 

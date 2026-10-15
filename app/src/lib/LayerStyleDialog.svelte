@@ -7,7 +7,16 @@
   import { onMount, untrack } from "svelte";
   import { BLEND_MODE_GROUPS, type LayerStyle } from "./engine";
   import { srgbToHex } from "./color";
-  import { EFFECTS, PLAIN, withEffect, type EffectColor, type EffectId } from "./layerStyle";
+  import {
+    EFFECTS,
+    PLAIN,
+    lightOf,
+    litStyle,
+    withEffect,
+    type EffectColor,
+    type EffectId,
+    type GlobalLight,
+  } from "./layerStyle";
   import SliderField from "./SliderField.svelte";
   import StyleEffectFields from "./StyleEffectFields.svelte";
   import GradientEditor from "./GradientEditor.svelte";
@@ -21,6 +30,7 @@
   let {
     documentId,
     style,
+    globalLight,
     page,
     onchange,
     onpage,
@@ -33,9 +43,14 @@
     documentId: number;
     /** The style as the dialog opens (or opens again after the color picker). */
     style: LayerStyle | null;
+    /** The document's global light as the dialog opens. */
+    globalLight: GlobalLight;
     page: StylePage;
-    /** A setting changed: the style it makes (the canvas follows it). */
-    onchange: (style: LayerStyle) => void;
+    /**
+     * A setting changed: the style it makes and the global light (an effect using it moved
+     * it, for all of them, as in Photoshop); the canvas follows them.
+     */
+    onchange: (style: LayerStyle, light: GlobalLight) => void;
     /** Another page shown. */
     onpage: (page: StylePage) => void;
     /** An effect's color swatch clicked: the app shows the picker, then this dialog again. */
@@ -52,16 +67,36 @@
   let dialog: HTMLDialogElement;
   let form: HTMLFormElement;
 
-  // Every change of the settings is sent, not the first state.
+  /** The global light as the dialog sets it. */
+  let light = $state<GlobalLight>(untrack(() => globalLight));
+
+  // Every change of the settings is sent, not the first state. An effect using the global
+  // light that moves it lights the others first (then sent once).
   let first = true;
   $effect(() => {
-    const snapshot = $state.snapshot(draft);
+    const snapshot = $state.snapshot(draft) as LayerStyle;
     if (first) {
       first = false;
       return;
     }
-    untrack(() => onchange(snapshot));
+    untrack(() => {
+      const next = lightOf(snapshot, light);
+      light = next;
+      const lit = litStyle(snapshot, next);
+      if (JSON.stringify(lit) !== JSON.stringify(snapshot)) {
+        draft = lit;
+        return;
+      }
+      onchange(snapshot, next);
+    });
   });
+
+  /** Bevel and Emboss's Use Global Light on: its angle and altitude become the light's. */
+  function bevelGlobalLight(on: boolean) {
+    if (!draft.bevel) return;
+    draft.bevel.useGlobalLight = on;
+    if (on) [draft.bevel.angle, draft.bevel.altitude] = light;
+  }
 
   onMount(() => {
     dialog.showModal();
@@ -85,7 +120,8 @@
       onpickpattern();
       return;
     }
-    const next = withEffect(draft, id, enabled);
+    // Added at Photoshop's defaults, lit by the global light.
+    const next = litStyle(withEffect(draft, id, enabled), light);
     draft[id] = next[id] as never;
     if (enabled) onpage(id);
   }
@@ -295,6 +331,14 @@
             max={90}
             unit="°"
           />
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={draft.bevel.useGlobalLight ?? false}
+              onchange={(e) => bevelGlobalLight(e.currentTarget.checked)}
+            />
+            {t("style.useGlobalLight")}
+          </label>
           {@render modes(
             draft.bevel.highlightMode,
             (m) => (draft.bevel!.highlightMode = m as never),
@@ -494,24 +538,28 @@
           <StyleEffectFields
             bind:effect={draft.dropShadow}
             inside={false}
+            {light}
             onpickcolor={() => onpickcolor("dropShadow")}
           />
         {:else if page === "innerShadow" && draft.innerShadow}
           <StyleEffectFields
             bind:effect={draft.innerShadow}
             inside
+            {light}
             onpickcolor={() => onpickcolor("innerShadow")}
           />
         {:else if page === "outerGlow" && draft.outerGlow}
           <StyleEffectFields
             bind:effect={draft.outerGlow}
             inside={false}
+            {light}
             onpickcolor={() => onpickcolor("outerGlow")}
           />
         {:else if page === "innerGlow" && draft.innerGlow}
           <StyleEffectFields
             bind:effect={draft.innerGlow}
             inside
+            {light}
             onpickcolor={() => onpickcolor("innerGlow")}
           />
         {:else}

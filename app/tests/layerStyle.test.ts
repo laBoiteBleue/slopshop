@@ -2,8 +2,12 @@ import { expect, test } from "vitest";
 import assert from "node:assert/strict";
 import type { LayerView } from "../src/lib/engine";
 import {
+  DEFAULT_LIGHT,
   PLAIN,
   allEffectsCommand,
+  lightOf,
+  litStyle,
+  sameLight,
   defaultEffect,
   effectsOf,
   effectsShown,
@@ -186,6 +190,7 @@ test("Bevel and Emboss comes first, Photoshop's Inner Bevel lit from 120° at 30
     soften: 0,
     angle: 120,
     altitude: 30,
+    useGlobalLight: true,
     highlightColor: [1, 1, 1],
     highlightMode: "screen",
     highlightOpacity: 0.75,
@@ -251,4 +256,34 @@ test("Hide All Effects while some show, Show All Effects once all are hidden, gr
   // An effect turned off still counts: its layer has effects to show or hide.
   const off = withEffect(null, "stroke", false);
   expect(allEffectsCommand([layer(1, { style: off })])).toBe("hide");
+});
+
+test("the global light lights the effects using it: shadows' angle, a bevel's angle and altitude", () => {
+  const style = withEffect(
+    withEffect(withEffect(null, "dropShadow", true), "innerShadow", true),
+    "bevel",
+    true,
+  );
+  const own = { ...style, innerShadow: { ...style.innerShadow!, useGlobalLight: false, angle: 5 } };
+  const lit = litStyle(own, [45, 60]);
+  expect(lit.dropShadow?.angle).toBe(45);
+  expect(lit.innerShadow?.angle).toBe(5);
+  expect(lit.bevel).toMatchObject({ angle: 45, altitude: 60 });
+  // New effects use it, at Photoshop's light.
+  expect(style.dropShadow?.useGlobalLight).toBe(true);
+  expect(litStyle(style, DEFAULT_LIGHT)).toEqual(style);
+});
+
+test("an effect using the global light with another angle or altitude moves it", () => {
+  const style = litStyle(withEffect(withEffect(null, "dropShadow", true), "bevel", true), [90, 30]);
+  expect(lightOf(style, [90, 30])).toEqual([90, 30]);
+  const turned = { ...style, dropShadow: { ...style.dropShadow!, angle: 10 } };
+  expect(lightOf(turned, [90, 30])).toEqual([10, 30]);
+  const raised = { ...style, bevel: { ...style.bevel!, altitude: 70 } };
+  expect(lightOf(raised, [90, 30])).toEqual([90, 70]);
+  // An effect on its own light moves nothing.
+  const own = { ...turned, dropShadow: { ...turned.dropShadow!, useGlobalLight: false } };
+  expect(lightOf(own, [90, 30])).toEqual([90, 30]);
+  expect(sameLight([1, 2], [1, 2])).toBe(true);
+  expect(sameLight([1, 2], [1, 3])).toBe(false);
 });
