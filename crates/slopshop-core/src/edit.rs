@@ -1293,6 +1293,77 @@ impl Edit {
         }
     }
 
+    /// Layer > Layer Style > Hide All Effects (`visible` false) or Show All Effects, as
+    /// Photoshop's: the effects of every layer holding some hidden or shown, each effect keeping
+    /// its own setting; layers under Lock All are left as they are. One undo entry.
+    /// [`EditError::NoLayers`] when no layer changes.
+    pub fn all_effects_visible(doc: &Document, visible: bool) -> Result<Edit, EditError> {
+        let edits: Vec<Edit> = doc
+            .all_layers()
+            .filter(|layer| !doc.effective_locks(layer.id).all)
+            .filter_map(|layer| {
+                let settings = layer.style.as_ref()?.settings();
+                (settings.has_effects() && settings.effects_visible != visible).then(|| {
+                    Edit::SetLayerStyle {
+                        id: layer.id,
+                        style: Some(Box::new(crate::style::LayerStyle {
+                            effects_visible: visible,
+                            ..settings.clone()
+                        })),
+                    }
+                })
+            })
+            .collect();
+        if edits.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        Ok(Edit::Batch(edits))
+    }
+
+    /// Layer > Layer Style > Paste Layer Style: `style` given to each of layers `ids` but
+    /// adjustment layers (which have none, as in Photoshop). One undo entry.
+    /// [`EditError::NoLayers`] when none can take it.
+    pub fn paste_style(
+        doc: &Document,
+        ids: &[LayerId],
+        style: &crate::style::LayerStyle,
+    ) -> Result<Edit, EditError> {
+        let mut edits = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+            if !matches!(layer.content, LayerContent::Adjustment { .. }) {
+                edits.push(Edit::SetLayerStyle {
+                    id,
+                    style: Some(Box::new(style.clone())),
+                });
+            }
+        }
+        if edits.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        Ok(Edit::Batch(edits))
+    }
+
+    /// Layer > Layer Style > Scale Effects on layers `ids`: their styles' sizes scaled by
+    /// `percent` ([`crate::style::LayerStyle::scaled`]), those without one skipped. One undo
+    /// entry. [`EditError::NoLayers`] when none has a style.
+    pub fn scale_effects(doc: &Document, ids: &[LayerId], percent: f64) -> Result<Edit, EditError> {
+        let mut edits = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+            if let Some(style) = &layer.style {
+                edits.push(Edit::SetLayerStyle {
+                    id,
+                    style: Some(Box::new(style.settings().scaled(percent))),
+                });
+            }
+        }
+        if edits.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        Ok(Edit::Batch(edits))
+    }
+
     /// The edit that deletes source `source` (an image or a shape) from the document (the
     /// Sources panel, ADR 0040 amended): the layers showing it go, and a Pattern Overlay using it leaves its style (the
     /// layer stays). One undo entry. [`EditError::NoLayers`] when nothing uses it.

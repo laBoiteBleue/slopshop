@@ -34,6 +34,11 @@ use crate::transform::{Affine, Projective};
 pub const MAX_DISTANCE: f64 = 30_000.0;
 /// The largest Drop Shadow size, in pixels (Photoshop's).
 pub const MAX_SIZE: f64 = 250.0;
+/// The widest Stroke, in pixels: Edit > Stroke's.
+pub const MAX_STROKE_SIZE: f64 = MAX_MODIFY;
+/// Scale Effects' range, percent (Photoshop's).
+pub const MIN_EFFECTS_SCALE: f64 = 1.0;
+pub const MAX_EFFECTS_SCALE: f64 = 1000.0;
 
 /// A layer's style: its effects (`None` for those not added) and its Fill Opacity.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +58,9 @@ pub struct LayerStyle {
     pub satin: Option<Satin>,
     pub stroke: Option<Stroke>,
     pub bevel: Option<BevelEmboss>,
+    /// The effects shown (Photoshop's eye on the "Effects" row, its `masterFXSwitch`): hidden,
+    /// none is drawn and each keeps its own setting; Fill Opacity still applies.
+    pub effects_visible: bool,
 }
 
 impl Default for LayerStyle {
@@ -69,6 +77,7 @@ impl Default for LayerStyle {
             satin: None,
             stroke: None,
             bevel: None,
+            effects_visible: true,
         }
     }
 }
@@ -1082,14 +1091,35 @@ impl LayerStyle {
                 .as_ref()
                 .is_none_or(|o| opacity_ok(o.opacity) && o.pattern.is_valid())
             && self.stroke.is_none_or(|s| {
-                opacity_ok(s.opacity) && color_ok(s.color) && (1.0..=MAX_MODIFY).contains(&s.size)
+                opacity_ok(s.opacity)
+                    && color_ok(s.color)
+                    && (1.0..=MAX_STROKE_SIZE).contains(&s.size)
             })
     }
 
-    /// Whether the style changes how the layer looks: an effect enabled, or Fill Opacity.
+    /// Whether the style changes how the layer looks: an effect enabled and shown, or Fill
+    /// Opacity.
     pub fn shows(&self) -> bool {
-        self.fill_opacity < 1.0
-            || self.drop_shadow.is_some_and(|s| s.enabled)
+        self.fill_opacity < 1.0 || (self.effects_visible && self.has_enabled_effect())
+    }
+
+    /// Whether it holds an effect, on or off.
+    pub fn has_effects(&self) -> bool {
+        self.drop_shadow.is_some()
+            || self.inner_shadow.is_some()
+            || self.outer_glow.is_some()
+            || self.inner_glow.is_some()
+            || self.color_overlay.is_some()
+            || self.gradient_overlay.is_some()
+            || self.pattern_overlay.is_some()
+            || self.satin.is_some()
+            || self.bevel.is_some()
+            || self.stroke.is_some()
+    }
+
+    /// Whether an effect is turned on (shown or not, see `effects_visible`).
+    fn has_enabled_effect(&self) -> bool {
+        self.drop_shadow.is_some_and(|s| s.enabled)
             || self.inner_shadow.is_some_and(|s| s.enabled)
             || self.outer_glow.is_some_and(|g| g.enabled)
             || self.inner_glow.is_some_and(|g| g.enabled)
@@ -1101,9 +1131,64 @@ impl LayerStyle {
             || self.stroke.is_some_and(|s| s.enabled)
     }
 
-    /// The effects drawn from a mask, enabled, in Photoshop's order (bottom to top).
+    /// Layer > Layer Style > Scale Effects (Photoshop's): every size and distance of its effects
+    /// scaled by `percent` ([`MIN_EFFECTS_SCALE`] to [`MAX_EFFECTS_SCALE`], clamped), whole
+    /// pixels, each kept within its range, and the overlays' scale with them; the rest (angles,
+    /// spread and choke, colors) unchanged. Not a number: unchanged.
+    pub fn scaled(&self, percent: f64) -> LayerStyle {
+        if percent.is_nan() {
+            return self.clone();
+        }
+        let factor = percent.clamp(MIN_EFFECTS_SCALE, MAX_EFFECTS_SCALE) / 100.0;
+        let px = |v: f64, max: f64| (v * factor).round().clamp(0.0, max);
+        let mut style = self.clone();
+        let shadow = |s: &mut DropShadow| {
+            s.distance = px(s.distance, MAX_DISTANCE);
+            s.size = px(s.size, MAX_SIZE);
+        };
+        let glow = |g: &mut Glow| g.size = px(g.size, MAX_SIZE);
+        for s in [&mut style.drop_shadow, &mut style.inner_shadow]
+            .into_iter()
+            .flatten()
+        {
+            shadow(s);
+        }
+        for g in [&mut style.outer_glow, &mut style.inner_glow]
+            .into_iter()
+            .flatten()
+        {
+            glow(g);
+        }
+        if let Some(s) = &mut style.satin {
+            s.distance = px(s.distance, MAX_SATIN_DISTANCE);
+            s.size = px(s.size, MAX_SIZE);
+        }
+        if let Some(b) = &mut style.bevel {
+            b.size = px(b.size, MAX_SIZE);
+            b.soften = px(b.soften, MAX_BEVEL_SOFTEN);
+        }
+        if let Some(s) = &mut style.stroke {
+            s.size = px(s.size, MAX_STROKE_SIZE).max(1.0);
+        }
+        if let Some(o) = &mut style.gradient_overlay {
+            o.scale = (o.scale * factor)
+                .round()
+                .clamp(MIN_GRADIENT_SCALE, MAX_GRADIENT_SCALE);
+        }
+        if let Some(o) = &mut style.pattern_overlay {
+            o.pattern.scale = (o.pattern.scale * factor)
+                .clamp(crate::pattern::MIN_SCALE, crate::pattern::MAX_SCALE);
+        }
+        style
+    }
+
+    /// The effects drawn from a mask, enabled, in Photoshop's order (bottom to top); none when
+    /// the effects are hidden.
     fn masked(&self) -> Vec<Masked> {
         let mut masked = Vec::new();
+        if !self.effects_visible {
+            return masked;
+        }
         let mut add = |place, slot, key, color, mode, opacity| {
             masked.push(Masked {
                 place,
@@ -1276,6 +1361,9 @@ impl LayerStyle {
         canvas: Size,
     ) -> Option<Drawn> {
         let mut drawn = Drawn::default();
+        if !self.effects_visible {
+            return Some(drawn);
+        }
         // Under the other overlays, as in Photoshop.
         if let Some(overlay) = self.pattern_overlay.as_ref().filter(|o| o.enabled) {
             drawn.over.push(effect_layer(
@@ -2114,6 +2202,157 @@ mod tests {
         );
         assert_eq!(at(&doc, 25, 25)[3], 0.0);
         assert_eq!(at(&doc, 31, 25), [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn hidden_effects_draw_nothing_and_keep_their_settings_fill_still_applies() {
+        let (mut doc, id) = document();
+        let hidden = LayerStyle {
+            effects_visible: false,
+            ..shadow_and_stroke()
+        };
+        styled(&mut doc, id, hidden.clone());
+        assert!(!hidden.shows());
+        assert!(hidden.has_effects());
+        assert_eq!(at(&doc, 31, 25)[3], 0.0);
+        assert_eq!(at(&doc, 25, 25), [1.0, 1.0, 1.0, 1.0]);
+        // Fill Opacity is not an effect: it still fades the content.
+        styled(
+            &mut doc,
+            id,
+            LayerStyle {
+                fill_opacity: 0.0,
+                ..hidden.clone()
+            },
+        );
+        assert_eq!(at(&doc, 25, 25)[3], 0.0);
+        assert_eq!(at(&doc, 31, 25)[3], 0.0);
+        // Shown again: each effect as it was.
+        styled(&mut doc, id, shadow_and_stroke());
+        assert_eq!(at(&doc, 31, 25), [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn hide_all_effects_hides_every_styled_layer_s_but_locked_ones_in_one_undo() {
+        let (mut doc, id) = document();
+        styled(&mut doc, id, shadow_and_stroke());
+        let undo = Edit::all_effects_visible(&doc, false)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let settings = |doc: &Document| {
+            doc.layer(id)
+                .unwrap()
+                .style
+                .as_ref()
+                .unwrap()
+                .settings()
+                .clone()
+        };
+        assert!(!settings(&doc).effects_visible);
+        assert_eq!(settings(&doc).stroke, Some(Stroke::default()));
+        assert_eq!(at(&doc, 31, 25)[3], 0.0);
+        // Nothing left to hide.
+        assert_eq!(
+            Edit::all_effects_visible(&doc, false),
+            Err(EditError::NoLayers)
+        );
+        undo.apply(&mut doc).unwrap();
+        assert!(settings(&doc).effects_visible);
+        // A layer under Lock All is left as it is.
+        Edit::SetLayerLocks {
+            id,
+            locks: crate::document::LayerLocks {
+                all: true,
+                ..Default::default()
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(
+            Edit::all_effects_visible(&doc, false),
+            Err(EditError::NoLayers)
+        );
+    }
+
+    #[test]
+    fn scale_effects_scales_sizes_and_distances_within_their_ranges() {
+        let style = LayerStyle {
+            drop_shadow: Some(DropShadow {
+                distance: 5.0,
+                size: 200.0,
+                spread: 10.0,
+                ..DropShadow::default()
+            }),
+            outer_glow: Some(Glow::default()),
+            satin: Some(Satin::default()),
+            bevel: Some(BevelEmboss {
+                soften: 4.0,
+                ..BevelEmboss::default()
+            }),
+            stroke: Some(Stroke::default()),
+            gradient_overlay: Some(GradientOverlay::default()),
+            ..LayerStyle::default()
+        };
+        let double = style.scaled(200.0);
+        let shadow = double.drop_shadow.unwrap();
+        assert_eq!((shadow.distance, shadow.size), (10.0, MAX_SIZE));
+        // Not a size: the same.
+        assert_eq!((shadow.spread, shadow.angle), (10.0, 120.0));
+        assert_eq!(double.outer_glow.unwrap().size, 10.0);
+        let satin = double.satin.unwrap();
+        assert_eq!((satin.distance, satin.size), (22.0, 28.0));
+        let bevel = double.bevel.unwrap();
+        assert_eq!((bevel.size, bevel.soften, bevel.depth), (10.0, 8.0, 100.0));
+        assert_eq!(double.stroke.unwrap().size, 6.0);
+        assert_eq!(double.gradient_overlay.unwrap().scale, 150.0);
+        assert!(double.is_valid());
+        // Down to whole pixels, a stroke at least one wide; out of range clamped.
+        let tiny = style.scaled(0.0);
+        assert_eq!(tiny.drop_shadow.unwrap().size, 2.0);
+        assert_eq!(tiny.stroke.unwrap().size, 1.0);
+        assert_eq!(tiny.gradient_overlay.unwrap().scale, MIN_GRADIENT_SCALE);
+        assert!(tiny.is_valid());
+        assert_eq!(style.scaled(f64::NAN), style);
+        assert_eq!(style.scaled(100.0), style);
+    }
+
+    #[test]
+    fn paste_and_scale_apply_to_the_layers_given_in_one_undo() {
+        let (mut doc, id) = document();
+        let style = shadow_and_stroke();
+        let undo = Edit::paste_style(&doc, &[id], &style)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(at(&doc, 31, 25), [0.0, 0.0, 0.0, 1.0]);
+        let unscale = Edit::scale_effects(&doc, &[id], 200.0)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let stroke = |doc: &Document| {
+            let style = doc
+                .layer(id)
+                .unwrap()
+                .style
+                .as_ref()
+                .map(|s| s.settings().clone());
+            style.and_then(|s| s.stroke).map(|s| s.size)
+        };
+        assert_eq!(stroke(&doc), Some(6.0));
+        unscale.apply(&mut doc).unwrap();
+        assert_eq!(stroke(&doc), Some(3.0));
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(doc.layer(id).unwrap().style, None::<Style>);
+        assert_eq!(
+            Edit::scale_effects(&doc, &[id], 50.0),
+            Err(EditError::NoLayers)
+        );
+        let unknown = LayerId::from_raw(99);
+        assert_eq!(
+            Edit::paste_style(&doc, &[unknown], &style),
+            Err(EditError::UnknownLayer(unknown))
+        );
     }
 
     #[test]
