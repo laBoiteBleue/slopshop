@@ -514,8 +514,8 @@ first.
       Done: pixel layers, Photoshop's fifteen styles (Arc to Twist; Bend, orientation) in
       the options bar, the grid edited on the canvas (anchors, handles, inside a patch: Custom),
       grid sizes (Default, 4 × 4, 5 × 5), Split Warp, Enter and Esc, editable again, `.slop`,
-      Rasterize. Open: other layer kinds, a warped layer's mask baked by
-      Rasterize, painting through the warp, removing a split, several points moved at once.
+      Rasterize (a mask warped alike). Open: other layer kinds, painting through the warp,
+      removing a split, several points moved at once.
 - [ ] **Puppet Warp**: a mesh over the layer's content with pins, fixed or moved, for organic
       deformations; pins and mesh kept, editable again.
 - [ ] **Perspective Warp**: quadrilateral planes drawn on the image, connected, then moved

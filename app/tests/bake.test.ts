@@ -36,10 +36,10 @@ test("Rasterize applies to fills, vector layers, groups and pixel layers carryin
   assert.equal(canRasterize([layer(1, { kind: "gradientFill" })]), true);
   assert.equal(canRasterize([layer(1, { kind: "group" })]), true);
   assert.equal(canRasterize([layer(1, { kind: "vector" })]), true);
-  // A warped pixel layer bakes its warp (ADR 0044), not yet with a mask.
+  // A warped pixel layer bakes its warp (ADR 0044), with its mask warped alike.
   assert.equal(canRasterize([layer(1, { warped: true })]), true);
   const mask = { enabled: true, contentKey: 1 };
-  assert.equal(canRasterize([layer(1, { warped: true, mask })]), false);
+  assert.equal(canRasterize([layer(1, { warped: true, mask })]), true);
 });
 
 test("Ctrl+E merges several layers, or one down onto the visible layer below it", () => {

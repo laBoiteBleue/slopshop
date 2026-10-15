@@ -26,6 +26,9 @@ use crate::transform::Projective;
 pub struct BakePlan {
     /// What to composite: its whole canvas, in its blend space.
     pub scratch: Document,
+    /// A warped layer's mask (ADR 0044), to composite as well (same size): its alpha is the
+    /// mask warped as the pixels are.
+    pub mask_scratch: Option<Document>,
     /// The layer rasterized (a fill or a group).
     id: LayerId,
     /// Where the content shows on the scratch canvas.
@@ -50,13 +53,18 @@ impl BakePlan {
 
     /// The edit that puts `image` (the scratch canvas composited, of its size) in place of the
     /// layer's content, keeping the rest of the layer as it is now; `None` when the layer is
-    /// gone or its content changed since the plan (nothing to bake any more).
+    /// gone or its content changed since the plan (nothing to bake any more). `mask`: the
+    /// [`Self::mask_scratch`] composited, when the plan has one.
     pub fn finish(
         self,
         doc: &Document,
         image: Arc<RasterImage>,
+        mask: Option<Arc<RasterImage>>,
     ) -> Result<Option<Edit>, EditError> {
-        if image.size() != self.scratch.size() {
+        if image.size() != self.scratch.size()
+            || mask.is_some() != self.mask_scratch.is_some()
+            || mask.as_ref().is_some_and(|m| m.size() != image.size())
+        {
             return Err(EditError::InvalidPaint);
         }
         let Some(layer) = doc.layer(self.id) else {
@@ -70,9 +78,16 @@ impl BakePlan {
         baked.transform = shifted(layer.transform, self.shift);
         // A warp is baked into the pixels (ADR 0044).
         baked.warp = None;
-        baked.mask = match &layer.mask {
-            Some(mask) => Some(grown_mask(mask, self.shift)?),
-            None => None,
+        baked.mask = match (&layer.mask, mask) {
+            // Warped: the mask composited through the warp, in the new content space already.
+            (Some(old), Some(warped)) => Some(LayerMask {
+                image: Arc::new(warped.alpha_mask().ok_or(EditError::InvalidMask)?),
+                enabled: old.enabled,
+                replaces_alpha: old.replaces_alpha,
+                original: None,
+            }),
+            (Some(old), None) => Some(grown_mask(old, self.shift)?),
+            (None, _) => None,
         };
         replace(doc, baked).map(Some)
     }
@@ -139,10 +154,10 @@ pub fn can_rasterize(layer: &Layer) -> bool {
     }
 }
 
-/// A warped pixel layer (ADR 0044) without a mask: Rasterize resamples it into its pixels, its
-/// warp gone. (With a mask, the mask would have to be warped alike: left for later.)
+/// A warped pixel layer (ADR 0044): Rasterize resamples it into its pixels, its warp gone, and
+/// its mask alike.
 fn bakes_warp(layer: &Layer) -> bool {
-    layer.warp.is_some() && layer.mask.is_none()
+    layer.warp.is_some()
 }
 
 /// Rasterize, for the pixel layers among `ids` (outermost) that carry a stack or a painted
@@ -241,6 +256,13 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
         // The image covers the new content space from its origin to the content's far edge.
         let size = size_of(region.right + ox, region.bottom + oy)?;
         let moved = Projective::translation(ox as f64, oy as f64);
+        let mask_scratch = match (&layer.mask, &layer.warp) {
+            (Some(mask), Some(warp)) => {
+                let shown = warped_mask(layer, mask, warp)?;
+                Some(scratch(doc, size, vec![shown], moved)?)
+            }
+            _ => None,
+        };
         let scratch = scratch(doc, size, content, moved)?;
         // Within the canvas by construction (the shift makes the region's start non-negative).
         let region = Rect::new(
@@ -251,6 +273,7 @@ pub fn rasterize_plans(doc: &Document, ids: &[LayerId]) -> Result<Vec<BakePlan>,
         );
         plans.push(BakePlan {
             scratch,
+            mask_scratch,
             id,
             region,
             shift,
@@ -437,6 +460,54 @@ fn shows_fill(layers: &[Layer]) -> bool {
         })
 }
 
+/// A layer showing `mask` warped by `warp` as its alpha (ADR 0044): the mask as both its pixels
+/// and its mask, its own alpha ignored, both grown by a tile each way so that the layer is opaque
+/// past the warp's edges (only the mask's own edges fade, as the layer shows them). Composited,
+/// its alpha is the mask through the warp, in the layer's content space.
+fn warped_mask(
+    layer: &Layer,
+    mask: &LayerMask,
+    warp: &crate::warp::Warp,
+) -> Result<Layer, EditError> {
+    let size = mask.image.size();
+    let grown = Arc::new(
+        mask.image
+            .grown(
+                (1, 1),
+                Size::new(size.width + 2 * TILE_SIZE, size.height + 2 * TILE_SIZE),
+            )
+            .ok_or(EditError::InvalidMask)?
+            .map_err(|_| EditError::InvalidMask)?,
+    );
+    let t = f64::from(TILE_SIZE);
+    let [x0, y0, x1, y1] = warp.frame();
+    let moved = crate::warp::Warp::new(
+        [x0 + t, y0 + t, x1 + t, y1 + t],
+        warp.columns(),
+        warp.rows(),
+        warp.points().iter().map(|&(x, y)| (x + t, y + t)).collect(),
+        None,
+    )
+    .map_err(|_| EditError::InvalidTransform)?;
+    Ok(Layer {
+        visible: true,
+        opacity: 1.0,
+        blend_mode: BlendMode::Normal,
+        clipped: false,
+        style: None,
+        content: LayerContent::raster(Arc::clone(&grown)),
+        transform: Projective::translation(-t, -t),
+        warp: Some(Arc::new(moved)),
+        mask: Some(LayerMask {
+            image: grown,
+            enabled: true,
+            replaces_alpha: true,
+            original: None,
+        }),
+        ..layer.clone()
+    })
+}
+
 /// A size from whole pixels, at least one pixel each way.
 fn size_of(width: i64, height: i64) -> Result<Size, EditError> {
     let side = |v: i64| u32::try_from(v.max(1)).map_err(|_| EditError::EmptyCanvas);
@@ -526,22 +597,23 @@ mod tests {
     }
 
     /// The plan composited on the CPU, as the app does on the GPU.
-    fn composited(plan: &BakePlan) -> Arc<RasterImage> {
-        let size = plan.scratch.size();
+    fn composited(scratch: &Document) -> Arc<RasterImage> {
+        let size = scratch.size();
         let mut pixels = vec![0.0f32; size.pixel_count() as usize * 4];
         crate::composite::composite_region(
-            &plan.scratch,
+            scratch,
             Rect::new(0, 0, size.width, size.height),
             &mut pixels,
         )
         .unwrap();
-        Arc::new(crate::copy::merged_image(&pixels, size, plan.scratch.blend_space()).unwrap())
+        Arc::new(crate::copy::merged_image(&pixels, size, scratch.blend_space()).unwrap())
     }
 
     /// `plan` finished and applied; its undo.
     fn bake(doc: &mut Document, plan: BakePlan) -> Edit {
-        let image = composited(&plan);
-        plan.finish(doc, image)
+        let image = composited(&plan.scratch);
+        let mask = plan.mask_scratch.as_ref().map(composited);
+        plan.finish(doc, image, mask)
             .unwrap()
             .unwrap()
             .apply(doc)
@@ -631,7 +703,10 @@ mod tests {
             .apply(&mut doc)
             .unwrap();
         let plan = rasterize_plans(&doc, &[group]).unwrap().remove(0);
-        assert_eq!(Some(plan.region()), composited(&plan).content_bounds());
+        assert_eq!(
+            Some(plan.region()),
+            composited(&plan.scratch).content_bounds()
+        );
     }
 
     #[test]
@@ -671,10 +746,10 @@ mod tests {
             .apply(&mut doc)
             .unwrap();
         let plan = rasterize_plans(&doc, &[group]).unwrap().remove(0);
-        let image = composited(&plan);
+        let image = composited(&plan.scratch);
         // Undone before the pixels came: the group is gone.
         undo.apply(&mut doc).unwrap();
-        assert_eq!(plan.finish(&doc, image).unwrap(), None);
+        assert_eq!(plan.finish(&doc, image, None).unwrap(), None);
     }
 
     #[test]
@@ -883,6 +958,86 @@ mod tests {
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
         assert!(worst < 0.01, "differ by {worst}");
+    }
+
+    #[test]
+    fn rasterizing_a_warped_layer_with_a_mask_warps_the_mask_alike() {
+        use crate::warp::{Warp, WarpPreset, WarpStyle};
+        let mut doc = Document::new(Size::new(100, 100));
+        let pixels: Vec<u8> = (0..40 * 30)
+            .flat_map(|i| [(i % 40 * 6) as u8, 120, (i / 40 * 8) as u8, 255])
+            .collect();
+        let image = Arc::new(RasterImage::from_pixels(Size::new(40, 30), RGBA8, &pixels).unwrap());
+        let mut layer = plain(&mut doc, "photo", LayerContent::raster(image));
+        layer.transform = Affine::translation(20.0, 30.0).into();
+        layer.warp = Some(Arc::new(
+            Warp::from_preset(
+                [0.0, 0.0, 40.0, 30.0],
+                WarpPreset {
+                    style: WarpStyle::Arc,
+                    bend: -0.4,
+                    vertical: false,
+                },
+            )
+            .unwrap(),
+        ));
+        // A mask fading from left to right, hiding the bottom rows.
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            sample: SampleType::U8,
+            color_space: ColorSpace::LINEAR_SRGB,
+            alpha: AlphaMode::Straight,
+        };
+        let coverage: Vec<u8> = (0..40 * 30)
+            .map(|i| if i / 40 >= 24 { 0 } else { (i % 40 * 6) as u8 })
+            .collect();
+        layer.mask = Some(LayerMask {
+            image: Arc::new(RasterImage::from_pixels(Size::new(40, 30), gray, &coverage).unwrap()),
+            enabled: true,
+            replaces_alpha: false,
+            original: None,
+        });
+        let id = push(&mut doc, layer);
+        let region = Rect::new(0, 0, 100, 100);
+        let mut before = vec![0.0f32; 100 * 100 * 4];
+        crate::composite::composite_region(&doc, region, &mut before).unwrap();
+        assert!(can_rasterize(doc.layer(id).unwrap()));
+        let plan = rasterize_plans(&doc, &[id]).unwrap().remove(0);
+        assert!(plan.mask_scratch.is_some());
+        // Its mask's composite is required.
+        let image = composited(&plan.scratch);
+        assert_eq!(
+            plan.clone().finish(&doc, Arc::clone(&image), None),
+            Err(EditError::InvalidPaint)
+        );
+        let undo = bake(&mut doc, plan);
+        let baked = doc.layer(id).unwrap();
+        assert!(baked.warp.is_none());
+        let mask = baked.mask.as_ref().unwrap();
+        assert!(mask.enabled && !mask.replaces_alpha);
+        assert!(LayerMask::is_valid_image(&mask.image));
+        let mut after = vec![0.0f32; 100 * 100 * 4];
+        crate::composite::composite_region(&doc, region, &mut after).unwrap();
+        let worst = before
+            .iter()
+            .zip(&after)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 0.01, "differ by {worst}");
+        // The mask still hides: without it, more shows.
+        Edit::SetLayerMaskEnabled { id, enabled: false }
+            .apply(&mut doc)
+            .unwrap();
+        let mut unmasked = vec![0.0f32; 100 * 100 * 4];
+        crate::composite::composite_region(&doc, region, &mut unmasked).unwrap();
+        let alpha = |p: &[f32]| p.chunks(4).map(|c| c[3]).sum::<f32>();
+        assert!(alpha(&unmasked) > alpha(&after) + 100.0);
+        // Undone: warped and masked as before.
+        Edit::SetLayerMaskEnabled { id, enabled: true }
+            .apply(&mut doc)
+            .unwrap();
+        undo.apply(&mut doc).unwrap();
+        assert!(doc.layer(id).unwrap().warp.is_some());
     }
 
     #[test]
