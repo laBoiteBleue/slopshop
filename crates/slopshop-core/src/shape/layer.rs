@@ -576,6 +576,7 @@ mod tests {
             leading: None,
             align: crate::shape::TextAlign::Left,
             position: [0.0, 10.0],
+            frame: None,
         };
         let outlines = rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None);
         let source = ShapeSource::text(text("Hi"), outlines.clone(), "");
@@ -656,6 +657,7 @@ world"
             leading: None,
             align: crate::shape::TextAlign::Left,
             position: [0.0, 30.0],
+            frame: None,
         };
         // Two letters' outlines, with a gap between them.
         let mut outlines = rectangle([10.0, 10.0, 14.0, 30.0], Some(RED), None);

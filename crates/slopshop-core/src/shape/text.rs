@@ -31,8 +31,8 @@ pub enum TextAlign {
     Right,
 }
 
-/// A text layer's text: point text, one style for the whole string (per-character styles and
-/// box text come later).
+/// A text layer's text: point text, or paragraph text wrapped in a box (Photoshop's two kinds);
+/// one style for the whole string (per-character styles come later).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Text {
     /// The string; `\n` breaks lines.
@@ -52,9 +52,13 @@ pub struct Text {
     /// Photoshop's Auto).
     pub leading: Option<f64>,
     pub align: TextAlign,
-    /// The anchor, in the layer's own space: where the first line's baseline meets the
-    /// alignment point.
+    /// Point text: the anchor, in the layer's own space, where the first line's baseline meets
+    /// the alignment point. Paragraph text: the box's top left corner.
     pub position: [f64; 2],
+    /// Paragraph text: the box's width and height, in the layer's own space. Lines wrap at its
+    /// width and are aligned in it; lines that do not fit in its height are hidden, as in
+    /// Photoshop. `None`: point text.
+    pub frame: Option<[f64; 2]>,
 }
 
 impl Text {
@@ -78,6 +82,10 @@ impl Text {
                 .position
                 .iter()
                 .all(|v| v.is_finite() && v.abs() <= super::model::MAX_COORDINATE)
+            && self.frame.is_none_or(|f| {
+                f.iter()
+                    .all(|v| v.is_finite() && *v > 0.0 && *v <= super::model::MAX_COORDINATE)
+            })
     }
 
     /// The distance between baselines, in pixels.
@@ -115,6 +123,7 @@ mod tests {
             leading: None,
             align: TextAlign::Left,
             position: [10.0, 60.0],
+            frame: None,
         }
     }
 
@@ -128,6 +137,13 @@ mod tests {
             }
             .is_valid(),
             "an empty text is valid while it is typed"
+        );
+        assert!(
+            Text {
+                frame: Some([200.0, 100.0]),
+                ..text()
+            }
+            .is_valid()
         );
         for bad in [
             Text {
@@ -160,6 +176,14 @@ mod tests {
             },
             Text {
                 color: LinearRgba::new(0.0, 0.0, 0.0, 2.0),
+                ..text()
+            },
+            Text {
+                frame: Some([0.0, 10.0]),
+                ..text()
+            },
+            Text {
+                frame: Some([10.0, f64::NAN]),
                 ..text()
             },
         ] {
