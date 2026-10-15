@@ -279,8 +279,13 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   "weight" (1 to 1000), "italic", "size" (the em, in pixels, 0.01 to 10 000), "color"
   ([r, g, b, a], linear working-space RGB), "tracking" (thousandths of an em, −1000 to 1000),
   "leading" (pixels between baselines; absent: automatic, 120 % of the size), "align"
-  ("left", "center", "right"), "position" (the anchor, the first baseline at the alignment
-  point, in the layer's own space) }`. A text that is not valid makes the file invalid. A
+  ("left", "center", "right"), "position" (point text: the anchor, the first baseline at the
+  alignment point, in the layer's own space; paragraph text: its box's top left corner),
+  "frame" (from 0.36: paragraph text's box, `[width, height]` in the layer's own space, both
+  positive; its lines wrap at its width, are aligned in it, and those whose letters pass its
+  height are hidden; absent: point text) }`. A reader older than 0.36 draws paragraph text
+  from its outlines and, edited, takes it as point text. A text that is not valid makes the
+  file invalid. A
   reader that lays text out again (to edit it) uses the outlines until then, and the default
   family when `family` is not installed.
 - **Color spaces**: CIE xy chromaticities of the primaries and white point, and a transfer
