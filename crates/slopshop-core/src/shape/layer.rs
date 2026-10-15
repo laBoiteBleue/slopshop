@@ -814,6 +814,7 @@ world"
             align: crate::shape::TextAlign::Left,
             position: [0.0, 10.0],
             frame: None,
+            spans: Vec::new(),
         };
         // Its outlines, a path (glyphs are paths).
         let mut outlines = rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None);
@@ -829,7 +830,7 @@ world"
             }],
             rule: FillRule::NonZero,
         };
-        let source = ShapeSource::text(text.clone(), outlines.clone(), "");
+        let source = ShapeSource::text(text.clone(), outlines.clone(), Vec::new(), "");
         let id = add_vector(&mut doc, source, Projective::IDENTITY);
         let moved: Projective = scale_then_move(2.0, 2.0, 3.0).into();
         Edit::transform_layers(&doc, &[id], moved)
