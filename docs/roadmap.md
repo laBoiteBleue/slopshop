@@ -374,6 +374,14 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       Cleanliness, Scale, Bristle Detail, Lighting, Angle, Shine: Kuwahara strokes, their relief
       lit); random ones with a seed drawn at each application; on the CPU (their looks too), Trace
       Contour's looks on the GPU too. Not yet: Extrude
+- [x] Filter > Pixelate > Color Halftone (Max. Radius 4 to 127, the screen angles of three
+      channels: dots covering as much of their cell as each channel, the tone kept), Crystallize
+      and Pointillize (Cell Size 3 to 300: polygons around points drawn in squares of the cell,
+      dots of the layer's colors on the background color of the moment, sampled as the
+      distortions are), Facet and Fragment (applied at once: a small Kuwahara filter, four copies
+      4 pixels apart diagonally) and Mezzotint (Fine, Medium, Grainy, Coarse Dots, Short, Medium,
+      Long Lines and Strokes: each channel full or none against a random pattern); random ones
+      with a seed drawn at each application; on the CPU (their looks too)
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze
