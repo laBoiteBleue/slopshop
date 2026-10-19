@@ -268,6 +268,9 @@ impl Read {
         };
         overlay.shape = match d.enumerated(b"Type") {
             Some(b"Rdl ") => GradientShape::Radial,
+            Some(b"Angl") => GradientShape::Angle,
+            Some(b"Rflc") => GradientShape::Reflected,
+            Some(b"Dmnd") => GradientShape::Diamond,
             Some(b"Lnr ") | None => GradientShape::Linear,
             Some(_) => {
                 self.approximated = true;
@@ -707,6 +710,9 @@ fn gradient_overlay(o: GradientOverlay) -> Vec<Item> {
     let shape: &[u8] = match o.shape {
         GradientShape::Linear => b"Lnr ",
         GradientShape::Radial => b"Rdl ",
+        GradientShape::Angle => b"Angl",
+        GradientShape::Reflected => b"Rflc",
+        GradientShape::Diamond => b"Dmnd",
     };
     vec![
         (b"enab", b"bool", vec![u8::from(o.enabled)]),
@@ -1083,6 +1089,38 @@ mod tests {
             )
         );
         assert_eq!(write(&LayerStyle::default()), None);
+    }
+
+    #[test]
+    fn every_gradient_style_round_trips_and_others_are_approximated() {
+        for shape in GradientShape::ALL {
+            let style = LayerStyle {
+                gradient_overlay: Some(GradientOverlay {
+                    shape,
+                    ..GradientOverlay::default()
+                }),
+                ..LayerStyle::default()
+            };
+            let back = read(&write(&style).unwrap(), light(30.0)).unwrap();
+            assert!(!back.approximated, "{shape:?}");
+            assert_eq!(back.style.gradient_overlay.unwrap().shape, shape);
+        }
+        // A style Photoshop may add later: drawn linear, reported.
+        let mut items = gradient_overlay(GradientOverlay::default());
+        items.retain(|(k, _, _)| *k != b"Type");
+        items.push((b"Type", b"enum", enumerated(b"GrdT", b"Spir")));
+        let mut block = 0u32.to_be_bytes().to_vec();
+        block.extend(16u32.to_be_bytes());
+        block.extend(object(
+            b"null",
+            &[(b"GrFl", b"Objc", object(b"GrFl", &items))],
+        ));
+        let read = read(&block, light(30.0)).unwrap();
+        assert!(read.approximated);
+        assert_eq!(
+            read.style.gradient_overlay.unwrap().shape,
+            GradientShape::Linear
+        );
     }
 
     #[test]
