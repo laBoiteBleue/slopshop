@@ -97,7 +97,10 @@ mod tests {
     #[test]
     fn a_documents_paths_have_unique_allocated_ids_and_one_work_path_at_most() {
         assert!(valid_paths(&[triangle(1, false), triangle(2, true)], 3));
-        assert!(valid_paths(&[DocumentPath::empty(PathId::from_raw(1), "Path 1")], 2));
+        assert!(valid_paths(
+            &[DocumentPath::empty(PathId::from_raw(1), "Path 1")],
+            2
+        ));
         // Not allocated, repeated, 0, two Work Paths.
         assert!(!valid_paths(&[triangle(3, false)], 3));
         assert!(!valid_paths(&[triangle(1, false), triangle(1, false)], 3));

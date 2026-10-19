@@ -116,7 +116,10 @@ fn corners(points: &[[f64; 2]], window: f64) -> Vec<usize> {
             let after = along(points, &lengths, i, window);
             let (ux, uy) = (p[0] - before[0], p[1] - before[1]);
             let (vx, vy) = (after[0] - p[0], after[1] - p[1]);
-            (ux * vy - uy * vx).atan2(ux * vx + uy * vy).abs().to_degrees()
+            (ux * vy - uy * vx)
+                .atan2(ux * vx + uy * vy)
+                .abs()
+                .to_degrees()
         })
         .collect();
     // Within `window` of each other, only the sharpest turn (the first of equal ones).
@@ -338,7 +341,11 @@ mod tests {
         assert!(mismatch(&ellipse, &reselected(&geometry)) < 0.02);
         // A tighter tolerance takes more curves, and follows the outline as closely.
         let tight = path_of_selection(&ellipse, 0.5).unwrap();
-        let Geometry::Path { subpaths: tight_paths, .. } = &tight else {
+        let Geometry::Path {
+            subpaths: tight_paths,
+            ..
+        } = &tight
+        else {
             unreachable!("a path");
         };
         assert!(tight_paths[0].segments.len() >= segments.len());

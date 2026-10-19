@@ -187,6 +187,36 @@ pub fn selection_rings(
     (rings, rule)
 }
 
+/// `geometry`'s subpaths placed by `transform` as polylines in the document (curves within
+/// [`TOLERANCE`]), each with whether it is closed (its first point then repeated at its end):
+/// what Stroke Path paints along. A live shape's outline is one closed polyline, a line an
+/// open one.
+pub fn stroke_polylines(geometry: &Geometry, transform: Projective) -> Vec<(Vec<[f64; 2]>, bool)> {
+    let local = TOLERANCE / scale_at(transform, outline(geometry, 1.0).bounding_box().center());
+    let path = placed(&outline(geometry, local), transform, local);
+    let mut lines: Vec<(Vec<[f64; 2]>, bool)> = Vec::new();
+    kurbo::flatten(path.iter(), TOLERANCE, |el| match el {
+        PathEl::MoveTo(p) => lines.push((vec![[p.x, p.y]], false)),
+        PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => {
+            if let Some((line, _)) = lines.last_mut() {
+                line.push([p.x, p.y]);
+            }
+        }
+        PathEl::ClosePath => {
+            if let Some((line, closed)) = lines.last_mut() {
+                if let Some(&first) = line.first()
+                    && line.last() != Some(&first)
+                {
+                    line.push(first);
+                }
+                *closed = true;
+            }
+        }
+    });
+    lines.retain(|(line, _)| !line.is_empty());
+    lines
+}
+
 /// The box of what `shape` covers in its own space (its outline, and its stroke's), `None`
 /// when it covers nothing.
 pub fn shape_bounds(shape: &super::model::Shape) -> Option<[f64; 4]> {
@@ -359,6 +389,52 @@ mod tests {
     use super::*;
     use crate::shape::model::{Paint, StrokeAlign, Subpath};
     use crate::transform::Affine;
+
+    #[test]
+    fn stroke_polylines_keep_open_subpaths_open_and_follow_the_placement() {
+        let path = Geometry::Path {
+            subpaths: vec![
+                Subpath {
+                    start: [0.0, 0.0],
+                    segments: vec![Segment::Line([10.0, 0.0]), Segment::Line([10.0, 10.0])],
+                    closed: false,
+                },
+                Subpath {
+                    start: [20.0, 0.0],
+                    segments: vec![
+                        Segment::Cubic([30.0, 0.0], [30.0, 10.0], [20.0, 10.0]),
+                        Segment::Line([20.0, 0.0]),
+                    ],
+                    closed: true,
+                },
+            ],
+            rule: FillRule::NonZero,
+        };
+        let lines = stroke_polylines(&path, Affine::translation(5.0, 1.0).into());
+        assert_eq!(lines.len(), 2);
+        let (open, closed) = (&lines[0], &lines[1]);
+        assert_eq!(open, &(vec![[5.0, 1.0], [15.0, 1.0], [15.0, 11.0]], false));
+        assert!(closed.1);
+        assert_eq!(closed.0.first(), closed.0.last());
+        // The curve flattened finely: its farthest point is 7.5 pixels right of its ends.
+        let right = closed.0.iter().map(|p| p[0]).fold(f64::MIN, f64::max);
+        assert!((right - 32.5).abs() < TOLERANCE, "{right}");
+        // A live shape: its closed outline.
+        let rect = Geometry::Rectangle {
+            rect: [0.0, 0.0, 4.0, 2.0],
+            radii: [0.0; 4],
+        };
+        let lines = stroke_polylines(&rect, Projective::IDENTITY);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].1);
+        assert_eq!(lines[0].0.first(), lines[0].0.last());
+        assert!(
+            lines[0]
+                .0
+                .iter()
+                .all(|p| p[0] == 0.0 || p[0] == 4.0 || p[1] == 0.0 || p[1] == 2.0)
+        );
+    }
 
     #[test]
     fn live_shapes_give_their_outlines() {
