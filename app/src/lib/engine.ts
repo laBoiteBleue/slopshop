@@ -143,14 +143,29 @@ export type AdjustmentView = {
   curveSamples: number[][] | null;
   /** Gradient Map's stops `[location 0–4096, r, g, b]` (not reversed: `values[0]` says). */
   gradient: number[][] | null;
+  /** Color Lookup's table, once one is chosen. */
+  lut?: LutView | null;
 };
 
-/** An adjustment's settings as edits send them (`curves` and `gradient` as `setAdjustment`). */
+/** A Color Lookup's table (a `.cube` or `.3dl` file's; LutView in lut.rs). */
+export type LutView = {
+  /** What edits send back to use it (`lut`). */
+  id: number;
+  /** The file's name. */
+  name: string;
+  dimension: 1 | 3;
+  /** Points a side. */
+  size: number;
+};
+
+/** An adjustment's settings as edits send them (`curves`, `gradient` and `lut` as
+ * `setAdjustment`). */
 export type AdjustmentSettings = {
   adjustment: AdjustmentId;
   values: number[];
   curves?: number[][][];
   gradient?: number[][];
+  lut?: number | null;
 };
 
 export type LayerView = {
@@ -236,7 +251,8 @@ export type AdjustmentId =
   | "posterize"
   | "threshold"
   | "gradientMap"
-  | "selectiveColor";
+  | "selectiveColor"
+  | "colorLookup";
 
 /** Adjustments in the order of Photoshop's New Adjustment Layer menu. */
 export const ADJUSTMENTS: AdjustmentId[] = [
@@ -250,6 +266,7 @@ export const ADJUSTMENTS: AdjustmentId[] = [
   "blackWhite",
   "photoFilter",
   "channelMixer",
+  "colorLookup",
   "invert",
   "posterize",
   "threshold",
@@ -911,6 +928,7 @@ export type EditRequest =
       values: number[];
       curves?: number[][][];
       gradient?: number[][];
+      lut?: number | null;
     }
   /** What Image > Adjustments will do, while its dialog is open: an adjustment layer at its
    * neutral settings clipped above each layer it applies to (a live gesture, then cancelled). */
@@ -943,6 +961,8 @@ export type EditRequest =
       curves?: number[][][];
       /** Gradient Map only: its stops `[location, r, g, b]`. */
       gradient?: number[][];
+      /** Color Lookup only: its table (`LutView.id`); absent or null, none. */
+      lut?: number | null;
     }
   /** Into a new group in the place of the topmost of them (Layer > Group Layers). */
   | { kind: "groupLayers"; ids: number[]; name: string }
@@ -2031,6 +2051,9 @@ export const engine = {
   /** An image file opened as a displacement map for a document (Displace's): its id, name. */
   loadDisplacementMap: (documentId: number, path: string) =>
     serial(() => invoke<MapView>("load_displacement_map", { documentId, path })),
+  /** Color Lookup's Load 3D LUT: the `.cube` or `.3dl` file at `path`, kept for the edit
+   * that uses it (`lut` of `setAdjustment` and `applyEffect`). */
+  loadColorLookup: (path: string) => invoke<LutView>("load_color_lookup", { path }),
   /** A library pattern loaded for a document (a Pattern Overlay's): its source's id. */
   loadPattern: (documentId: number, pattern: string, sourceName: string) =>
     serial(() => invoke<number>("load_pattern", { documentId, pattern, sourceName })),

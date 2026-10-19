@@ -71,7 +71,19 @@ test("settings travel as edits send them: Curves' points and Gradient Map's stop
   });
   const gradient = { ...levels, id: "gradientMap" as const, values: [0], gradient: [[0, 0, 0, 0]] };
   expect(settingsOf(gradient).gradient).toEqual([[0, 0, 0, 0]]);
+  // Color Lookup: its table by id; none, no field.
+  const lookup = { ...levels, id: "colorLookup" as const, values: [] };
+  const lut = { id: 9, name: "film.cube", dimension: 3 as const, size: 33 };
+  expect(settingsOf({ ...lookup, lut }).lut).toBe(9);
+  expect(settingsOf({ ...lookup, lut: null })).not.toHaveProperty("lut");
   expect(stepSettings(entry({ count: 2, steps: [levels, levels] }))).toHaveLength(2);
+});
+
+test("a Color Lookup step changes its table, or takes it off with null", () => {
+  const settings = [{ adjustment: "colorLookup" as const, values: [], lut: 9 }];
+  expect(withStep(settings, 0, { values: [] })[0].lut).toBe(9);
+  expect(withStep(settings, 0, { values: [], lut: 12 })[0].lut).toBe(12);
+  expect(withStep(settings, 0, { values: [], lut: null })[0].lut).toBeNull();
 });
 
 test("a step changed by the dialog keeps what the change does not say, the others untouched", () => {

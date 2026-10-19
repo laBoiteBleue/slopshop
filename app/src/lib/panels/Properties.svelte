@@ -29,6 +29,7 @@
     onstyletext={app.styleText}
     onaligntext={app.alignText}
     ontextcolor={app.pickTextColor}
+    loadLut={app.loadColorLookup}
     onedit={app.edit}
     onlive={app.live}
     ongestureend={app.gestureEnd}

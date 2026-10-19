@@ -1,8 +1,8 @@
 <script lang="ts">
   // The settings of an adjustment (ADR 0020), as Photoshop shows them: sliders with a number
   // field each, checkboxes, color swatches, menus choosing what the sliders edit, the Curves
-  // editor and Gradient Map's gradient editor. Used by the Properties panel (an adjustment layer) and by Image > Adjustments.
-  import { ADJUSTMENT_PARAMS, type AdjustmentId, type LayerView } from "./engine";
+  // editor, Gradient Map's gradient editor and Color Lookup's table. Used by the Properties panel (an adjustment layer) and by Image > Adjustments.
+  import { ADJUSTMENT_PARAMS, type AdjustmentId, type LayerView, type LutView } from "./engine";
   import { hexToSrgb, srgbToHex } from "./color";
   import CurvesEditor from "./CurvesEditor.svelte";
   import GradientEditor from "./GradientEditor.svelte";
@@ -17,6 +17,7 @@
     onend,
     oncurveslive,
     oncurvesapply,
+    loadLut,
   }: {
     /** The adjustment and its settings, as the engine has them. */
     adjustment: NonNullable<LayerView["adjustment"]>;
@@ -24,14 +25,16 @@
      * option when it changes. */
     owner: number;
     /** Settings changed during a drag (part of a gesture); Gradient Map's stops with them. */
-    onlive: (values: number[], gradient?: number[][]) => void;
-    /** Settings changed at once (one change). */
-    onapply: (values: number[], gradient?: number[][]) => void;
+    onlive: (values: number[], gradient?: number[][], lut?: number | null) => void;
+    /** Settings changed at once (one change); Color Lookup's table chosen (null: none). */
+    onapply: (values: number[], gradient?: number[][], lut?: number | null) => void;
     /** The end of a drag. */
     onend: () => void;
     /** Curves' points changed during a drag, or at once: composite, red, green, blue. */
     oncurveslive: (curves: number[][][]) => void;
     oncurvesapply: (curves: number[][][]) => void;
+    /** Color Lookup's Load 3D LUT: a file chosen and read (null: cancelled or refused). */
+    loadLut?: () => Promise<LutView | null>;
   } = $props();
 
   /** All the parameters (`ADJUSTMENT_PARAMS` of them, `Adjustment::params` order). */
@@ -137,6 +140,8 @@
     invert: [],
     curves: [],
     gradientMap: [{ kind: "check", index: 0, label: "adjustment.gradientMap.reverse" }],
+    // Its table, shown above the fields.
+    colorLookup: [],
     selectiveColor: [
       slider(0, "adjustment.selectiveColor.cyan", -100, 100, { selected: true }),
       slider(1, "adjustment.selectiveColor.magenta", -100, 100, { selected: true }),
@@ -224,6 +229,7 @@
     curves: padded([]),
     gradientMap: padded([]),
     selectiveColor: padded([]),
+    colorLookup: padded([]),
     posterize: padded([4]),
     threshold: padded([128 / 255]),
   };
@@ -304,7 +310,17 @@
 
   /** Whether the adjustment has settings to reset. */
   export function resettable(): boolean {
-    return fields.length > 0 || adjustment.curves !== null;
+    return (
+      fields.length > 0 ||
+      adjustment.curves !== null ||
+      (adjustment.id === "colorLookup" && !!adjustment.lut)
+    );
+  }
+
+  /** Load 3D LUT: the table read becomes the adjustment's. */
+  async function chooseLut() {
+    const lut = await loadLut?.();
+    if (lut) onapply(values, undefined, lut.id);
   }
 
   /** Gradient Map's default gradient: black to white. */
@@ -319,6 +335,9 @@
     else if (adjustment.id === "gradientMap") {
       values = [...DEFAULTS.gradientMap];
       onapply(values, BLACK_TO_WHITE);
+    } else if (adjustment.id === "colorLookup") {
+      values = [...DEFAULTS.colorLookup];
+      onapply(values, undefined, null);
     } else apply([...DEFAULTS[adjustment.id]]);
   }
 
@@ -347,6 +366,18 @@
       {onend}
       onapply={(stops) => onapply(values, stops)}
     />
+  {/if}
+  {#if adjustment.id === "colorLookup"}
+    <!-- Photoshop's 3DLUT File: the table's file and Load 3D LUT. -->
+    <span class="label lut-label">{t("adjustment.colorLookup.file")}</span>
+    <div class="lut-row">
+      <span class="lut-name" title={adjustment.lut?.name}>
+        {adjustment.lut?.name ?? t("adjustment.colorLookup.none")}
+      </span>
+      <button type="button" class="btn small" disabled={!loadLut} onclick={chooseLut}>
+        {t("adjustment.colorLookup.load")}
+      </button>
+    </div>
   {/if}
   {#if selector && !selectorHidden}
     <!-- A row of its own: the options' names (Midtones…) need more than a number's width. -->
@@ -479,5 +510,25 @@
     display: flex;
     align-items: center;
     gap: 10px;
+  }
+
+  .lut-label {
+    grid-column: 1 / -1;
+  }
+
+  .lut-row {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .lut-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

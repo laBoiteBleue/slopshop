@@ -41,6 +41,7 @@
     type FontsView,
     type LayerView,
     type MapView,
+    type LutView,
     type CharStyleDto,
     type TextAlign,
     type TextDto,
@@ -429,6 +430,7 @@
     pickFillColor: (layer) => pickFillLayerColor(layer),
     pickShapeColor: (layer, which) => pickShapeLayerColor(layer, which),
     pickPattern: (layer) => (patternPicker = { kind: "replace", layer: layer.id }),
+    loadColorLookup: () => loadColorLookup(),
     get typedText() {
       return typedText;
     },
@@ -1979,6 +1981,8 @@
     curves: number[][][] | null;
     /** Gradient Map's stops chosen last (null: the preview's). */
     gradient: number[][] | null;
+    /** Color Lookup's table chosen last (null: none; undefined: the preview's). */
+    lut?: number | null;
   } | null>(null);
 
   /**
@@ -2067,7 +2071,7 @@
   function showAdjust(dialog: NonNullable<typeof adjustDialog>) {
     const edits: EditRequest[] = dialog.previews.flatMap((id): EditRequest[] => [
       { kind: "setLayerVisible", id, visible: dialog.preview },
-      ...(dialog.values || dialog.curves || dialog.gradient
+      ...(dialog.values || dialog.curves || dialog.gradient || dialog.lut !== undefined
         ? [
             {
               kind: "setAdjustment" as const,
@@ -2076,6 +2080,7 @@
               values: dialog.values ?? [],
               curves: dialog.curves ?? undefined,
               gradient: dialog.gradient ?? adjustShown?.gradient ?? undefined,
+              lut: dialog.lut === undefined ? adjustShown?.lut?.id : dialog.lut,
             },
           ]
         : []),
@@ -2084,15 +2089,41 @@
   }
 
   /** The dialog's settings changed. */
-  function adjustLive(values: number[], curves?: number[][][], gradient?: number[][]) {
+  function adjustLive(
+    values: number[],
+    curves?: number[][][],
+    gradient?: number[][],
+    lut?: number | null,
+  ) {
     if (!adjustDialog) return;
     adjustDialog = {
       ...adjustDialog,
       values,
       curves: curves ?? null,
       gradient: gradient ?? adjustDialog.gradient,
+      lut: lut === undefined ? adjustDialog.lut : lut,
     };
     showAdjust(adjustDialog);
+  }
+
+  /**
+   * Color Lookup's Load 3D LUT: a `.cube` or `.3dl` file chosen and read by the engine; null
+   * when cancelled, or refused (the error shown).
+   */
+  async function loadColorLookup(): Promise<LutView | null> {
+    const picked = await openDialog({
+      title: t("adjustment.colorLookup.load"),
+      multiple: false,
+      directory: false,
+      filters: [{ name: t("adjustment.colorLookup.files"), extensions: ["cube", "3dl"] }],
+    });
+    if (typeof picked !== "string") return null;
+    try {
+      return await engine.loadColorLookup(picked);
+    } catch (e) {
+      showError(String(e));
+      return null;
+    }
   }
 
   function adjustPreview(preview: boolean) {
@@ -2125,6 +2156,7 @@
           values,
           curves: dialog.curves ?? shown?.curves ?? undefined,
           gradient: dialog.gradient ?? shown?.gradient ?? undefined,
+          lut: dialog.lut === undefined ? shown?.lut?.id : dialog.lut,
         }),
       ),
     );
@@ -6419,6 +6451,7 @@
                 item("adjustBlackWhite"),
                 dialog("photoFilter"),
                 dialog("channelMixer"),
+                dialog("colorLookup"),
                 separator,
                 item("adjustInvert"),
                 dialog("posterize"),
@@ -7738,22 +7771,24 @@
   <AdjustDialog
     adjustment={entryShown}
     preview={entryDialog.preview}
-    onlive={(values, gradient) => entryLive({ values, gradient })}
+    onlive={(values, gradient, lut) => entryLive({ values, gradient, lut })}
     oncurves={(curves) => entryLive({ curves })}
     onpreview={entryPreview}
     onok={applyEntry}
     oncancel={cancelEntry}
+    loadLut={loadColorLookup}
   />
 {/if}
 {#if adjustDialog && adjustShown}
   <AdjustDialog
     adjustment={adjustShown}
     preview={adjustDialog.preview}
-    onlive={(values, gradient) => adjustLive(values, undefined, gradient)}
+    onlive={(values, gradient, lut) => adjustLive(values, undefined, gradient, lut)}
     oncurves={(curves) => adjustLive([], curves)}
     onpreview={adjustPreview}
     onok={applyAdjust}
     oncancel={cancelAdjust}
+    loadLut={loadColorLookup}
   />
 {/if}
 {#if styleDialog && !styleDialog.picking}

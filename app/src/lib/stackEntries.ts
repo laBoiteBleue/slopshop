@@ -22,6 +22,7 @@ export function settingsOf(view: AdjustmentView): AdjustmentSettings {
     values: [...view.values],
     ...(view.curves ? { curves: view.curves } : {}),
     ...(view.gradient ? { gradient: view.gradient } : {}),
+    ...(view.lut ? { lut: view.lut.id } : {}),
   };
 }
 
@@ -30,11 +31,13 @@ export function stepSettings(entry: StackEntryView): AdjustmentSettings[] {
   return entry.steps.map(settingsOf);
 }
 
-/** What the adjustment dialog changed: its values (and Gradient Map's stops), or Curves' points. */
+/** What the adjustment dialog changed: its values (and Gradient Map's stops, Color Lookup's
+ * table: null for none), or Curves' points. */
 export type SettingsChange = {
   values?: number[];
   curves?: number[][][];
   gradient?: number[][];
+  lut?: number | null;
 };
 
 /** `settings` with step `step` changed by `change` (what it does not say stays). */
@@ -51,6 +54,7 @@ export function withStep(
           ...(change.values && change.values.length > 0 ? { values: change.values } : {}),
           ...(change.curves ? { curves: change.curves } : {}),
           ...(change.gradient ? { gradient: change.gradient } : {}),
+          ...(change.lut !== undefined ? { lut: change.lut } : {}),
         },
   );
 }

@@ -6,7 +6,7 @@
   // cancels. The same dialog edits an entry of a stack again (ADR 0034).
   import { onMount } from "svelte";
   import AdjustmentFields from "./AdjustmentFields.svelte";
-  import type { LayerView } from "./engine";
+  import type { LayerView, LutView } from "./engine";
   import { t } from "./i18n/index.svelte";
   import { movable } from "./dialogDrag";
 
@@ -18,18 +18,22 @@
     onpreview,
     onok,
     oncancel,
+    loadLut,
   }: {
     /** The adjustment with the settings chosen so far. */
     adjustment: NonNullable<LayerView["adjustment"]>;
     /** The canvas shows the settings. */
     preview: boolean;
-    /** Settings changed (the canvas follows them); Gradient Map's stops with them. */
-    onlive: (values: number[], gradient?: number[][]) => void;
+    /** Settings changed (the canvas follows them); Gradient Map's stops with them, Color
+     * Lookup's table chosen (null: none). */
+    onlive: (values: number[], gradient?: number[][], lut?: number | null) => void;
     /** Curves' points changed: composite, red, green, blue. */
     oncurves: (curves: number[][][]) => void;
     onpreview: (preview: boolean) => void;
     onok: () => void;
     oncancel: () => void;
+    /** Color Lookup's Load 3D LUT. */
+    loadLut?: () => Promise<LutView | null>;
   } = $props();
 
   let dialog: HTMLDialogElement;
@@ -76,6 +80,7 @@
           onend={() => {}}
           oncurveslive={oncurves}
           oncurvesapply={oncurves}
+          {loadLut}
         />
       {/key}
     </div>

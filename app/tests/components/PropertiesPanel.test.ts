@@ -124,6 +124,54 @@ test("Gradient Map: Reverse keeps the stops, the editor sends them with the sett
   });
 });
 
+test("Color Lookup: its file's name, Load 3D LUT sends the table read, Reset takes it off", async () => {
+  const onedit = vi.fn();
+  const film = { id: 41, name: "film.cube", dimension: 3 as const, size: 33 };
+  const loadLut = vi.fn(() => Promise.resolve({ ...film, id: 42, name: "night.3dl" }));
+  const layer = adjustmentLayer("colorLookup", []);
+  const props = {
+    documentId: 1,
+    layer,
+    onedit,
+    onlive: vi.fn(),
+    ongestureend: vi.fn(),
+    loadLut,
+  };
+  const { rerender } = render(PropertiesPanel, props);
+  const user = userEvent.setup();
+  // None chosen: nothing to reset.
+  expect(screen.getByText("3DLUT File")).toBeInTheDocument();
+  expect(screen.getByText("None")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Load 3D LUT…" }));
+  expect(loadLut).toHaveBeenCalledOnce();
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setAdjustment",
+    id: 7,
+    adjustment: "colorLookup",
+    values: padded([]),
+    lut: 42,
+  });
+  // The layer with its table: its name shown; Reset sends none.
+  await rerender({
+    ...props,
+    layer: { ...layer, adjustment: { ...layer.adjustment!, lut: film } },
+  });
+  expect(screen.getByText("film.cube")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Reset" }));
+  expect(onedit).toHaveBeenLastCalledWith(1, {
+    kind: "setAdjustment",
+    id: 7,
+    adjustment: "colorLookup",
+    values: padded([]),
+  });
+  // Cancelled (or refused): nothing sent.
+  const calls = onedit.mock.calls.length;
+  loadLut.mockResolvedValueOnce(null as never);
+  await user.click(screen.getByRole("button", { name: "Load 3D LUT…" }));
+  expect(onedit).toHaveBeenCalledTimes(calls);
+});
+
 test("Selective Color: the Colors menu chooses the range, the method is Relative or Absolute", async () => {
   const { onedit, user } = open("selectiveColor", []);
   await user.selectOptions(screen.getByRole("combobox", { name: "Colors" }), "Blues");
