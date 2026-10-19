@@ -113,6 +113,7 @@ const en = {
   "vectorDialog.tooLarge": "Too large: at most {max} pixels per side",
   "vectorDialog.ok": "OK",
   "vectorDialog.cancel": "Cancel",
+  "menu.edit.perspectiveWarp": "Perspective Warp",
   "menu.edit.freeTransform": "Free Transform",
   "menu.edit.transform": "Transform",
   "menu.edit.transform.again": "Again",
@@ -160,6 +161,12 @@ const en = {
   "warp.split.crosswise": "Split Warp Crosswise",
   "warp.split.vertical": "Split Warp Vertically",
   "warp.split.horizontal": "Split Warp Horizontally",
+  "warp.perspectiveWarped":
+    "This layer has a perspective warp: Edit > Perspective Warp edits it, and Layer > Bake to Pixels > Rasterize bakes it before a Warp.",
+  "perspectiveWarp.mode.layout": "Layout",
+  "perspectiveWarp.mode.warp": "Warp",
+  "perspectiveWarp.gridWarped":
+    "This layer is warped by Edit > Transform > Warp: Layer > Bake to Pixels > Rasterize bakes it before a perspective warp.",
   "transform.readout.angle": "{angle}°",
   "transform.readout.scale": "W {w} % · H {h} %",
   "paste.layerName": "Pasted image",
@@ -1273,6 +1280,7 @@ const en = {
   "history.arrange": "Layer Order",
   "history.transform": "Transform",
   "history.warp": "Warp",
+  "history.perspectiveWarp": "Perspective Warp",
   "history.pixels": "Edit Pixels",
   "history.maskPixels": "Edit Layer Mask",
   "history.fillColor": "Fill Color",

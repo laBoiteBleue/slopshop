@@ -485,11 +485,28 @@ export type WarpGrid = {
   bend: number;
   vertical: boolean;
   warped: boolean;
+  /** The layer is warped by Perspective Warp's planes instead (the grid is then a plain one). */
+  perspective: boolean;
   columns: number;
   rows: number;
   frame: [number, number, number, number];
   points: [number, number][];
   toDocument: [number, number, number, number, number, number, number, number, number];
+};
+
+/**
+ * A pixel layer's planes for Edit > Perspective Warp (WarpPlanesDto in lib.rs): the frame of the
+ * content they warp, the map placing the content in the document, and its planes when it is
+ * warped by some (corners as laid out and as moved, content pixels; each plane four indices into
+ * them: see perspectiveWarp.ts). `grid`: the layer is warped by Warp's grid instead.
+ */
+export type WarpPlanes = {
+  frame: [number, number, number, number];
+  toDocument: [number, number, number, number, number, number, number, number, number];
+  layout: [number, number][];
+  warped: [number, number][];
+  planes: [number, number, number, number][];
+  grid: boolean;
 };
 
 /** Blend modes (BlendMode in crates/slopshop-core/src/blend.rs, ADR 0012). */
@@ -920,6 +937,16 @@ export type EditRequest =
       vertical?: boolean;
       /** A grid edited point by point (Custom), instead of a style. */
       grid?: { columns: number; rows: number; points: [number, number][] };
+    }
+  /** Edit > Perspective Warp (ADR 0044): a pixel layer warped by planes; none takes its warp away. */
+  | {
+      kind: "perspectiveWarpLayer";
+      id: number;
+      planes?: {
+        layout: [number, number][];
+        warped: [number, number][];
+        planes: [number, number, number, number][];
+      };
     }
   /** Image > Image Size: the whole image resampled to this size. */
   | { kind: "resizeImage"; width: number; height: number; resolution?: number }
@@ -1982,6 +2009,9 @@ export const engine = {
   /** A pixel layer's warp grid (a plain 3 × 3 one without a warp); null for other layers. */
   warpGrid: (documentId: number, layerId: number) =>
     invoke<WarpGrid | null>("warp_grid", { documentId, layerId }),
+  /** A pixel layer's perspective warp planes (none drawn without one); null for other layers. */
+  warpPlanes: (documentId: number, layerId: number) =>
+    invoke<WarpPlanes | null>("warp_planes", { documentId, layerId }),
   /**
    * Layer > Bake to Pixels and New Layer from Visible (ADR 0031): resolves with what shows at
    * once; the pixels follow (`onDocumentUpdated`), in the same undo entry.
