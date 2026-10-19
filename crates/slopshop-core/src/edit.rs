@@ -1059,9 +1059,9 @@ impl Edit {
             None => None,
             Some(preset) => {
                 let frame = crate::warp::frame_of(layer).ok_or(EditError::NotRaster(id))?;
-                let warp = crate::warp::Warp::from_preset(frame, preset)
+                let warp = crate::warp::Grid::from_preset(frame, preset)
                     .map_err(|_| EditError::InvalidTransform)?;
-                Some(Arc::new(warp))
+                Some(Arc::new(warp.into()))
             }
         };
         Ok(Edit::SetLayerWarp { id, warp })
@@ -1079,11 +1079,31 @@ impl Edit {
     ) -> Result<Edit, EditError> {
         let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
         let frame = crate::warp::frame_of(layer).ok_or(EditError::NotRaster(id))?;
-        let warp = crate::warp::Warp::new(frame, columns, rows, points, None)
+        let warp = crate::warp::Grid::new(frame, columns, rows, points, None)
             .map_err(|_| EditError::InvalidTransform)?;
         Ok(Edit::SetLayerWarp {
             id,
-            warp: Some(Arc::new(warp)),
+            warp: Some(Arc::new(warp.into())),
+        })
+    }
+
+    /// Edit > Perspective Warp (ADR 0044): pixel layer `id` warped by planes over
+    /// [`crate::warp::frame_of`], their corners laid out at `layout` and moved to `warped`
+    /// (content pixels), each plane four indices into them.
+    pub fn warp_layer_planes(
+        doc: &Document,
+        id: LayerId,
+        layout: Vec<(f64, f64)>,
+        warped: Vec<(f64, f64)>,
+        planes: Vec<[u32; 4]>,
+    ) -> Result<Edit, EditError> {
+        let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+        let frame = crate::warp::frame_of(layer).ok_or(EditError::NotRaster(id))?;
+        let warp = crate::warp::Planes::new(frame, layout, warped, planes)
+            .map_err(|_| EditError::InvalidTransform)?;
+        Ok(Edit::SetLayerWarp {
+            id,
+            warp: Some(Arc::new(warp.into())),
         })
     }
 
@@ -2534,7 +2554,11 @@ mod tests {
             bend: 0.3,
             vertical: true,
         };
-        let warp = Arc::new(crate::warp::Warp::from_preset([0.0, 0.0, 4.0, 4.0], preset).unwrap());
+        let warp = Arc::new(
+            crate::warp::Grid::from_preset([0.0, 0.0, 4.0, 4.0], preset)
+                .unwrap()
+                .into(),
+        );
         let undo = Edit::SetLayerWarp {
             id,
             warp: Some(Arc::clone(&warp)),
@@ -2575,10 +2599,40 @@ mod tests {
     }
 
     #[test]
+    fn planes_warp_a_pixel_layer_over_its_frame() {
+        let mut doc = Document::new(Size::new(10, 10));
+        let id = raster_layer(&mut doc, image(Size::new(4, 4), false, 255));
+        let layout = vec![(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)];
+        let mut warped = layout.clone();
+        warped[1] = (5.0, -1.0);
+        Edit::warp_layer_planes(&doc, id, layout.clone(), warped.clone(), vec![[0, 1, 2, 3]])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let warp = doc.layer(id).unwrap().warp.clone().unwrap();
+        let planes = warp.planes().unwrap();
+        assert_eq!(planes.frame(), [0.0, 0.0, 4.0, 4.0]);
+        assert_eq!(planes.warped(), &warped[..]);
+        assert!(warp.grid().is_none());
+        // Folded through its horizon line: refused; on another kind of layer too.
+        let mut folded = layout.clone();
+        folded[0] = (3.5, 3.5);
+        assert_eq!(
+            Edit::warp_layer_planes(&doc, id, layout.clone(), folded, vec![[0, 1, 2, 3]]),
+            Err(EditError::InvalidTransform)
+        );
+        let fill = stack(&mut doc, &["fill"])[0];
+        assert_eq!(
+            Edit::warp_layer_planes(&doc, fill, layout.clone(), layout, vec![[0, 1, 2, 3]]),
+            Err(EditError::NotRaster(fill))
+        );
+    }
+
+    #[test]
     fn a_grid_edited_point_by_point_warps_over_the_layer_frame() {
         let mut doc = Document::new(Size::new(10, 10));
         let id = raster_layer(&mut doc, image(Size::new(4, 4), false, 255));
-        let plain = crate::warp::Warp::identity([0.0, 0.0, 4.0, 4.0], 4, 2).unwrap();
+        let plain = crate::warp::Grid::identity([0.0, 0.0, 4.0, 4.0], 4, 2).unwrap();
         let mut points = plain.points().to_vec();
         points[0] = (-1.0, -0.5);
         Edit::warp_layer_grid(&doc, id, 4, 2, points.clone())
@@ -2586,6 +2640,7 @@ mod tests {
             .apply(&mut doc)
             .unwrap();
         let warp = doc.layer(id).unwrap().warp.clone().unwrap();
+        let warp = warp.grid().unwrap();
         assert_eq!((warp.columns(), warp.rows()), (4, 2));
         assert_eq!(warp.frame(), [0.0, 0.0, 4.0, 4.0]);
         assert_eq!(warp.points(), &points[..]);

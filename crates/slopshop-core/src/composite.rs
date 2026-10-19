@@ -2970,7 +2970,9 @@ mod tests {
         let mut warped = Document::new(Size::new(60, 40));
         let mut layer = halves(&mut warped);
         layer.warp = Some(Arc::new(
-            crate::warp::Warp::identity([0.0, 0.0, 40.0, 20.0], 3, 3).unwrap(),
+            crate::warp::Grid::identity([0.0, 0.0, 40.0, 20.0], 3, 3)
+                .unwrap()
+                .into(),
         ));
         push(&mut warped, layer);
         let (a, b) = (all(&plain), all(&warped));
@@ -2994,11 +2996,11 @@ mod tests {
             bend: 0.5,
             vertical: false,
         };
-        let warp = crate::warp::Warp::from_preset(frame, preset).unwrap();
+        let warp = crate::warp::Grid::from_preset(frame, preset).unwrap();
         // The arc keeps its top edge's middle where it was; its corners drop down and out.
         let (cx, cy) = warp.eval(0.0, 0.0);
         assert!(cx < -1.0 && cy > 5.0, "{cx} {cy}");
-        layer.warp = Some(Arc::new(warp));
+        layer.warp = Some(Arc::new(warp.into()));
         push(&mut doc, layer);
         let out = all(&doc);
         let at = |x: usize, y: usize| &out[(y * 60 + x) * 4..][..4];
@@ -3009,6 +3011,28 @@ mod tests {
         assert!(at(12, 24)[3] > 0.99, "{:?}", at(12, 24));
         // The halves stay on their sides of the middle.
         assert!(at(20, 15)[0] > 0.9 && at(40, 15)[2] > 0.9);
+    }
+
+    #[test]
+    fn perspective_warp_planes_move_the_pixels_they_hold() {
+        let mut doc = Document::new(Size::new(60, 40));
+        let mut layer = halves(&mut doc);
+        // One plane over the left half moved 5 pixels right whole: the whole layer follows
+        // (outside the plane, its map extended), as the layer moved.
+        let layout = vec![(2.0, 2.0), (18.0, 2.0), (18.0, 18.0), (2.0, 18.0)];
+        let warped = layout.iter().map(|&(x, y)| (x + 5.0, y)).collect();
+        let planes =
+            crate::warp::Planes::new([0.0, 0.0, 40.0, 20.0], layout, warped, vec![[0, 1, 2, 3]])
+                .unwrap();
+        layer.warp = Some(Arc::new(planes.into()));
+        push(&mut doc, layer);
+        let out = all(&doc);
+        let at = |x: usize, y: usize| &out[(y * 60 + x) * 4..][..4];
+        // The layer's left edge went from x = 10 to 15; the halves meet at 35 rather than 30.
+        assert_eq!(at(13, 15), [0.0; 4]);
+        assert!(at(16, 15)[0] > 0.99 && at(16, 15)[3] > 0.99);
+        assert!(at(33, 15)[0] > 0.99 && at(36, 15)[2] > 0.99);
+        assert!(at(53, 15)[2] > 0.99);
     }
 
     #[test]
