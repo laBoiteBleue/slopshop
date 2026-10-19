@@ -1621,6 +1621,8 @@ async fn move_snap_targets(
 /// for a layer without a warp, or a grid edited point by point: `warped` tells them apart), its
 /// patches and control points (content pixels, row-major), the frame of the content they warp,
 /// and the map from the content to the document (nine numbers, ADR 0038) that places them.
+/// `perspective`: the layer is warped by Perspective Warp's planes instead (the grid is then a
+/// plain one; Edit > Perspective Warp edits them).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WarpGridDto {
@@ -1628,6 +1630,7 @@ struct WarpGridDto {
     bend: f64,
     vertical: bool,
     warped: bool,
+    perspective: bool,
     columns: u32,
     rows: u32,
     frame: [f64; 4],
@@ -1658,13 +1661,20 @@ async fn warp_grid(
 
 fn warp_grid_of(document: &Document, id: LayerId) -> Option<WarpGridDto> {
     let layer = document.layer(id)?;
-    let grid = slopshop_core::warp::grid_of(layer)?;
-    let preset = layer.warp.as_ref().and_then(|w| w.preset());
+    let perspective = layer.warp.as_ref().is_some_and(|w| w.planes().is_some());
+    let grid = match perspective {
+        true => {
+            slopshop_core::warp::Grid::identity(slopshop_core::warp::frame_of(layer)?, 3, 3).ok()?
+        }
+        false => slopshop_core::warp::grid_of(layer)?,
+    };
+    let preset = grid.preset();
     Some(WarpGridDto {
         style: preset.map(|p| p.style.id()),
         bend: preset.map_or(0.0, |p| p.bend),
         vertical: preset.is_some_and(|p| p.vertical),
         warped: layer.warp.is_some(),
+        perspective,
         columns: grid.columns(),
         rows: grid.rows(),
         frame: grid.frame(),
@@ -1673,6 +1683,60 @@ fn warp_grid_of(document: &Document, id: LayerId) -> Option<WarpGridDto> {
             .transform
             .then(document.parent_transform(id))
             .to_array(),
+    })
+}
+
+/// A pixel layer's planes for Edit > Perspective Warp (ADR 0044): the frame of the content they
+/// warp, the map placing the content in the document (nine numbers, ADR 0038), and its planes
+/// when it is warped by some (their corners as laid out and as moved, content pixels; each plane
+/// four indices into them); none otherwise. `grid`: the layer is warped by Warp's grid instead.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WarpPlanesDto {
+    frame: [f64; 4],
+    to_document: [f64; 9],
+    layout: Vec<[f64; 2]>,
+    warped: Vec<[f64; 2]>,
+    planes: Vec<[u32; 4]>,
+    grid: bool,
+}
+
+/// The planes of pixel layer `layer_id` (none drawn yet when it has no perspective warp);
+/// `None` for other layers.
+#[tauri::command]
+async fn warp_planes(
+    state: State<'_, AppState>,
+    document_id: u64,
+    layer_id: u64,
+) -> Result<Option<WarpPlanesDto>, String> {
+    let document = state
+        .documents()?
+        .get_mut(document_id)?
+        .session
+        .document()
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        warp_planes_of(&document, LayerId::from_raw(layer_id))
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn warp_planes_of(document: &Document, id: LayerId) -> Option<WarpPlanesDto> {
+    let layer = document.layer(id)?;
+    let frame = slopshop_core::warp::frame_of(layer)?;
+    let planes = layer.warp.as_ref().and_then(|w| w.planes());
+    let flat = |points: &[(f64, f64)]| points.iter().map(|&(x, y)| [x, y]).collect();
+    Some(WarpPlanesDto {
+        frame,
+        to_document: layer
+            .transform
+            .then(document.parent_transform(id))
+            .to_array(),
+        layout: planes.map_or_else(Vec::new, |p| flat(p.layout())),
+        warped: planes.map_or_else(Vec::new, |p| flat(p.warped())),
+        planes: planes.map_or_else(Vec::new, |p| p.planes().to_vec()),
+        grid: layer.warp.as_ref().is_some_and(|w| w.grid().is_some()),
     })
 }
 
@@ -2526,6 +2590,7 @@ pub fn run() {
             paint::patch_selection,
             move_snap_targets,
             warp_grid,
+            warp_planes,
             clipboard::paste,
             layer_style::copy_layer_style,
             layer_style::paste_layer_style,
@@ -4778,7 +4843,14 @@ mod tests {
         let view = DocumentView::new(&s, &meta(), Vec::new());
         assert!(view.layers[0].warped);
         let layer = s.document().layers()[0].clone();
-        let preset = layer.warp.as_ref().unwrap().preset().unwrap();
+        let preset = layer
+            .warp
+            .as_ref()
+            .unwrap()
+            .grid()
+            .unwrap()
+            .preset()
+            .unwrap();
         assert_eq!(preset.style, slopshop_core::warp::WarpStyle::Flag);
         assert_eq!(
             crate::paint::unwarped(&layer),
@@ -4812,7 +4884,7 @@ mod tests {
             [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
         );
         // A 4 × 2 grid with its first corner moved, sent point by point.
-        let mut points: Vec<[f64; 2]> = slopshop_core::warp::Warp::identity(grid.frame, 4, 2)
+        let mut points: Vec<[f64; 2]> = slopshop_core::warp::Grid::identity(grid.frame, 4, 2)
             .unwrap()
             .points()
             .iter()
@@ -4841,6 +4913,58 @@ mod tests {
         });
         let request: EditRequest = serde_json::from_value(request).unwrap();
         assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
+    fn planes_are_shown_then_warp_a_pixel_layer() {
+        let mut s = super::blank_session(Size::new(40, 20), None, "Layer").unwrap();
+        let layer = s.document().layers()[0].id;
+        // No planes yet: the frame of the layer and where it is placed.
+        let planes = super::warp_planes_of(s.document(), layer).unwrap();
+        assert_eq!(planes.frame, [0.0, 0.0, 40.0, 20.0]);
+        assert!(planes.planes.is_empty() && !planes.grid);
+        assert_eq!(
+            planes.to_document,
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+        );
+        // One plane, its top right corner moved.
+        let layout = [[0.0, 0.0], [40.0, 0.0], [40.0, 20.0], [0.0, 20.0]];
+        let mut warped = layout;
+        warped[1] = [44.0, -3.0];
+        let request = serde_json::json!({
+            "kind": "perspectiveWarpLayer",
+            "id": layer.get(),
+            "planes": { "layout": layout, "warped": warped, "planes": [[0, 1, 2, 3]] },
+        });
+        let request: EditRequest = serde_json::from_value(request).unwrap();
+        assert_eq!(
+            request.history_label(),
+            Some(HistoryLabel::new("perspectiveWarp"))
+        );
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let planes = super::warp_planes_of(s.document(), layer).unwrap();
+        assert_eq!(planes.warped, warped);
+        assert_eq!(planes.planes, vec![[0, 1, 2, 3]]);
+        assert!(DocumentView::new(&s, &meta(), Vec::new()).layers[0].warped);
+        // Warp's grid is not this one: Edit > Transform > Warp is told so.
+        let grid = super::warp_grid_of(s.document(), layer).unwrap();
+        assert!(grid.perspective && grid.warped);
+        // A plane folded through its horizon line: refused.
+        warped[0] = [39.0, 19.0];
+        let request = serde_json::json!({
+            "kind": "perspectiveWarpLayer",
+            "id": layer.get(),
+            "planes": { "layout": layout, "warped": warped, "planes": [[0, 1, 2, 3]] },
+        });
+        let request: EditRequest = serde_json::from_value(request).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+        // No planes: the warp is taken away.
+        let request = serde_json::json!({ "kind": "perspectiveWarpLayer", "id": layer.get() });
+        let request: EditRequest = serde_json::from_value(request).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        assert!(s.document().layers()[0].warp.is_none());
     }
 
     #[test]

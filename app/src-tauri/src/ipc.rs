@@ -1228,6 +1228,15 @@ pub struct WarpGridRequest {
     pub points: Vec<[f64; 2]>,
 }
 
+/// Perspective Warp's planes (ADR 0044): their corners where they were laid out and where they
+/// were moved (content pixels), each plane four indices into them, in order around it.
+#[derive(Debug, Deserialize)]
+pub struct WarpPlanesRequest {
+    pub layout: Vec<[f64; 2]>,
+    pub warped: Vec<[f64; 2]>,
+    pub planes: Vec<[u32; 4]>,
+}
+
 /// Edits the UI can request. Translated into core [`Edit`]s; the engine validates them.
 #[derive(Debug, Deserialize)]
 #[serde(
@@ -1579,6 +1588,13 @@ pub enum EditRequest {
         #[serde(default)]
         grid: Option<WarpGridRequest>,
     },
+    /// Edit > Perspective Warp (ADR 0044): pixel layer `id` warped by `planes`, or its warp
+    /// taken away (none: Layout mode shows the layer unwarped).
+    PerspectiveWarpLayer {
+        id: u64,
+        #[serde(default)]
+        planes: Option<WarpPlanesRequest>,
+    },
     /// Image > Image Size: the whole image resampled to `width` × `height` (ADR 0018).
     ResizeImage {
         width: u32,
@@ -1765,6 +1781,7 @@ impl EditRequest {
             Self::TranslateLayers { .. } => HistoryLabel::new("move"),
             Self::TransformLayers { .. } => HistoryLabel::new("transform"),
             Self::WarpLayer { .. } => HistoryLabel::new("warp"),
+            Self::PerspectiveWarpLayer { .. } => HistoryLabel::new("perspectiveWarp"),
             Self::ResizeImage { .. } => HistoryLabel::new("imageSize"),
             Self::CanvasSize { .. } => HistoryLabel::new("canvasSize"),
             Self::Crop { .. } => HistoryLabel::new("crop"),
@@ -2416,6 +2433,24 @@ impl EditRequest {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::transform_layers(session.document(), &ids, matrix_of(&matrix)?)
                     .map_err(|e| e.to_string())?
+            }
+            EditRequest::PerspectiveWarpLayer { id, planes: None } => {
+                Edit::warp_layer(session.document(), LayerId::from_raw(id), None)
+                    .map_err(|e| e.to_string())?
+            }
+            EditRequest::PerspectiveWarpLayer {
+                id,
+                planes: Some(planes),
+            } => {
+                let points = |p: Vec<[f64; 2]>| p.into_iter().map(|[x, y]| (x, y)).collect();
+                Edit::warp_layer_planes(
+                    session.document(),
+                    LayerId::from_raw(id),
+                    points(planes.layout),
+                    points(planes.warped),
+                    planes.planes,
+                )
+                .map_err(|e| e.to_string())?
             }
             EditRequest::WarpLayer {
                 id,
