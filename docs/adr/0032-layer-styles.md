@@ -133,3 +133,34 @@ Status: accepted (2026-10-15, under the maintainer's delegation; to review).
   1049 and `uglg`. Alternative rejected: resolving the light while drawing, which would tie
   each style's cached effects to a document and break where layers move between documents
   (paint previews, scratch documents).
+
+## Amendment (2026-10-19): contours
+
+Status: accepted (2026-10-19, under the maintainer's delegation; to review).
+
+- **A contour** (`slopshop_core::contour::Contour`) is a curve on 0–255 through 2 to 16 points,
+  inputs strictly increasing, each point smooth or a corner (where the curve breaks); between
+  corners, a natural cubic spline as the Curves adjustment's. A plain value (`Copy`), held by
+  the effects that have one in Photoshop: Drop and Inner Shadow, Outer and Inner Glow (with
+  their Range, 1 to 100 %), Satin, and Bevel and Emboss (its Gloss Contour, and its Contour
+  element with its checkbox and Range). Each has its Anti-aliased: off, the mask's input is
+  stepped by 1 %.
+- **Where it applies**: an effect's mask (its fade, 0 far from the shape, 1 at it) goes through
+  the contour (divided by the Range first) before it is colored; outward, a contour not
+  starting at 0 fades out near 0 so that it does not fill the canvas. Satin's blurred shape
+  goes through it before the difference; a bevel's height through its Contour, how much its
+  surface faces the light through its Gloss Contour. The contour is part of the mask's cache
+  key; a linear contour over the whole mask makes no pass.
+- **Presets**: Photoshop's twelve (Linear, Cone, Cone - Inverted, Cove - Deep, Cove - Shallow,
+  Gaussian, Half Round, Ring, Ring - Double, Rolling Slope - Descending, Rounded Steps,
+  Sawtooth 1) are the engine's, which the UI lists (`contour_presets`, each curve sampled for
+  its thumbnail); their points are drawn after Photoshop's shapes, not taken from it. A
+  document from Photoshop brings its contours' own points: any curve of up to 16 points is
+  kept as it is (shown as Custom when it is no preset) and written back; one SlopShop cannot
+  hold is read as linear and reported as approximated.
+- **Defaults**, Photoshop's: linear for all but Satin (Gaussian, anti-aliased); a glow's Range
+  50 %; the bevel's Contour element off.
+- `.slop` 0.39 writes each only when it differs from what its absence reads (linear, not
+  anti-aliased, a glow's Range 100 %, the Contour element off: as effects were drawn before);
+  no new node version, so an older reader draws linear contours.
+- Not yet: a contour editor (Photoshop's Contour Editor, its own curves saved as presets).

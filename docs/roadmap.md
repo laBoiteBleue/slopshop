@@ -196,8 +196,8 @@ including the ones it leaves out: [feature-map.md](feature-map.md).
 - [x] Layer styles: Gradient Overlay (Linear and Radial, angle, scale, reverse, aligned with
       the layer or the canvas; drawn as a gradient fill within the shape; PSD `GrFl`), `.slop`
       node v12
-- [x] Layer styles: Satin (the blurred shape against itself moved, inverted or not; a linear
-      contour; PSD `ChFX`), `.slop` node v13
+- [x] Layer styles: Satin (the blurred shape against itself moved, inverted or not; PSD
+      `ChFX`), `.slop` node v13
 - [x] Layer styles: Bevel and Emboss (Inner, Outer, Emboss, Pillow; Smooth; depth, direction,
       size, soften, light angle and altitude, highlight and shadow; PSD `ebbl`), `.slop` node v14
 - [x] Layer > Layer Style's commands on styles (2026-10-15): Copy and Paste Layer Style (onto
@@ -207,7 +207,11 @@ including the ones it leaves out: [feature-map.md](feature-map.md).
 - [x] Layer > Layer Style > Global Light (2026-10-15): a document angle and altitude shared
       by Drop Shadow, Inner Shadow and Bevel and Emboss where Use Global Light is checked;
       `.slop` 0.37, PSD resources 1037 and 1049 and `uglg`
-- [ ] Layer styles: effect contours
+- [x] Layer styles: contours (2026-10-19): Photoshop's twelve contours (Linear, Cone, Gaussian,
+      Ring…) and Anti-aliased for Drop and Inner Shadow, Outer and Inner Glow (with Range) and
+      Satin (Gaussian by default), Bevel and Emboss's Gloss Contour and Contour element; the
+      Layer Style dialog's Contour pickers; `.slop` 0.39, PSD `TrnS`/`MpgS` (any curve of up to
+      16 points comes over and goes back). Not yet: a custom contour editor (curve editing)
 - [ ] Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md)): settled by
       [ADR 0040](adr/0040-sources.md), a tree of layers referencing read-only sources

@@ -178,16 +178,16 @@ Menu,Layer > Duplicate Layer,,done,
 Menu,Layer > Delete,,done,
 Menu,Layer > Rename Layer,,done,
 Menu,Layer > Layer Style > Blending Options,,partial,"Fill Opacity (ADR 0032); Blend If, knockout and channels are open"
-Menu,Layer > Layer Style > Bevel & Emboss,,partial,"Inner and Outer Bevel, Emboss, Pillow Emboss, Smooth, depth, up or down, size, soften, angle and altitude, highlight and shadow; CPU and GPU; PSD import and export; not yet: Chisel, Stroke Emboss, contours, texture"
+Menu,Layer > Layer Style > Bevel & Emboss,,partial,"Inner and Outer Bevel, Emboss, Pillow Emboss, Smooth, depth, up or down, size, soften, angle and altitude, highlight and shadow, Gloss Contour and the Contour element (Photoshop's contours, Anti-aliased, Range); CPU and GPU; PSD import and export; not yet: Chisel, Stroke Emboss, texture, a custom contour editor"
 Menu,Layer > Layer Style > Stroke,,done,"non-destructive, with PSD import and export (ADR 0032)"
-Menu,Layer > Layer Style > Inner Shadow,,done,"non-destructive, with PSD import and export (ADR 0032)"
-Menu,Layer > Layer Style > Inner Glow,,done,"non-destructive, with PSD import and export (ADR 0032)"
-Menu,Layer > Layer Style > Satin,,partial,"color, mode, opacity, angle, distance, size, invert, CPU and GPU; PSD import and export; a linear contour only (Photoshop's default is Gaussian)"
+Menu,Layer > Layer Style > Inner Shadow,,done,"non-destructive, with PSD import and export (ADR 0032); contour (Photoshop's contours) and Anti-aliased; not yet: noise, a custom contour editor"
+Menu,Layer > Layer Style > Inner Glow,,done,"non-destructive, with PSD import and export (ADR 0032); contour (Photoshop's contours) and Anti-aliased, Range; not yet: noise, jitter, gradient glows, Precise, Source Center, a custom contour editor"
+Menu,Layer > Layer Style > Satin,,done,"color, mode, opacity, angle, distance, size, invert, contour (Gaussian by default, as Photoshop) and Anti-aliased, CPU and GPU; PSD import and export; not yet: a custom contour editor"
 Menu,Layer > Layer Style > Color Overlay,,done,"non-destructive, with PSD import and export (ADR 0032)"
 Menu,Layer > Layer Style > Gradient Overlay,,partial,"Linear and Radial, angle, scale, reverse, aligned with the layer or the canvas, CPU and GPU; PSD import and export; not yet: Angle, Reflected and Diamond styles, an offset, transparency stops"
 Menu,Layer > Layer Style > Pattern Overlay,,done,"a library pattern within the shape: scale, angle, Link with Layer, mode, opacity (ADR 0042); not written to PSD yet"
-Menu,Layer > Layer Style > Outer Glow,,done,"non-destructive, with PSD import and export (ADR 0032)"
-Menu,Layer > Layer Style > Drop Shadow,,done,"non-destructive, with PSD import and export (ADR 0032)"
+Menu,Layer > Layer Style > Outer Glow,,done,"non-destructive, with PSD import and export (ADR 0032); contour (Photoshop's contours) and Anti-aliased, Range; not yet: noise, jitter, gradient glows, Precise, Source Center, a custom contour editor"
+Menu,Layer > Layer Style > Drop Shadow,,done,"non-destructive, with PSD import and export (ADR 0032); contour (Photoshop's contours) and Anti-aliased; not yet: noise, a custom contour editor"
 Menu,Layer > Layer Style > Copy Layer Style,,done,"the effects, Fill Opacity and whether they show; kept by the app for every tab; also on the fx mark's right-click menu"
 Menu,Layer > Layer Style > Paste Layer Style,,done,"onto every selected layer (adjustment layers aside), any tab, one undo entry; the layers' opacity and blend mode are not pasted"
 Menu,Layer > Layer Style > Clear Layer Style,,done,
