@@ -2523,6 +2523,102 @@ fn shear_keeps_its_curve_in_a_file() {
     fs::remove_file(&path).ok();
 }
 
+#[test]
+fn displace_keeps_its_maps_as_sources_in_a_file() {
+    use slopshop_core::filter::Filter;
+    let mut doc = golden_document();
+    let id = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster { stack: Some(_), .. } => Some(l.id),
+            _ => None,
+        })
+        .expect("a layer with a stack");
+    // A layer showing a source of its own, in the bin.
+    let shown = slopshop_core::Source::new(
+        Arc::new(
+            RasterImage::from_pixels(Size::new(2, 2), PixelFormat::RGBA8_SRGB, &[140; 16]).unwrap(),
+        ),
+        "map.png",
+    );
+    let other = slopshop_core::LayerId::from_raw(push(
+        &mut doc,
+        "map",
+        LayerContent::from_source(Arc::clone(&shown)),
+        1.0,
+    ));
+    // A map a layer shows (from the bin), and one from a file no layer shows.
+    let pixels: Vec<u8> = (0..6 * 4)
+        .flat_map(|i| [i as u8 * 9, 255 - i as u8, 0, 255])
+        .collect();
+    let file = slopshop_core::Source::new(
+        Arc::new(
+            RasterImage::from_pixels(Size::new(6, 4), PixelFormat::RGBA8_SRGB, &pixels).unwrap(),
+        ),
+        "ripples.png",
+    );
+    let maps = [
+        (Arc::clone(&shown), [20.0, -35.0], true),
+        (Arc::clone(&file), [999.0, 1.0], false),
+    ];
+    for (map, scale, tile) in &maps {
+        let filter = Filter::Displace {
+            scale: *scale,
+            tile: *tile,
+            wrap: !tile,
+        };
+        Edit::apply_filter_with_map(&doc, id, filter, Some(Arc::clone(map)))
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+    }
+    let path = temp_path("displace.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let layer = loaded.layer(id).unwrap();
+    let LayerContent::Raster {
+        stack: Some(read), ..
+    } = &layer.content
+    else {
+        panic!("a layer with a stack");
+    };
+    let steps: Vec<_> = read
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Filter(filter) if filter.steps()[0].filter.takes_map() => {
+                Some(Arc::clone(&filter.steps()[0]))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(steps.len(), 2);
+    // The bin's map is still the layer's source, one source; the file's has its pixels and name.
+    let first = steps[0].map.as_ref().unwrap();
+    assert!(Arc::ptr_eq(
+        first,
+        loaded.layer(other).unwrap().content.source().unwrap()
+    ));
+    let second = steps[1].map.as_ref().unwrap();
+    assert_eq!(second.name(), "ripples.png");
+    assert_eq!(
+        second.image().levels()[0].tiles(),
+        file.image().levels()[0].tiles()
+    );
+    for (step, (_, scale, tile)) in steps.iter().zip(&maps) {
+        assert_eq!(
+            step.filter,
+            Filter::Displace {
+                scale: *scale,
+                tile: *tile,
+                wrap: !tile
+            }
+        );
+    }
+    fs::remove_file(&path).ok();
+}
+
 /// A field that pushed pixels around and froze a spot, over a layer of `size`.
 fn liquified_field(size: slopshop_core::Size) -> Arc<slopshop_core::liquify::Field> {
     use slopshop_core::liquify::{Brush, Field, Stroke, Tool};

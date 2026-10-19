@@ -185,7 +185,15 @@ fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
                                 .steps()
                                 .iter()
                                 .filter_map(|s| s.selection.as_ref())
-                                .map(|s| Arc::clone(s.image())),
+                                .map(|s| Arc::clone(s.image()))
+                                .chain(
+                                    // Displace's maps (sources, ADR 0040).
+                                    filter
+                                        .steps()
+                                        .iter()
+                                        .filter_map(|s| s.map.as_ref())
+                                        .map(|m| Arc::clone(m.image())),
+                                ),
                         ),
                         Entry::Liquify(liquify) => {
                             let (displacement, frozen) = liquify.images().map_err(stack_error)?;
@@ -689,7 +697,7 @@ fn build_manifest(
                                     .steps()
                                     .iter()
                                     .map(|step| {
-                                        json!({
+                                        let mut value = json!({
                                             "filter": step.filter.id(),
                                             "values": step.filter.params(),
                                             "selection": step
@@ -698,7 +706,12 @@ fn build_manifest(
                                                 .and_then(|s| key(s.image())),
                                             "transform": numbers(step.to_document),
                                             "space": step.space.id(),
-                                        })
+                                        });
+                                        // Displace's map, in the document's list.
+                                        if let Some(map) = &step.map {
+                                            value["map"] = json!(source_index.get(&map.id()));
+                                        }
+                                        value
                                     })
                                     .collect();
                                 json!({ "filter": steps })
