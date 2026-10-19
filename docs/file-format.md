@@ -538,7 +538,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     layer. `params.adjustment` is `exposure`, `hueSaturation`, `levels`, `brightnessContrast`,
     `vibrance`, `invert`, `posterize` or `threshold`, and from schema 0.8 `blackWhite`,
     `colorBalance`, `photoFilter` or `channelMixer`, from schema 0.9 `curves`, and from schema
-    0.14 `gradientMap`, from schema 0.15 `selectiveColor`, from schema 0.43 `colorLookup`.
+    0.14 `gradientMap`, from schema 0.15 `selectiveColor`, from schema 0.46 `colorLookup`.
     `params.values` holds its parameters in
     this order: exposure, offset, gamma; hue, saturation, lightness; input black, input
     white, gamma, output black, output white; brightness, contrast; vibrance, saturation;
@@ -565,7 +565,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     From schema 0.15, at most 37 values: `selectiveColor` has the cyan, magenta, yellow and
     black (integers, −100 to 100 %) of the reds, yellows, greens, cyans, blues, magentas,
     whites, neutrals and blacks, then the method (flag: absolute).
-    From schema 0.43, `colorLookup` has no values of its own but, once a table is chosen,
+    From schema 0.46, `colorLookup` has no values of its own but, once a table is chosen,
     `params.lut`: `name` (the file's), `dimension` (3: a 3D table; 1: three 1D tables),
     `size` (points a side, 2 to 129 for 3D, 2 to 65536 for 1D), `domain` (`[[r, g, b], [r, g,
     b]]`, finite, the inputs mapped to the first and the last point, each minimum below its
