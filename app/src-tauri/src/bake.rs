@@ -498,6 +498,7 @@ mod tests {
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             mask: None,
+            vector_mask: None,
             clipped: false,
             transform: slopshop_core::Affine::IDENTITY.into(),
             content: LayerContent::raster(Arc::new(image)),
