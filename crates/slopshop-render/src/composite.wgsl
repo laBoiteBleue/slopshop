@@ -1207,6 +1207,21 @@ fn lut_entry(start: u32, entry: u32) -> vec3<f32> {
 // as it is) and size, `lo` and `hi` its domain; the word `table` of the tile table says where
 // its values start (absolute: the tables are after every fill's own words). 1D: each channel
 // interpolated linearly in its column; 3D: tetrahedrally, in the same tetrahedra as the CPU.
+// Color Lookup (slopshop_core::lut::ColorLut::apply): `p` its dimension (0: no table, the color
+// as it is) and size, `lo` and `hi` its domain; the word `table` of the tile table says where
+// its values start (absolute: the tables are after every fill's own words). 1D: each channel
+// interpolated linearly in its column; 3D: tetrahedrally, in the same tetrahedra as the CPU,
+// chosen without branches (WARP, the software Direct3D, compiles the branchy form for minutes).
+// Color Lookup (slopshop_core::lut::ColorLut::apply): `p` its dimension (0: no table, the color
+// as it is) and size, `lo` and `hi` its domain; the word `table` of the tile table says where
+// its values start (absolute: the tables are after every fill's own words). 1D: each channel
+// interpolated linearly in its column; 3D: tetrahedrally, in the same tetrahedra as the CPU,
+// chosen without branches (WARP, the software Direct3D, compiles the branchy form for minutes).
+// Color Lookup (slopshop_core::lut::ColorLut::apply): `p` its dimension (0: no table, the color
+// as it is) and size, `lo` and `hi` its domain; the word `table` of the tile table says where
+// its values start (absolute: the tables are after every fill's own words). 1D: each channel
+// interpolated linearly in its column; 3D: tetrahedrally, in the same tetrahedra as the CPU,
+// chosen without branches (WARP, the software Direct3D, compiles the branchy form for minutes).
 fn color_lookup(c: vec3<f32>, p: vec4<f32>, lo: vec3<f32>, hi: vec3<f32>, table: u32) -> vec3<f32> {
     let dimension = u32(p.x);
     if dimension == 0u {
@@ -1218,53 +1233,44 @@ fn color_lookup(c: vec3<f32>, p: vec4<f32>, lo: vec3<f32>, hi: vec3<f32>, table:
     let base = min(vec3<u32>(floor(x)), vec3<u32>(n - 2u));
     let f = x - vec3<f32>(base);
     if dimension == 1u {
-        var out: vec3<f32>;
-        for (var i = 0u; i < 3u; i++) {
-            let a = lut_entry(start, base[i])[i];
-            let b = lut_entry(start, base[i] + 1u)[i];
-            out[i] = a + (b - a) * f[i];
-        }
-        return out;
+        let a = vec3<f32>(
+            lut_entry(start, base.r).r,
+            lut_entry(start, base.g).g,
+            lut_entry(start, base.b).b,
+        );
+        let b = vec3<f32>(
+            lut_entry(start, base.r + 1u).r,
+            lut_entry(start, base.g + 1u).g,
+            lut_entry(start, base.b + 1u).b,
+        );
+        return a + (b - a) * f;
     }
-    var w: vec3<f32>;
-    var s1: vec3<u32>;
-    var s2: vec3<u32>;
-    if f.r > f.g {
-        if f.g > f.b {
-            w = vec3<f32>(f.r, f.g, f.b);
-            s1 = vec3<u32>(1u, 0u, 0u);
-            s2 = vec3<u32>(1u, 1u, 0u);
-        } else if f.r > f.b {
-            w = vec3<f32>(f.r, f.b, f.g);
-            s1 = vec3<u32>(1u, 0u, 0u);
-            s2 = vec3<u32>(1u, 0u, 1u);
-        } else {
-            w = vec3<f32>(f.b, f.r, f.g);
-            s1 = vec3<u32>(0u, 0u, 1u);
-            s2 = vec3<u32>(1u, 0u, 1u);
-        }
-    } else if f.b > f.g {
-        w = vec3<f32>(f.b, f.g, f.r);
-        s1 = vec3<u32>(0u, 0u, 1u);
-        s2 = vec3<u32>(0u, 1u, 1u);
-    } else if f.b > f.r {
-        w = vec3<f32>(f.g, f.b, f.r);
-        s1 = vec3<u32>(0u, 1u, 0u);
-        s2 = vec3<u32>(0u, 1u, 1u);
-    } else {
-        w = vec3<f32>(f.g, f.r, f.b);
-        s1 = vec3<u32>(0u, 1u, 0u);
-        s2 = vec3<u32>(1u, 1u, 0u);
-    }
-    let v0 = lut_entry(start, (base.b * n + base.g) * n + base.r);
+    // The CPU's six cases (`tetrahedron` in lut.rs): the channel stepped first, then second.
+    let rg = f.r > f.g;
+    let gb = f.g > f.b;
+    let rb = f.r > f.b;
+    let bg = f.b > f.g;
+    let br = f.b > f.r;
+    let red_first = rg && (gb || rb);
+    let blue_first = (rg && !gb && !rb) || (!rg && bg);
+    let s1 = select(select(vec3<u32>(0u, 1u, 0u), vec3<u32>(0u, 0u, 1u), blue_first), vec3<u32>(1u, 0u, 0u), red_first);
+    // Red and green (cases 1 and 6), red and blue (2 and 3), green and blue (4 and 5).
+    let red_green = (rg && gb) || (!rg && !bg && !br);
+    let red_blue = rg && !gb;
+    let s2 = select(select(vec3<u32>(0u, 1u, 1u), vec3<u32>(1u, 0u, 1u), red_blue), vec3<u32>(1u, 1u, 0u), red_green);
+    // The fractions in decreasing order.
+    let largest = max(max(f.r, f.g), f.b);
+    let smallest = min(min(f.r, f.g), f.b);
+    let middle = max(min(f.r, f.g), min(max(f.r, f.g), f.b));
     let c1 = base + s1;
-    let v1 = lut_entry(start, (c1.b * n + c1.g) * n + c1.r);
     let c2 = base + s2;
+    let v0 = lut_entry(start, (base.b * n + base.g) * n + base.r);
+    let v1 = lut_entry(start, (c1.b * n + c1.g) * n + c1.r);
     let v2 = lut_entry(start, (c2.b * n + c2.g) * n + c2.r);
-    let c3 = base + vec3<u32>(1u);
-    let v3 = lut_entry(start, (c3.b * n + c3.g) * n + c3.r);
-    return v0 + w.x * (v1 - v0) + w.y * (v2 - v1) + w.z * (v3 - v2);
+    let v3 = lut_entry(start, ((base.b + 1u) * n + base.g + 1u) * n + base.r + 1u);
+    return v0 + largest * (v1 - v0) + middle * (v2 - v1) + smallest * (v3 - v2);
 }
+
 
 fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, p4: vec4<f32>, table: u32, c: vec3<f32>) -> vec3<f32> {
     switch kind {
@@ -1404,22 +1410,21 @@ fn adjust_layer(layer: Layer, below: vec4<f32>, coverage: f32) -> vec4<f32> {
     }
     let straight = below.rgb / alpha;
     let perceptual = (layer.flags & FLAG_PERCEPTUAL) != 0u;
-    var adjusted: vec3<f32>;
     let kind = layer.format;
-    let p0 = layer.color;
-    let p1 = layer.transfer;
-    let p2 = layer.transfer2;
-    let p3 = layer.m0;
-    let p4 = layer.m1;
-    if kind == ADJUST_EXPOSURE || kind == ADJUST_PHOTO_FILTER {
-        adjusted = adjust_color(kind, p0, p1, p2, p3, p4, layer.table_offset, straight);
-    } else {
-        // Gradient Map and Selective Color work on sRGB-encoded values whatever the blend
-        // space.
-        let space = perceptual || kind == ADJUST_GRADIENT_MAP || kind == ADJUST_SELECTIVE_COLOR
-            || kind == ADJUST_COLOR_LOOKUP;
-        let encoded = to_blend(straight, space);
-        adjusted = from_blend(adjust_color(kind, p0, p1, p2, p3, p4, layer.table_offset, encoded), space);
+    // Exposure and Photo Filter work in linear light; Gradient Map, Selective Color and Color
+    // Lookup on sRGB-encoded values whatever the blend space; the others in the blend space.
+    // One call of `adjust_color` (it is inlined at each call: the shader stays small enough for
+    // WARP, the software Direct3D, to compile in reasonable time).
+    let linear = kind == ADJUST_EXPOSURE || kind == ADJUST_PHOTO_FILTER;
+    let space = perceptual || kind == ADJUST_GRADIENT_MAP || kind == ADJUST_SELECTIVE_COLOR
+        || kind == ADJUST_COLOR_LOOKUP;
+    var input = straight;
+    if !linear {
+        input = to_blend(straight, space);
+    }
+    var adjusted = adjust_color(kind, layer.color, layer.transfer, layer.transfer2, layer.m0, layer.m1, layer.table_offset, input);
+    if !linear {
+        adjusted = from_blend(adjusted, space);
     }
     return fade(below, vec4<f32>(adjusted * alpha, alpha), coverage, perceptual);
 }
@@ -1560,22 +1565,22 @@ fn composite(footprint: Footprint, layer_count: u32, count: ptr<function, u32>) 
             local = paint_over(local, sampled, k, (layer.flags & FLAG_PERCEPTUAL) != 0u);
             continue;
         }
-        if layer.kind == KIND_STACK_EFFECT {
-            var coverage = 1.0;
-            if (layer.flags & FLAG_MASK) != 0u {
-                coverage = mask_coverage(layer, footprint, resampled[1]);
-            }
-            local = adjust_layer(layer, local, coverage);
-            continue;
-        }
-        if layer.kind == KIND_ADJUST {
-            var coverage = layer.opacity;
+        // A stack's effect adjusts the layer's pixels, an adjustment layer what is below it: one
+        // call of `adjust_layer` for both (see there).
+        if layer.kind == KIND_STACK_EFFECT || layer.kind == KIND_ADJUST {
+            let effect = layer.kind == KIND_STACK_EFFECT;
+            var coverage = select(layer.opacity, 1.0, effect);
             if (layer.flags & FLAG_MASK) != 0u {
                 coverage *= mask_coverage(layer, footprint, resampled[1]);
             }
-            acc = adjust_layer(layer, acc, coverage);
-            if footprint.exact {
-                acc = saturated(acc, count);
+            let adjusted = adjust_layer(layer, select(acc, local, effect), coverage);
+            if effect {
+                local = adjusted;
+            } else {
+                acc = adjusted;
+                if footprint.exact {
+                    acc = saturated(acc, count);
+                }
             }
             continue;
         }
