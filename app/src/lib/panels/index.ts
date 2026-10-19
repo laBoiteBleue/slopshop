@@ -7,12 +7,14 @@ import Properties from "./Properties.svelte";
 import Histogram from "./Histogram.svelte";
 import History from "./History.svelte";
 import Info from "./Info.svelte";
+import Paths from "./Paths.svelte";
 import Selections from "./Selections.svelte";
 import Sources from "./Sources.svelte";
 
 export const PANEL_COMPONENTS: Record<PanelId, Component> = {
   properties: Properties,
   selections: Selections,
+  paths: Paths,
   sources: Sources,
   history: History,
   histogram: Histogram,

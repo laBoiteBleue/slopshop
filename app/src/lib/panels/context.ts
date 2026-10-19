@@ -9,6 +9,7 @@ import type {
   EditRequest,
   FontsView,
   LayerView,
+  PathRef,
   SelectionMode,
   TextAlign,
   TextDto,
@@ -66,6 +67,18 @@ export type PanelContext = {
   selectLayers(ids: number[]): void;
   /** A new layer showing source `source` above the active layer, selected (ADR 0040). */
   newLayerFromSource(source: number, name: string): void;
+  /** The path chosen in the Paths panel (ADR 0041), while it is listed. */
+  readonly chosenPath: PathRef | null;
+  /** Choose a path in the Paths panel (none: `null`). */
+  choosePath(ref: PathRef | null): void;
+  /** Paths panel > Load Path as Selection (Ctrl+click: combined by `mode`). */
+  loadPathSelection(ref: PathRef, mode: SelectionMode): void;
+  /** Fill Path: with the foreground color, or through Edit > Fill's dialog. */
+  fillPath(ref: PathRef, dialog: boolean): void;
+  /** Stroke Path: with the tool chosen last, or through its dialog. */
+  strokePath(ref: PathRef, dialog: boolean): void;
+  /** Make Work Path from Selection: at the last tolerance, or through its dialog. */
+  makeWorkPath(dialog: boolean): void;
 };
 
 /** The context's key (tests give panels a context of their own). */

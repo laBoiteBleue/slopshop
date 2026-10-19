@@ -620,7 +620,34 @@ export type DocumentView = {
    * panel. Absent: none.
    */
   sources?: SourceView[];
+  /**
+   * The Paths panel's paths (ADR 0041): saved paths and the Work Path, in the panel's order.
+   * Absent: none.
+   */
+  paths?: PathView[];
 };
+
+/** A path's geometry (the Pen's; `pen.ts` names it too). */
+type PathGeometry = Extract<ShapeGeometry, { kind: "path" }>;
+
+/** A path of the document (ADR 0041): a saved path, or the Work Path (named by the UI). */
+export type PathView = {
+  id: number;
+  /** Empty for the Work Path. */
+  name: string;
+  work: boolean;
+  /** Its subpaths, in document pixels. */
+  geometry: PathGeometry;
+};
+
+/**
+ * A path the Paths panel acts on: one of the document's, or a layer's shape path or vector mask
+ * path (listed while that layer is active).
+ */
+export type PathRef =
+  | { kind: "path"; id: number }
+  | { kind: "shape"; layer: number }
+  | { kind: "vectorMask"; layer: number };
 
 /** A source (ADR 0040): content kept once, shown by one layer or more. */
 export type SourceView = {
@@ -1004,8 +1031,22 @@ export type EditRequest =
   | { kind: "setGuides"; guides: Guide[] }
   | { kind: "setLayerMaskEnabled"; id: number; enabled: boolean }
   | { kind: "removeLayerMask"; id: number }
-  /** Layer > Vector Mask (ADR 0041); Current Path takes vector layer `from`'s path. */
-  | { kind: "addVectorMask"; ids: number[]; mask: VectorMaskKind; from?: number }
+  /**
+   * Layer > Vector Mask (ADR 0041); Current Path takes vector layer `from`'s path, `path` (the
+   * Paths panel's Add a Mask) document path `path`'s.
+   */
+  | { kind: "addVectorMask"; ids: number[]; mask: VectorMaskKind; from?: number; path?: number }
+  /** The Pen in Path mode with no path chosen: a new Work Path (document pixels). */
+  | { kind: "setWorkPath"; path: PathGeometry }
+  /** Document path `id` drawn in or edited with the Pen (document pixels). */
+  | { kind: "setPathGeometry"; id: number; path: PathGeometry }
+  | { kind: "newPath"; name: string }
+  | { kind: "renamePath"; id: number; name: string }
+  /** Save Path: the Work Path kept as `name`. */
+  | { kind: "savePath"; id: number; name: string }
+  /** A saved path of `from`'s subpaths (a layer's placed in the document). */
+  | { kind: "duplicatePath"; from: PathRef; name: string }
+  | { kind: "deletePath"; id: number }
   | { kind: "setVectorMaskPath"; id: number; path: ShapeGeometry }
   | { kind: "setVectorMaskFeather"; id: number; feather: number }
   | { kind: "setVectorMaskEnabled"; id: number; enabled: boolean }
@@ -1698,7 +1739,7 @@ export type VectorMaskView = {
 };
 
 /** Layer > Vector Mask's new masks. */
-export type VectorMaskKind = "revealAll" | "hideAll" | "currentPath";
+export type VectorMaskKind = "revealAll" | "hideAll" | "currentPath" | "path";
 
 /** What of a layer a selection is loaded from (Ctrl+click on one of its thumbnails). */
 export type LayerPart = "pixels" | "mask" | "vectorMask";
@@ -2157,6 +2198,42 @@ export const engine = {
   selectLayerPixels: (documentId: number, layerId: number, part: LayerPart, mode: SelectionMode) =>
     serial(() => invoke<DocumentView>("select_layer_pixels", { documentId, layerId, part, mode })),
   /**
+   * The Paths panel's Load Path as Selection (ADR 0041): the area `path` encloses,
+   * anti-aliased, replacing the selection or combined with it by `mode`.
+   */
+  loadPathSelection: (documentId: number, path: PathRef, mode: SelectionMode) =>
+    serial(() => invoke<DocumentView>("load_path_selection", { documentId, path, mode })),
+  /**
+   * Make Work Path from Selection: the selection's outline as the new Work Path, within
+   * `tolerance` pixels (0.5 to 10).
+   */
+  workPathFromSelection: (documentId: number, tolerance: number) =>
+    serial(() => invoke<DocumentView>("work_path_from_selection", { documentId, tolerance })),
+  /**
+   * Stroke Path: the Brush (`color`, sRGB-encoded RGB in [0, 1]) or the Eraser (`color` null)
+   * along each subpath of `path`, on `target`; one undo entry.
+   */
+  strokePath: (
+    documentId: number,
+    layerId: number,
+    target: PaintTarget,
+    path: PathRef,
+    brush: BrushRequest,
+    color: [number, number, number] | null,
+    simulatePressure: boolean,
+  ) =>
+    serial(() =>
+      invoke<DocumentView>("stroke_path", {
+        documentId,
+        layerId,
+        target,
+        path,
+        brush,
+        color,
+        simulatePressure,
+      }),
+    ),
+  /**
    * Make Selection (Ctrl+Enter with the Pen): the area `path` encloses (document pixels), or
    * with `path` null vector layer `layerId`'s path (its vector mask's with `vectorMask`),
    * anti-aliased, replacing the selection.
@@ -2505,6 +2582,8 @@ export const engine = {
     stroke: StrokeRequest | null,
     /** Fill > Pattern: a pattern loaded for the document (`loadPattern`), from its origin. */
     pattern: number | null = null,
+    /** Fill Path (ADR 0041): the area this path encloses instead of the selection. */
+    path: PathRef | null = null,
   ) =>
     serial(() =>
       invoke<DocumentView>("fill", {
@@ -2515,6 +2594,7 @@ export const engine = {
         opacity,
         stroke,
         pattern,
+        path,
       }),
     ),
   /**

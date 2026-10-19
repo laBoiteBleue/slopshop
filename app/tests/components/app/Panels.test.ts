@@ -218,6 +218,7 @@ test("Window > Options Bar and Toolbar hide them, saved; Reset Layout brings eve
   await fireEvent.pointerUp(tab, { pointerId: 1, clientX: 100 });
   expect(saved().order).toEqual([
     "selections",
+    "paths",
     "sources",
     "history",
     "histogram",
@@ -231,6 +232,7 @@ test("Window > Options Bar and Toolbar hide them, saved; Reset Layout brings eve
   expect(saved().order).toEqual([
     "properties",
     "selections",
+    "paths",
     "sources",
     "history",
     "histogram",

@@ -71,6 +71,7 @@
     type AiFeature,
     type AiFailure,
     type PatternEntry,
+    type PathRef,
   } from "./lib/engine";
   import { t } from "./lib/i18n/index.svelte";
   import type { MessageKey } from "./lib/i18n/en";
@@ -239,10 +240,20 @@
   import GradientTool from "./lib/GradientTool.svelte";
   import ShapeTool from "./lib/ShapeTool.svelte";
   import PenTool from "./lib/PenTool.svelte";
-  import { editablePath } from "./lib/pathEdit";
   import type { PathGeometry } from "./lib/pen";
   import {
-    editableVectorMask,
+    chosenPath,
+    DEFAULT_TOLERANCE,
+    documentPath,
+    penDestination,
+    penEditable as editableOfPen,
+    withSubpaths,
+    type PathChoice,
+    type PenMode,
+  } from "./lib/paths";
+  import StrokePathDialog, { type StrokePathSettings } from "./lib/StrokePathDialog.svelte";
+  import WorkPathDialog from "./lib/WorkPathDialog.svelte";
+  import {
     referenceVectorMask,
     vectorMaskAddition,
     vectorMaskEnabledToggle,
@@ -439,6 +450,15 @@
     },
     selectLayers: (ids) => layersPanel?.selectLayers(ids),
     newLayerFromSource: (source, name) => layersPanel?.newLayerFromSource(source, name),
+    get chosenPath() {
+      return chosen;
+    },
+    choosePath: (ref) => choosePath(ref),
+    loadPathSelection: (ref, mode) =>
+      selectionCommand((id) => engine.loadPathSelection(id, ref, mode)),
+    fillPath: (ref, dialog) => fillPath(ref, dialog),
+    strokePath: (ref, dialog) => strokePath(ref, dialog),
+    makeWorkPath: (dialog) => makeWorkPath(dialog),
   });
   /** Opens in progress (decoding a large image takes seconds). */
   let openings = $state<Opening[]>([]);
@@ -1644,7 +1664,13 @@
    */
   function makeSelection(path: ShapeGeometry | null) {
     const layer = activeLayer;
-    // The targeted vector mask's path (ADR 0041), else the active vector layer's.
+    // The path chosen in the Paths panel, else the vector mask's path edited (ADR 0041), else
+    // the active vector layer's.
+    if (path === null && chosen) {
+      const ref = chosen;
+      selectionCommand((id) => engine.loadPathSelection(id, ref, "replace"));
+      return;
+    }
     const masked = path === null && penEditable?.vectorMask === true;
     if (path === null && !masked && layer?.kind !== "vector") return;
     selectionCommand((id) =>
@@ -1652,27 +1678,56 @@
     );
   }
 
+  /** The Pen's mode (its options bar): shape layers or paths, as Photoshop's. */
+  let penMode = $state<PenMode>("shape");
+  /** The path chosen in the Paths panel (ADR 0041), of the document it was chosen in. */
+  let pathChoice = $state<PathChoice | null>(null);
+  /** The chosen path, while the panel lists it (a layer's goes with its layer). */
+  let chosen = $derived(chosenPath(pathChoice, active, activeLayer));
+
+  function choosePath(ref: PathRef | null) {
+    pathChoice = ref && active ? { documentId: active.id, ref } : null;
+  }
+
   /**
-   * The path the Pen edits: the active layer's vector mask when it is targeted, else the active
-   * vector layer's (ADR 0041).
+   * The path the Pen edits: the path chosen in the Paths panel, else the active layer's vector
+   * mask when it is targeted, else the active vector layer's (ADR 0041).
    */
   let penEditable = $derived.by(() => {
     if (!active) return null;
-    if (layersPanel?.targetsVectorMask()) return editableVectorMask(active.layers, activeLayer);
-    return editablePath(active.layers, activeLayer);
+    return editableOfPen(active, activeLayer, chosen, layersPanel?.targetsVectorMask() ?? false);
   });
 
   /**
-   * A path the Pen finished: a vector layer of it, or with the active layer's vector mask
-   * targeted, a part of that mask's path (as Photoshop's Pen draws in a vector mask).
+   * A path the Pen finished: added to the path chosen in the Paths panel, or to the vector mask
+   * edited (as Photoshop's Pen draws in a vector mask); else a new Work Path in Path mode,
+   * chosen, or a vector layer in Shape mode.
    */
   function finishPath(geometry: PathGeometry) {
     const target = penEditable;
-    if (!target?.vectorMask) {
+    const destination = penDestination(target, penMode);
+    const doc = active;
+    if (destination.kind === "shapeLayer") {
       addShape(geometry);
       return;
     }
-    const doc = active;
+    if (!doc) return;
+    if (destination.kind === "workPath") {
+      void edit(doc.id, { kind: "setWorkPath", path: geometry }).then(() => {
+        const work = tabs.find((d) => d.id === doc.id)?.paths?.find((p) => p.work);
+        if (work) pathChoice = { documentId: doc.id, ref: { kind: "path", id: work.id } };
+      });
+      return;
+    }
+    if (destination.kind === "path") {
+      const path = documentPath(doc, destination.id);
+      if (path) {
+        const drawn = withSubpaths(path.geometry, geometry);
+        void edit(doc.id, { kind: "setPathGeometry", id: path.id, path: drawn });
+      }
+      return;
+    }
+    if (!target) return;
     if (target.live) {
       // Its live shape becomes a path first, as when its anchors are edited.
       if (doc) turningIntoPath = { documentId: doc.id, layerId: target.layerId, vectorMask: true };
@@ -1701,6 +1756,10 @@
   function reshapePath(layerId: number, geometry: ShapeGeometry) {
     const doc = active;
     if (!doc) return;
+    if (penEditable?.pathId !== undefined && geometry.kind === "path") {
+      void edit(doc.id, { kind: "setPathGeometry", id: penEditable.pathId, path: geometry });
+      return;
+    }
     if (penEditable?.vectorMask && penEditable.layerId === layerId) {
       void edit(doc.id, { kind: "setVectorMaskPath", id: layerId, path: geometry });
       return;
@@ -1884,12 +1943,15 @@
     hex: string | null,
     opacity = 1,
     stroke: StrokeRequest | null = null,
+    path: PathRef | null = null,
   ) {
     const kind = target.target ?? (target.mask ? "mask" : "layer");
     // Erasing a mask (Delete, Cut) paints the background color, as Photoshop does.
     const erased = hex === null && kind !== "layer" ? paintColors().background : hex;
     const color = erased === null ? null : hexToSrgb(erased);
-    void sync(engine.fill(target.documentId, target.layerId, kind, color, opacity, stroke));
+    void sync(
+      engine.fill(target.documentId, target.layerId, kind, color, opacity, stroke, null, path),
+    );
   }
 
   /** Delete with a selection: the selected pixels erased, as Photoshop's Clear. */
@@ -2462,9 +2524,18 @@
     );
   }
 
-  /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */
+  /**
+   * Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. With
+   * `path`, the Paths panel's Fill Path: that path's area rather than the selection.
+   */
   let fillDialog = $state<
-    (PaintedLayer & { color: string; pattern: PatternEntry; picking: boolean }) | null
+    | (PaintedLayer & {
+        color: string;
+        pattern: PatternEntry;
+        picking: boolean;
+        path?: PathRef | null;
+      })
+    | null
   >(null);
   /** Fill's pattern, chosen last (for the session); the first generated one at first. */
   let fillPattern: PatternEntry = { id: "builtin:checkers", name: "" };
@@ -2698,8 +2769,9 @@
     const target = fillDialog;
     fillDialog = null;
     if (!target) return;
+    const path = target.path ?? null;
     if (contents === "pattern") {
-      void fillWithPattern(target, target.pattern, opacity);
+      void fillWithPattern(target, target.pattern, opacity, path);
       return;
     }
     const hex =
@@ -2708,11 +2780,16 @@
         : contents === "foreground" || contents === "background"
           ? paintColors()[contents]
           : FILL_COLORS[contents];
-    paintPixels(target, hex, opacity);
+    paintPixels(target, hex, opacity, null, path);
   }
 
   /** Fill > Pattern (ADR 0042): the pattern loaded for the document, then painted. */
-  async function fillWithPattern(target: PaintedLayer, entry: PatternEntry, opacity: number) {
+  async function fillWithPattern(
+    target: PaintedLayer,
+    entry: PatternEntry,
+    opacity: number,
+    path: PathRef | null = null,
+  ) {
     fillPattern = entry;
     const kind = target.target ?? (target.mask ? "mask" : "layer");
     let source: number;
@@ -2722,7 +2799,82 @@
       showError(String(e));
       return;
     }
-    await sync(engine.fill(target.documentId, target.layerId, kind, null, opacity, null, source));
+    await sync(
+      engine.fill(target.documentId, target.layerId, kind, null, opacity, null, source, path),
+    );
+  }
+
+  /**
+   * The Paths panel's Fill Path (ADR 0041): `path`'s area painted on what painting reaches,
+   * with the foreground color (its button), or as Edit > Fill's dialog says (`dialog`).
+   */
+  function fillPath(path: PathRef, dialog: boolean) {
+    const target = paintedLayer();
+    if (!target) return;
+    const color = paintColors().foreground;
+    if (dialog) fillDialog = { ...target, color, pattern: fillPattern, picking: false, path };
+    else paintPixels(target, color, 1, null, path);
+  }
+
+  /** Stroke Path's tool and Simulate Pressure, as chosen last (its button paints so). */
+  let strokePathSettings = $state<StrokePathSettings>({ tool: "brush", simulatePressure: false });
+  /** Stroke Path's dialog is open, for this path. */
+  let strokePathDialog = $state<{ documentId: number; path: PathRef } | null>(null);
+
+  /**
+   * The Paths panel's Stroke Path (ADR 0041): the Brush or the Eraser, with its options, along
+   * `path` on what painting reaches; its dialog first with `dialog`.
+   */
+  function strokePath(path: PathRef, dialog: boolean) {
+    if (dialog) {
+      if (active) strokePathDialog = { documentId: active.id, path };
+      return;
+    }
+    const target = paintedLayer();
+    if (!target) return;
+    const { tool: painting, simulatePressure } = strokePathSettings;
+    const kind = target.target ?? (target.mask ? "mask" : "layer");
+    const eraser = painting === "eraser";
+    const options = eraser ? eraserOptions : brushOptions;
+    // As the tools paint: on a mask the Eraser paints the background color.
+    const color =
+      eraser && kind === "layer"
+        ? null
+        : hexToSrgb(paintColors()[eraser ? "background" : "foreground"]);
+    void sync(
+      engine.strokePath(
+        target.documentId,
+        target.layerId,
+        kind,
+        path,
+        { ...options, spacing: 0.25 },
+        color,
+        simulatePressure,
+      ),
+    );
+  }
+
+  /** Make Work Path's tolerance, as chosen last (Photoshop's 2 pixels first). */
+  let workPathTolerance = $state(DEFAULT_TOLERANCE);
+  /** Make Work Path's dialog is open, for this document. */
+  let workPathDialog = $state<number | null>(null);
+
+  /**
+   * The Paths panel's Make Work Path from Selection (ADR 0041): the selection's outline as the
+   * new Work Path, chosen; its dialog (the tolerance) first with `dialog`.
+   */
+  function makeWorkPath(dialog: boolean) {
+    const doc = active;
+    if (!doc || doc.selectionKey === null) return;
+    if (dialog) {
+      workPathDialog = doc.id;
+      return;
+    }
+    commitTransform();
+    void sync(engine.workPathFromSelection(doc.id, workPathTolerance)).then(() => {
+      const work = tabs.find((d) => d.id === doc.id)?.paths?.find((p) => p.work);
+      if (work) pathChoice = { documentId: doc.id, ref: { kind: "path", id: work.id } };
+    });
   }
 
   function openFill() {
@@ -6886,6 +7038,7 @@
       bind:bucket={bucketOptions}
       bind:gradient={gradientOptions}
       bind:shape={shapeOptions}
+      bind:penMode
       onpickcolor={pickShapeColor}
       bind:type={typeOptions}
       {fonts}
@@ -7694,6 +7847,30 @@
     name={definingPattern.name}
     onapply={(name) => void definePattern(name)}
     onclose={() => (definingPattern = null)}
+  />
+{/if}
+{#if strokePathDialog}
+  <StrokePathDialog
+    settings={strokePathSettings}
+    onapply={(settings) => {
+      const dialog = strokePathDialog;
+      strokePathDialog = null;
+      strokePathSettings = settings;
+      if (dialog && dialog.documentId === active?.id) strokePath(dialog.path, false);
+    }}
+    onclose={() => (strokePathDialog = null)}
+  />
+{/if}
+{#if workPathDialog !== null}
+  <WorkPathDialog
+    tolerance={workPathTolerance}
+    onapply={(tolerance) => {
+      const documentId = workPathDialog;
+      workPathDialog = null;
+      workPathTolerance = tolerance;
+      if (documentId === active?.id) makeWorkPath(false);
+    }}
+    onclose={() => (workPathDialog = null)}
   />
 {/if}
 {#if strokeDialog && !strokeDialog.picking}
