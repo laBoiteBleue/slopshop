@@ -514,3 +514,49 @@ test("Stylize: Photoshop's order, Diffuse's and Wind's choices, Tiles, Trace Con
     expect(hasSettings(filter)).toBe(true);
   }
 });
+
+test("Pixelate: Photoshop's order and settings; Facet and Fragment apply at once", () => {
+  expect(FILTER_MENU.find((m) => m.label === "menu.filter.pixelate")?.filters).toEqual([
+    "colorHalftone",
+    "crystallize",
+    "facet",
+    "fragment",
+    "mezzotint",
+    "mosaic",
+    "pointillize",
+  ]);
+  for (const filter of ["facet", "fragment"] as const) {
+    expect(hasSettings(filter)).toBe(false);
+  }
+  for (const filter of ["colorHalftone", "crystallize", "mezzotint", "pointillize"] as const) {
+    expect(hasSettings(filter)).toBe(true);
+  }
+  // Color Halftone: Max. Radius 4 to 127, three screen angles of -360 to 360 degrees.
+  expect(FILTERS.colorHalftone.defaults).toEqual([8, 108, 162, 90]);
+  expect(validValues("colorHalftone", [4, -360, 360, 0])).toBe(true);
+  for (const values of [
+    [3, 108, 162, 90],
+    [128, 108, 162, 90],
+    [8, 361, 162, 90],
+    [8, 108, 162.5, 90],
+  ]) {
+    expect(validValues("colorHalftone", values)).toBe(false);
+  }
+  // Crystallize and Pointillize: cells of 3 to 300, a seed; Pointillize's background color.
+  expect(FILTERS.crystallize.defaults).toEqual([10, 0]);
+  expect(FILTERS.pointillize.defaults).toEqual([5, 0xffffff, 0]);
+  for (const filter of ["crystallize", "pointillize"] as const) {
+    const [, ...rest] = FILTERS[filter].defaults;
+    expect(validValues(filter, [3, ...rest])).toBe(true);
+    expect(validValues(filter, [300, ...rest])).toBe(true);
+    expect(validValues(filter, [2, ...rest])).toBe(false);
+    expect(validValues(filter, [301, ...rest])).toBe(false);
+  }
+  const colors = { foreground: "#102030", background: "#405060" };
+  expect(withColors("pointillize", [5, 0xffffff, 7], colors)).toEqual([5, 0x405060, 7]);
+  expect(withNewSeeds("crystallize", [10, 7], () => 0.5)).toEqual([10, 2 ** 23]);
+  // Mezzotint: ten types, Fine Dots first.
+  expect(FILTERS.mezzotint.defaults).toEqual([0, 0]);
+  expect(validValues("mezzotint", [9, 0])).toBe(true);
+  expect(validValues("mezzotint", [10, 0])).toBe(false);
+});

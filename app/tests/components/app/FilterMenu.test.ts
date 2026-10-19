@@ -656,3 +656,101 @@ test("Stylize > Trace Contour: a level, Lower; Oil Paint: its brush, lighting of
     }),
   );
 });
+
+/** Filter > Pixelate > `name` (`…` for a dialog) on a photo layer. */
+async function pixelate(name: string) {
+  localStorage.clear();
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Pixelate", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name }));
+  return user;
+}
+
+test("Pixelate > Facet and Fragment apply at once, with no dialog", async () => {
+  const user = await pixelate("Facet");
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "facet",
+      values: [],
+    }),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Pixelate", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Fragment" }));
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "fragment",
+      values: [],
+    }),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+test("Pixelate > Color Halftone: Max. Radius and the screen angles of three channels", async () => {
+  const user = await pixelate("Color Halftone…");
+  const dialog = await screen.findByRole("dialog", { name: "Color Halftone" });
+  expect(within(dialog).getByText("Screen Angles")).toBeInTheDocument();
+  const radius = within(dialog).getByRole("spinbutton", { name: "Max. Radius" });
+  expect(radius).toHaveValue(8);
+  expect(within(dialog).getByRole("spinbutton", { name: "Channel 1" })).toHaveValue(108);
+  expect(within(dialog).getByRole("spinbutton", { name: "Channel 3" })).toHaveValue(90);
+  const second = within(dialog).getByRole("spinbutton", { name: "Channel 2" });
+  expect(second).toHaveValue(162);
+  await user.clear(radius);
+  await user.type(radius, "20");
+  await user.clear(second);
+  await user.type(second, "-45");
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "colorHalftone",
+      values: [20, 108, -45, 90],
+    }),
+  );
+});
+
+test("Pixelate > Crystallize and Pointillize: a cell size, a seed; Pointillize's background", async () => {
+  const user = await pixelate("Crystallize…");
+  const dialog = await screen.findByRole("dialog", { name: "Crystallize" });
+  const cell = within(dialog).getByRole("spinbutton", { name: "Cell Size" });
+  expect(cell).toHaveValue(10);
+  await user.clear(cell);
+  await user.type(cell, "40");
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toMatchObject({ filter: "crystallize" }));
+  const crystals = (applied() as { values: number[] }).values;
+  expect(crystals[0]).toBe(40);
+  expect(Number.isInteger(crystals[1])).toBe(true);
+
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Pixelate", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Pointillize…" }));
+  const dots = await screen.findByRole("dialog", { name: "Pointillize" });
+  expect(within(dots).getByRole("spinbutton", { name: "Cell Size" })).toHaveValue(5);
+  await user.click(within(dots).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toMatchObject({ filter: "pointillize" }));
+  // The background color of the moment (white by default).
+  expect((applied() as { values: number[] }).values.slice(0, 2)).toEqual([5, 0xffffff]);
+});
+
+test("Pixelate > Mezzotint: Fine Dots at first, its ten types", async () => {
+  const user = await pixelate("Mezzotint…");
+  const dialog = await screen.findByRole("dialog", { name: "Mezzotint" });
+  expect(within(dialog).getAllByRole("radio")).toHaveLength(10);
+  expect(within(dialog).getByRole("radio", { name: "Fine Dots" })).toBeChecked();
+  await user.click(within(dialog).getByRole("radio", { name: "Long Strokes" }));
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toMatchObject({ filter: "mezzotint" }));
+  const values = (applied() as { values: number[] }).values;
+  expect(values[0]).toBe(9);
+  expect(Number.isInteger(values[1])).toBe(true);
+});

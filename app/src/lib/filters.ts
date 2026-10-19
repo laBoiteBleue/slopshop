@@ -341,6 +341,59 @@ export const FILTERS: Record<FilterId, FilterSpec> = {
     defaults: [135, 3, 100],
   },
   mosaic: { params: [squareRadius("filter.mosaic.cell", 200, 2)], defaults: [10] },
+  colorHalftone: {
+    params: [
+      whole("radius", "filter.colorHalftone.radius", [4, 127], "filter.pixels"),
+      ...([1, 2, 3] as const).map((n) =>
+        whole(
+          `angle${n}`,
+          `filter.colorHalftone.channel${n}`,
+          [-360, 360],
+          "filter.degrees",
+          "filter.colorHalftone.angles",
+        ),
+      ),
+    ],
+    defaults: [8, 108, 162, 90],
+  },
+  crystallize: {
+    params: [squareRadius("filter.crystallize.cell", 300, 3), { kind: "seed", key: "seed" }],
+    defaults: [10, 0],
+  },
+  facet: { params: [], defaults: [] },
+  fragment: { params: [], defaults: [] },
+  mezzotint: {
+    params: [
+      {
+        kind: "choice",
+        key: "type",
+        label: "filter.mezzotint.type",
+        options: [
+          "filter.mezzotint.fineDots",
+          "filter.mezzotint.mediumDots",
+          "filter.mezzotint.grainyDots",
+          "filter.mezzotint.coarseDots",
+          "filter.mezzotint.shortLines",
+          "filter.mezzotint.mediumLines",
+          "filter.mezzotint.longLines",
+          "filter.mezzotint.shortStrokes",
+          "filter.mezzotint.mediumStrokes",
+          "filter.mezzotint.longStrokes",
+        ],
+      },
+      { kind: "seed", key: "seed" },
+    ],
+    defaults: [0, 0],
+  },
+  // Photoshop's default background color, white, until applied with the current one.
+  pointillize: {
+    params: [
+      squareRadius("filter.pointillize.cell", 300, 3),
+      { kind: "color", key: "background", color: "background" },
+      { kind: "seed", key: "seed" },
+    ],
+    defaults: [5, 0xffffff, 0],
+  },
   twirl: {
     params: [
       {
@@ -802,7 +855,18 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
     filters: ["pinch", "polarCoordinates", "ripple", "spherize", "twirl", "wave", "zigZag"],
   },
   { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches", "median"] },
-  { label: "menu.filter.pixelate", filters: ["mosaic"] },
+  {
+    label: "menu.filter.pixelate",
+    filters: [
+      "colorHalftone",
+      "crystallize",
+      "facet",
+      "fragment",
+      "mezzotint",
+      "mosaic",
+      "pointillize",
+    ],
+  },
   { label: "menu.filter.render", filters: ["clouds", "differenceClouds", "fibers"] },
   { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },
   {
