@@ -4645,6 +4645,33 @@ mod tests {
     }
 
     #[test]
+    fn a_gradient_overlay_takes_photoshop_s_five_styles() {
+        let mut s = blank_session();
+        let id = s.document().layers()[0].id.get();
+        let json = |shape: &str| {
+            format!(
+                r#"{{"kind":"setLayerStyle","id":{id},"style":{{"fillOpacity":1,
+                "gradientOverlay":{{"enabled":true,"stops":[[0,0,0,0],[4096,255,255,255]],
+                  "reverse":false,"shape":"{shape}","angle":90,"scale":100,"align":true,
+                  "mode":"normal","opacity":1}},
+                "colorOverlay":null,"stroke":null}}}}"#
+            )
+        };
+        for shape in slopshop_core::gradient::GradientShape::ALL {
+            let request: EditRequest = serde_json::from_str(&json(shape.id())).unwrap();
+            let edit = request.into_edit(&mut s).unwrap();
+            s.perform(edit).unwrap();
+            let style = s.document().layers()[0].style.as_ref().unwrap().settings();
+            assert_eq!(style.gradient_overlay.unwrap().shape, shape);
+            let view = DocumentView::new(&s, &meta(), Vec::new());
+            let back = view.layers[0].style.clone().unwrap();
+            assert_eq!(back.gradient_overlay.unwrap().shape, shape.id());
+        }
+        let request: EditRequest = serde_json::from_str(&json("spiral")).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
     fn layer_style_contours_go_through_the_ipc() {
         use slopshop_core::contour::{Contour, ContourPreset};
         let mut s = blank_session();
@@ -4877,6 +4904,24 @@ mod tests {
         let shape = serde_json::to_value(&view.layers[1].gradient_fill).unwrap()["shape"].clone();
         assert_eq!(shape, "radial");
         s.undo().unwrap();
+        // Photoshop's other three styles, and none other.
+        for style in ["angle", "reflected", "diamond", "spiral"] {
+            let json = format!(
+                r#"{{"kind":"setGradientFill","id":{},"gradient":{}}}"#,
+                layer.id,
+                gradient.replace("linear", style)
+            );
+            let Ok(request) = serde_json::from_str::<EditRequest>(&json) else {
+                assert_eq!(style, "spiral");
+                continue;
+            };
+            let edit = request.into_edit(&mut s).unwrap();
+            s.perform(edit).unwrap();
+            let view = DocumentView::new(&s, &meta(), Vec::new());
+            let shown = serde_json::to_value(&view.layers[1].gradient_fill).unwrap();
+            assert_eq!(shown["shape"], style);
+            s.undo().unwrap();
+        }
 
         // A gradient going nowhere is refused.
         let flat = gradient.replace(r#""to":[0.0,0.0]"#, r#""to":[0.0,10.0]"#);

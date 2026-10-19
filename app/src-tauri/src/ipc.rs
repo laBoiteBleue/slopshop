@@ -580,11 +580,7 @@ impl StyleDto {
                 enabled: o.enabled,
                 stops: gradient_stops(&o.gradient),
                 reverse: o.reverse,
-                shape: match o.shape {
-                    slopshop_core::gradient::GradientShape::Linear => "linear",
-                    slopshop_core::gradient::GradientShape::Radial => "radial",
-                }
-                .to_owned(),
+                shape: o.shape.id().to_owned(),
                 angle: o.angle,
                 scale: o.scale,
                 align: o.align_with_layer,
@@ -732,11 +728,8 @@ impl StyleDto {
                     enabled: o.enabled,
                     gradient: gradient_of_stops(&o.stops)?,
                     reverse: o.reverse,
-                    shape: match o.shape.as_str() {
-                        "linear" => slopshop_core::gradient::GradientShape::Linear,
-                        "radial" => slopshop_core::gradient::GradientShape::Radial,
-                        other => return Err(format!("unknown gradient shape {other}")),
-                    },
+                    shape: slopshop_core::gradient::GradientShape::from_id(&o.shape)
+                        .ok_or_else(|| format!("unknown gradient shape {}", o.shape))?,
                     angle: o.angle,
                     scale: o.scale,
                     align_with_layer: o.align,
