@@ -24,7 +24,7 @@ use super::manifest::{
     NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PATTERN,
     NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE, NODE_VERSION_PERSPECTIVE_WARP,
     NODE_VERSION_SATIN, NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED,
-    NODE_VERSION_VECTOR, NODE_VERSION_VECTOR_MASK, NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM,
+    NODE_VERSION_VECTOR, NODE_VERSION_VECTOR_MASK, NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM, PathDto,
     SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, ShapeDto, SourceDto, Writer,
 };
 use super::read::best_slot;
@@ -940,6 +940,17 @@ fn build_manifest(
                 })
                 .collect(),
             next_selection_id: Some(document.next_saved_selection_id()),
+            paths: document
+                .paths()
+                .iter()
+                .map(|p| PathDto {
+                    id: p.id.get(),
+                    name: p.name.clone(),
+                    work: p.work,
+                    path: super::shape::path_to_json(&p.geometry),
+                })
+                .collect(),
+            next_path_id: (document.next_path_id() > 1).then_some(document.next_path_id()),
             global_light: Some({
                 let light = document.global_light();
                 [light.angle, light.altitude]

@@ -15,6 +15,7 @@ use slopshop_core::document::{
     MAX_GUIDES, SavedSelection, SavedSelectionId,
 };
 use slopshop_core::geom::Size;
+use slopshop_core::paths::{DocumentPath, PathId};
 use slopshop_core::raster::{ImageId, RasterImage, TILE_SIZE};
 use slopshop_core::selection::Selection;
 use slopshop_core::shape::ShapeSource;
@@ -306,6 +307,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
     let blend_space = document_blend_space(doc)?;
     let (saved, next_saved) = saved_selections(doc, &rasters)?;
     let guides = document_guides(doc)?;
+    let (paths, next_path) = document_paths(doc)?;
     let document = Document::restore(
         Size::new(doc.size[0], doc.size[1]),
         doc.working_space.to_space(),
@@ -316,6 +318,7 @@ fn load(file: &Source<'_>, slot: &Slot) -> Result<Loaded, FileError> {
     .and_then(|document| document.with_resolution(document_resolution(doc)))
     .and_then(|document| document.with_saved_selections(saved, next_saved))
     .and_then(|document| document.with_guides(guides))
+    .and_then(|document| document.with_paths(paths, next_path))
     .and_then(|document| {
         let light = doc
             .global_light
@@ -1272,6 +1275,33 @@ pub(super) fn document_guides(doc: &DocumentDto) -> Result<Vec<Guide>, FileError
             })
         })
         .collect()
+}
+
+/// The Paths panel's paths (schema 0.41) and their id counter (one above the largest id when the
+/// file does not say). Their ids are checked when the document is restored.
+fn document_paths(doc: &DocumentDto) -> Result<(Vec<DocumentPath>, u64), FileError> {
+    let paths = doc
+        .paths
+        .iter()
+        .map(|dto| {
+            Ok(DocumentPath {
+                id: PathId::from_raw(dto.id),
+                name: dto.name.clone(),
+                geometry: super::shape::path_from_json(&dto.path)
+                    .ok_or_else(|| corrupt("a path that is not valid"))?,
+                work: dto.work,
+            })
+        })
+        .collect::<Result<Vec<_>, FileError>>()?;
+    let next = doc.next_path_id.unwrap_or_else(|| {
+        doc.paths
+            .iter()
+            .map(|p| p.id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+    });
+    Ok((paths, next))
 }
 
 /// The selections saved by name (schema 0.16) and their id counter (one above the largest id
