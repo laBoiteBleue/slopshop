@@ -5,6 +5,7 @@
 
 import type { EditRequest, FilterId, LayerView, StackEntryView } from "./engine";
 import type { MessageKey } from "./i18n/en";
+import { STRAIGHT, shearPoints, shearValues, validShearPoints } from "./shearCurve";
 
 /** A filter's settings as edits send them (`Filter::params` order in the engine). */
 export type FilterSettings = { filter: FilterId; values: number[] };
@@ -36,7 +37,8 @@ export type NumberParam = {
  * and the `y` one that follows it; the foreground or background color, not shown, taken each
  * time the filter is applied (`withColors`) and kept by its entry (Clouds'); or one of Custom's
  * 5 × 5 weights (a whole number from -999 to 999), the first (`cell` 0) showing the grid of all
- * of them, row by row.
+ * of them, row by row; or Shear's curve, the last setting, all the values after the others (a
+ * row and an offset per point, see `shearCurve`).
  */
 export type FilterParam =
   | NumberParam
@@ -45,7 +47,8 @@ export type FilterParam =
   | { kind: "seed"; key: string; randomize?: MessageKey }
   | { kind: "center"; key: string; label: MessageKey; axis: "x" | "y" }
   | { kind: "color"; key: string; color: "foreground" | "background" }
-  | { kind: "weight"; key: string; cell: number };
+  | { kind: "weight"; key: string; cell: number }
+  | { kind: "curve"; key: string };
 
 /** Custom's weights: whole numbers from -999 to 999 (Photoshop's), 5 × 5 of them. */
 export const MAX_WEIGHT = 999;
@@ -775,6 +778,19 @@ export const FILTERS: Record<FilterId, FilterSpec> = {
     ],
     defaults: [10, 5, 2],
   },
+  // Undefined Areas, then the curve's points (Photoshop's Default: the straight line).
+  shear: {
+    params: [
+      {
+        kind: "choice",
+        key: "edge",
+        label: "filter.offset.edge",
+        options: ["filter.offset.wrap", "filter.offset.repeat"],
+      },
+      { kind: "curve", key: "curve" },
+    ],
+    defaults: [0, ...shearValues(STRAIGHT)],
+  },
   polarCoordinates: {
     params: [
       {
@@ -959,7 +975,16 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
   },
   {
     label: "menu.filter.distort",
-    filters: ["pinch", "polarCoordinates", "ripple", "spherize", "twirl", "wave", "zigZag"],
+    filters: [
+      "pinch",
+      "polarCoordinates",
+      "ripple",
+      "shear",
+      "spherize",
+      "twirl",
+      "wave",
+      "zigZag",
+    ],
   },
   {
     label: "menu.filter.noise",
@@ -1001,6 +1026,16 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
 /** Whether `values` are settings `filter` accepts. */
 export function validValues(filter: FilterId, values: number[]): boolean {
   const params = FILTERS[filter].params;
+  const curve = params.findIndex((p) => p.kind === "curve");
+  if (curve >= 0) {
+    // A curve: the values after the others, a row and an offset per point.
+    const rest = values.slice(curve);
+    return (
+      rest.length % 2 === 0 &&
+      validShearPoints(shearPoints(rest)) &&
+      values.slice(0, curve).every((v, i) => validValue(params[i], v))
+    );
+  }
   return values.length === params.length && values.every((v, i) => validValue(params[i], v));
 }
 
@@ -1026,6 +1061,8 @@ function validValue(param: FilterParam, v: number): boolean {
       return Number.isInteger(v) && v >= 0 && v < PACKED_COLORS;
     case "weight":
       return Number.isInteger(v) && Math.abs(v) <= MAX_WEIGHT;
+    case "curve":
+      return false;
   }
 }
 

@@ -105,6 +105,7 @@ export type FilterId =
   | "ripple"
   | "wave"
   | "zigZag"
+  | "shear"
   | "polarCoordinates"
   | "radialBlur"
   | "surfaceBlur"

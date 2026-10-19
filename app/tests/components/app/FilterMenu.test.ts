@@ -1,6 +1,6 @@
 // The Filter menu (ADR 0034): filters on the active pixel layer, Repeat (Ctrl+F), and filter
 // entries edited again from the Layers panel.
-import { screen, within } from "@testing-library/svelte";
+import { fireEvent, screen, within } from "@testing-library/svelte";
 import { expect, test, vi } from "vitest";
 import type { LayerView } from "../../../src/lib/engine";
 import { documentView, layer, open, row, sent } from "./harness";
@@ -340,6 +340,48 @@ test("Distort > Wave: Photoshop's defaults, Triangle, a seed drawn anew by Rando
   const { values } = applied() as { values: number[] };
   expect(values.slice(0, 9)).toEqual([5, 10, 120, 5, 35, 100, 100, 1, 1]);
   expect(Number.isInteger(values[9])).toBe(true);
+});
+
+test("Distort > Shear: the curve's points after Undefined Areas, Default straightens it", async () => {
+  const { user, dialog } = await distortDialog("Shear");
+  expect(within(dialog).getByRole("radio", { name: "Wrap Around" })).toBeChecked();
+  expect(within(dialog).getAllByRole("slider")).toHaveLength(2);
+  await fireEvent.keyDown(within(dialog).getByRole("slider", { name: "Point 1" }), {
+    key: "ArrowRight",
+    shiftKey: true,
+  });
+  await fireEvent.keyDown(within(dialog).getByRole("slider", { name: "Point 2" }), {
+    key: "ArrowLeft",
+  });
+  await user.click(within(dialog).getByRole("radio", { name: "Repeat Edge Pixels" }));
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "shear",
+      values: [1, 0, 10, 100, -1],
+    }),
+  );
+  // Opened again with those settings; Default straightens the line.
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Distort", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Shear…" }));
+  const again = await screen.findByRole("dialog", { name: "Shear" });
+  expect(within(again).getByRole("slider", { name: "Point 1" })).toHaveAttribute(
+    "aria-valuenow",
+    "10",
+  );
+  await user.click(within(again).getByRole("button", { name: "Default" }));
+  await user.click(within(again).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "shear",
+      values: [1, 0, 0, 100, 0],
+    }),
+  );
 });
 
 test("Distort > ZigZag and Spherize's modes", async () => {
