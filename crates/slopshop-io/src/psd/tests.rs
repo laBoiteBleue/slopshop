@@ -1389,3 +1389,123 @@ fn protection_flags_become_layer_locks() {
         ]
     );
 }
+
+#[test]
+fn color_lookup_layers_are_imported_with_their_embedded_table() {
+    use crate::psd::effects::{enumerated, text};
+    use slopshop_core::adjust::Adjustment;
+    // A `clrL` block: version 1, descriptor version 16, a `null` descriptor of `items`.
+    let block = |items: &[(&[u8], &[u8; 4], Vec<u8>)]| {
+        let mut b = 1u16.to_be_bytes().to_vec();
+        b.extend(16u32.to_be_bytes());
+        b.extend(1u32.to_be_bytes());
+        b.extend([0, 0]);
+        b.extend(0u32.to_be_bytes());
+        b.extend(b"null");
+        b.extend((items.len() as u32).to_be_bytes());
+        for (key, ty, value) in items {
+            b.extend((if key.len() == 4 { 0 } else { key.len() as u32 }).to_be_bytes());
+            b.extend(*key);
+            b.extend(*ty);
+            b.extend(value);
+        }
+        b
+    };
+    let data = |file: &str| {
+        let mut b = (file.len() as u32).to_be_bytes().to_vec();
+        b.extend(file.as_bytes());
+        b
+    };
+    // A .3dl table: red and blue swapped, 10-bit in, 12-bit out.
+    let mut three_dl = String::from("0 1023\n");
+    for r in [0, 4095] {
+        for g in [0, 4095] {
+            for b in [0, 4095] {
+                three_dl += &format!("{b} {g} {r}\n");
+            }
+        }
+    }
+    let lookup = |name: &'static str, kind: &[u8], format: &[u8], file: &str, dither: bool| {
+        let mut layer = TestLayer::new(name, [0; 4], Vec::new());
+        layer.channels = (-1..3).map(|c| (c, Vec::new())).collect();
+        layer.blocks.push((
+            *b"clrL",
+            block(&[
+                (b"lookupType", b"enum", enumerated(b"colorLookupType", kind)),
+                (b"Dthr", b"bool", vec![u8::from(dither)]),
+                (b"LUTFormat", b"enum", enumerated(b"LUTFormatType", format)),
+                (b"LUT3DFileData", b"tdta", data(file)),
+                (b"LUT3DFileName", b"TEXT", text("swap.3dl")),
+            ]),
+        ));
+        layer
+    };
+    let mut doc = Doc::new(3, 8, 16, 16, rgb8_planes(16, 16).0);
+    doc.layers = vec![
+        TestLayer::new(
+            "Background",
+            [0, 0, 16, 16],
+            (0..3)
+                .map(|c| (c, plane8(16, 16, |x, _| x as u8)))
+                .collect(),
+        ),
+        lookup("Swap", b"3DLUT", b"LUTFormat3DL", &three_dl, false),
+        // Dither is not reproduced: approximated.
+        lookup("Dithered", b"3DLUT", b"LUTFormat3DL", &three_dl, true),
+        // An ICC profile, a .look file, a damaged table: skipped as before.
+        lookup(
+            "Abstract",
+            b"abstractProfile",
+            b"LUTFormat3DL",
+            &three_dl,
+            false,
+        ),
+        lookup("Look", b"3DLUT", b"LUTFormatLOOK", &three_dl, false),
+        lookup("Damaged", b"3DLUT", b"LUTFormat3DL", &three_dl[..30], false),
+        // None chosen yet: no file.
+        {
+            let mut layer = TestLayer::new("Empty", [0; 4], Vec::new());
+            layer.channels = (-1..3).map(|c| (c, Vec::new())).collect();
+            layer.blocks.push((
+                *b"clrL",
+                block(&[
+                    (
+                        b"lookupType",
+                        b"enum",
+                        enumerated(b"colorLookupType", b"3DLUT"),
+                    ),
+                    (b"Dthr", b"bool", vec![0]),
+                ]),
+            ));
+            layer
+        },
+    ];
+    let opened = open_layers("lookup.psd", &doc);
+    assert_eq!(opened.warnings, [ImportWarning::AdjustmentLayersSkipped]);
+    let approximated: Vec<bool> = opened.layer_warnings[1..]
+        .iter()
+        .map(|w| w.contains(&ImportWarning::AdjustmentsApproximated))
+        .collect();
+    assert_eq!(approximated, [false, true, false]);
+    let lookups: Vec<(String, Adjustment)> = opened
+        .document
+        .layers()
+        .iter()
+        .filter_map(|l| match &l.content {
+            slopshop_core::LayerContent::Adjustment { adjustment } => {
+                Some((l.name.clone(), adjustment.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let names: Vec<&str> = lookups.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["Swap", "Dithered", "Empty"]);
+    assert_eq!(lookups[2].1, Adjustment::ColorLookup { lut: None });
+    let lut = lookups[0].1.lut().unwrap();
+    assert_eq!(lut.name(), "swap.3dl");
+    let c = lut.apply([0.2, 0.5, 0.9]);
+    assert!(
+        (c[0] - 0.9).abs() < 1e-6 && (c[2] - 0.2).abs() < 1e-6,
+        "{c:?}"
+    );
+}

@@ -1611,6 +1611,87 @@ fn layered_psd_round_trips_through_the_importer() {
 }
 
 #[test]
+fn color_lookups_round_trip_through_a_layered_psd_with_their_table() {
+    use slopshop_core::adjust::Adjustment;
+    use slopshop_core::lut::{ColorLut, LutDimension};
+    let mut doc = Document::new(Size::new(8, 8));
+    let film = ColorLut::new(
+        "film.cube",
+        LutDimension::Three,
+        5,
+        [[0.0; 3], [1.0, 1.5, 2.0]],
+        (0..375)
+            .map(|i| (i as f32 * 0.37).sin() * 0.5 + 0.5)
+            .collect(),
+    )
+    .unwrap();
+    let curves = ColorLut::new(
+        "curves.cube",
+        LutDimension::One,
+        4,
+        ColorLut::UNIT_DOMAIN,
+        (0..12).map(|i| i as f32 / 11.0).collect(),
+    )
+    .unwrap();
+    let written = [Some(film), Some(curves), None].map(|lut| Adjustment::ColorLookup { lut });
+    for (index, adjustment) in written.iter().cloned().enumerate() {
+        let id = doc.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index,
+            layer: Layer {
+                locks: Default::default(),
+                style: None,
+                transform: slopshop_core::Affine::IDENTITY.into(),
+                clipped: false,
+                id,
+                name: format!("lookup {index}"),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                mask: None,
+                content: LayerContent::Adjustment { adjustment },
+                warp: None,
+                vector_mask: None,
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+    }
+    let path = temp_path("color-lookup.psd");
+    let options = PsdOptions {
+        depth: PsdDepth::U8,
+        space: ColorSpace::SRGB,
+        dither: false,
+        large: false,
+    };
+    export_psd(
+        &path,
+        &doc,
+        &options,
+        &mut cpu_render,
+        &CancelToken::new(),
+        &mut |_| {},
+    )
+    .unwrap();
+    let crate::Opened::Layers(opened) = crate::open_file(&path).unwrap() else {
+        panic!("layers expected");
+    };
+    std::fs::remove_file(&path).ok();
+    let read: Vec<Adjustment> = opened
+        .document
+        .layers()
+        .iter()
+        .filter_map(|l| match &l.content {
+            LayerContent::Adjustment { adjustment } => Some(adjustment.clone()),
+            _ => None,
+        })
+        .collect();
+    // Exactly: the values are written as their shortest decimals.
+    assert_eq!(read, written);
+}
+
+#[test]
 fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
     use slopshop_core::adjust::Adjustment;
     let mut doc = Document::new(Size::new(8, 8));

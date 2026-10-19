@@ -33,7 +33,7 @@ use crate::{
     Decoded, ImportError, ImportWarning, Opened, check_budget, finish, icc, resolve_color_space,
 };
 
-mod descriptor;
+pub(crate) mod descriptor;
 pub(crate) mod effects;
 mod layers;
 

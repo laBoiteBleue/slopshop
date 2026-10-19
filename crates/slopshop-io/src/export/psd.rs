@@ -978,8 +978,37 @@ fn adjustment_blocks(adjustment: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             }
             vec![(*b"selc", b)]
         }
-        // TODO(color-lookup): clrL.
-        Adjustment::ColorLookup { .. } => vec![],
+        // Version 1, then a descriptor (`psd::layers` reads it back): a 3D LUT, its table as an
+        // embedded `.cube` file, Dither off.
+        Adjustment::ColorLookup { ref lut } => {
+            use crate::psd::effects::{enumerated, text};
+            let mut items: Vec<(&[u8], &[u8; 4], Vec<u8>)> = vec![
+                (
+                    b"lookupType",
+                    b"enum",
+                    enumerated(b"colorLookupType", b"3DLUT"),
+                ),
+                (b"Dthr", b"bool", vec![0]),
+            ];
+            if let Some(lut) = lut {
+                let file = crate::lut::write_cube(lut).into_bytes();
+                let mut data = (file.len() as u32).to_be_bytes().to_vec();
+                data.extend(file);
+                items.extend([
+                    (&b"Nm  "[..], b"TEXT", text(lut.name())),
+                    (
+                        b"LUTFormat",
+                        b"enum",
+                        enumerated(b"LUTFormatType", b"LUTFormatCUBE"),
+                    ),
+                    (b"LUT3DFileData", b"tdta", data),
+                    (b"LUT3DFileName", b"TEXT", text(lut.name())),
+                ]);
+            }
+            let mut b = 1u16.to_be_bytes().to_vec();
+            b.extend(descriptor(&items));
+            vec![(*b"clrL", b)]
+        }
     }
 }
 
