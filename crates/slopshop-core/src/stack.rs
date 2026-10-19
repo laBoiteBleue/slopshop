@@ -1377,8 +1377,8 @@ fn bilinear(pixels: &PremulPixels<'_>, x: f64, y: f64) -> [f64; 4] {
     })
 }
 
-/// The most blurs a filter takes (Clarity and Texture's two).
-const MAX_PLANS: usize = 2;
+/// The most blurs a filter takes (Smart Sharpen's Lens Blur's three).
+const MAX_PLANS: usize = 3;
 
 /// A layer reduced by a plan's factor (averages of blocks of pixels) and blurred by its kernel:
 /// how a large radius is computed (see `filter::Plan`).
@@ -1399,21 +1399,39 @@ impl Reduced {
         let mut small = vec![[0.0f32; 4]; width * height];
         let mut rows: Vec<(usize, &mut [[f32; 4]])> = small.chunks_mut(width).enumerate().collect();
         let weight = 1.0 / (factor * factor) as f32;
+        // Maximum's and Minimum's Roundness: each block's extreme, not its average (a speck
+        // spreads as bright).
+        let extreme = match plan.kernel {
+            crate::filter::Kernel::Extreme { largest, .. } => Some(largest),
+            _ => None,
+        };
         parallel_for_each(&mut rows, |(sy, row)| {
             let mut line = vec![[0.0f32; 4]; width * factor];
-            let mut sums = vec![[0.0f32; 4]; width];
+            let start = match extreme {
+                Some(true) => f32::MIN,
+                Some(false) => f32::MAX,
+                None => 0.0,
+            };
+            let mut sums = vec![[start; 4]; width];
             for j in 0..factor {
                 pixels.row(0, (*sy * factor + j) as i64, &mut line);
                 for (sum, block) in sums.iter_mut().zip(line.chunks(factor)) {
                     for px in block {
                         for c in 0..4 {
-                            sum[c] += px[c];
+                            sum[c] = match extreme {
+                                Some(true) => sum[c].max(px[c]),
+                                Some(false) => sum[c].min(px[c]),
+                                None => sum[c] + px[c],
+                            };
                         }
                     }
                 }
             }
             for (out, sum) in row.iter_mut().zip(&sums) {
-                *out = sum.map(|v| v * weight);
+                *out = match extreme {
+                    Some(_) => *sum,
+                    None => sum.map(|v| v * weight),
+                };
             }
         });
         Self {
@@ -4664,6 +4682,7 @@ fn coords_of(footprint: &Footprint, size: Size) -> Vec<TileCoord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::filter::{ColorModel, SharpenRemove};
     use crate::selection::SELECTION_FORMAT;
 
     /// Two tiles by two, the last ones partial.
@@ -6625,11 +6644,17 @@ mod tests {
         let edge = |image: &RasterImage| (0..W).find(|&x| pixel(image, x, 100)[0] > 128);
         let start = edge(&original).unwrap();
         assert_eq!(
-            edge(&filtered(Filter::Maximum { radius: 4.0 })),
+            edge(&filtered(Filter::Maximum {
+                radius: 4.0,
+                round: false,
+            })),
             Some(start - 4)
         );
         assert_eq!(
-            edge(&filtered(Filter::Minimum { radius: 4.0 })),
+            edge(&filtered(Filter::Minimum {
+                radius: 4.0,
+                round: false,
+            })),
             Some(start + 4)
         );
         // Across tiles (the edge is in the first one): the same on every row.
@@ -7119,5 +7144,99 @@ mod tests {
             }
         }
         assert!(gaps > 1000 && moved > 10_000, "{gaps} {moved}");
+    }
+
+    #[test]
+    fn other_noise_and_sharpen_filters_give_the_same_pixels_in_a_look_and_in_the_whole_layer() {
+        let original = gradient(true);
+        let sharpen = |remove| Filter::SmartSharpen {
+            amount: 200.0,
+            radius: 3.0,
+            noise: 10.0,
+            remove,
+            angle: 30.0,
+        };
+        let round = |radius| Filter::Maximum {
+            radius,
+            round: true,
+        };
+        for filter in [
+            Filter::defaults("custom").unwrap(),
+            Filter::defaults("hsbHsl").unwrap(),
+            Filter::defaults("despeckle").unwrap(),
+            Filter::defaults("reduceNoise").unwrap(),
+            sharpen(SharpenRemove::GaussianBlur),
+            sharpen(SharpenRemove::LensBlur),
+            sharpen(SharpenRemove::MotionBlur),
+            round(5.0),
+            Filter::Minimum {
+                radius: 7.0,
+                round: true,
+            },
+        ] {
+            let stack = applied(&original, filter);
+            assert!(
+                difference(&stack.evaluate().unwrap(), &original) > 0,
+                "{filter:?}"
+            );
+            look_matches_evaluation(&stack);
+        }
+    }
+
+    #[test]
+    fn hsb_hsl_and_custom_change_a_layers_channels_as_photoshop_does() {
+        let red = image(PixelFormat::RGBA8_SRGB, |_, _| vec![255, 0, 0, 255]);
+        let hsb = applied(&red, Filter::defaults("hsbHsl").unwrap())
+            .evaluate()
+            .unwrap();
+        assert_eq!(pixel(&hsb, 7, 9), [0, 255, 255, 255]);
+        let hsl = applied(
+            &red,
+            Filter::HsbHsl {
+                input: ColorModel::Rgb,
+                order: ColorModel::Hsl,
+            },
+        )
+        .evaluate()
+        .unwrap();
+        assert_eq!(pixel(&hsl, 7, 9), [0, 255, 128, 255]);
+        // Each channel moved by Custom's offset, in levels.
+        let gray = image(PixelFormat::RGBA8_SRGB, |_, _| vec![100, 100, 100, 255]);
+        let lighter = applied(
+            &gray,
+            Filter::Custom {
+                weights: std::array::from_fn(|i| f32::from(u8::from(i == 12))),
+                scale: 1.0,
+                offset: 20.0,
+            },
+        )
+        .evaluate()
+        .unwrap();
+        assert_eq!(pixel(&lighter, 100, 100), [120, 120, 120, 255]);
+    }
+
+    #[test]
+    fn a_large_roundness_spreads_a_point_into_a_disk_as_bright() {
+        // A white point in the middle of black: a white disk of the radius, not a square.
+        let (cx, cy) = (150u32, 130u32);
+        let point = image(PixelFormat::RGBA8_SRGB, |x, y| {
+            let v = if (x, y) == (cx, cy) { 255 } else { 0 };
+            vec![v, v, v, 255]
+        });
+        let grown = applied(
+            &point,
+            Filter::Maximum {
+                radius: 100.0,
+                round: true,
+            },
+        )
+        .evaluate()
+        .unwrap();
+        for (x, y) in [(cx, cy), (cx + 80, cy), (cx, cy + 80), (cx + 50, cy + 50)] {
+            assert_eq!(pixel(&grown, x, y), [255, 255, 255, 255], "({x}, {y})");
+        }
+        for (x, y) in [(cx + 90, cy + 90), (cx - 90, cy - 90), (cx + 130, cy)] {
+            assert_eq!(pixel(&grown, x, y), [0, 0, 0, 255], "({x}, {y})");
+        }
     }
 }

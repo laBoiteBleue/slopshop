@@ -492,7 +492,15 @@ impl Pass {
                     ..none
                 }]);
             }
-            Filter::Maximum { radius } | Filter::Minimum { radius } => {
+            // Roundness: on the CPU.
+            Filter::Maximum {
+                radius,
+                round: false,
+            }
+            | Filter::Minimum {
+                radius,
+                round: false,
+            } => {
                 if radius as u32 > MAX_REACH {
                     return None;
                 }
