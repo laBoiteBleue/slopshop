@@ -357,3 +357,34 @@ Status: accepted (2026-10-19, under the maintainer's delegation; to review).
    language). Photoshop fills a paragraph box to its end; one paragraph is enough to see a
    layout, and filling would need the layout's overflow first.
 4. **Type > Create Work Path** waits for the Paths panel (a work path to hold the outlines).
+5. **Character styles** (`.slop` 0.44), Photoshop's row of buttons in the Character settings,
+   on a text's own settings and on its spans like the other character settings (part 2,
+   point 3): Faux Bold, Faux Italic, All Caps and Small Caps (one setting, `case`),
+   Superscript and Subscript (one setting, `baseline`), Underline, Strikethrough, and
+   Standard Ligatures (on by default). `slopshop-text` draws them all into the outlines, so
+   that CPU and GPU, readers without the fonts, linked copies and Convert to Shape keep them:
+   - **All Caps and Small Caps** lay out the content with its letters as capitals (a capital
+     may be longer than its letter: "ß" gives "SS"; carets and lines are mapped back to the
+     content's places). Small capitals are the capitals at 70 % of the size (Photoshop's
+     default Small Caps size), synthesized for every font rather than taken from a font's
+     `smcp`, so that they look the same whatever the font offers.
+   - **Superscript and Subscript**: 58.3 % of the size, the baseline raised or lowered by
+     33.3 % of the size (Photoshop's defaults); the leading stays the character's own.
+   - **Faux Bold** draws each glyph again around a circle of a fortieth of its size (nine
+     copies whose union, filled non-zero, is the glyph grown by that radius), and spaces the
+     glyphs apart by as much. **Faux Italic** slants them by 14 degrees about the baseline
+     (as fontique slants a synthesized italic), over a real italic's slant if any.
+   - **Underline and Strikethrough** are rectangles as long as the run's advance, as thick and
+     as far from the baseline as the font says (the underline on the line's baseline, the
+     strikethrough through raised or lowered characters), in the characters' color, wound as
+     the glyphs' outer contours so that where they meet they add up rather than cut.
+   - **Standard Ligatures** off turn the OpenType `liga` and `clig` features off. The bundled
+     Inter has none: it shows with the system's fonts.
+6. **The pending style at a caret** (Photoshop's, left out in part 2): a style chosen while a
+   text is typed with nothing selected waits for the next characters typed at that caret
+   (shown meanwhile by the Character settings and the options bar, over the style of the
+   character before the caret), and is forgotten when the caret moves; in an empty text it
+   is the text's own. `setText` takes the characters just typed (`typed`: their range in the
+   new content and the style), applied over what they take from their neighbors, in order
+   with the other edits. At a caret, the settings now show the character before it rather
+   than the whole text.
