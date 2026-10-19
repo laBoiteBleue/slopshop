@@ -319,7 +319,8 @@ fn image_size(count: usize) -> Size {
 
 /// The tetrahedron of a cell holding the point at fractions `f` (red, green, blue): the three
 /// fractions in decreasing order and the corners after the first and the second step (offsets
-/// in red, green, blue). Ties take the first channel first; either way the result is the same.
+/// in red, green, blue). On ties either order gives the same color (the tetrahedra share that
+/// face).
 /// The GPU's `lut_tetrahedron` in composite.wgsl makes the same choices.
 fn tetrahedron(f: [f64; 3]) -> (f64, f64, f64, [[usize; 3]; 2]) {
     let [fr, fg, fb] = f;

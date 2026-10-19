@@ -65,3 +65,39 @@ node model the document is heading to (ADR 0009).
 - Everything that walks layers must handle a layer without pixels: bounds, pick (never
   picked), snapping (not a target), thumbnails (an icon), export defaults.
 - PSD adjustment layers can be imported later onto this model.
+
+## Amendment: Color Lookup (2026-10-19)
+
+Status: accepted (2026-10-19, under the maintainer's delegation; to review).
+
+Image > Adjustments > Color Lookup and its adjustment layer, as Photoshop's: a table loaded
+from a file (3DLUT File, Load 3D LUT), the file's name shown.
+
+1. **Files**: `.cube` (Adobe's specification, 3D or 1D, `DOMAIN_MIN`/`DOMAIN_MAX`, Resolve's
+   `LUT_*_INPUT_RANGE`) and `.3dl` (Lustre and Flame: a mesh of input codes, then the output
+   codes, bit depths inferred as other readers do). The parsers are in `slopshop-io`
+   (`lut`), bounded and refusing damaged files. A 3D table has at most 129 points a side
+   (`.cube` allows 256: 200 MB), a 1D one 65 536. Resolve's shaper (a 1D and a 3D table in one
+   file) and the video-range keywords are refused rather than misread. Photoshop's Abstract
+   and Device Link (ICC profiles) and its `.look` and `.csp` tables are left out.
+2. **Where it applies**: on sRGB-encoded values (sRGB primaries and transfer) whatever the
+   blend space, as Gradient Map: `.cube` and `.3dl` tables are made for display-referred
+   values, and SlopShop documents have no other display encoding yet. A table made for
+   another encoding (a log curve, Rec. 709) is applied to those values as they are, as when
+   Photoshop applies it to an sRGB document; nothing is converted. Colors outside the table's
+   domain are clamped to it, as grading software does (HDR values above white with them).
+3. **Interpolation**: tetrahedral for 3D tables (smoother than trilinear on neutral colors:
+   a gray reads only the cube's diagonal; the usual choice of grading software), linear for 1D
+   ones; the same tetrahedra on the CPU and the GPU, tested against each other.
+4. **The table is data of the document** (non-destructive, as Gradient Map's stops): shared
+   by reference (`Arc`, immutable), so `Adjustment` is no longer `Copy`. In `.slop` (0.43) it
+   is an image of its `f32` values, as Liquify's displacement: content-addressed records, so
+   a table saved again is not written again, and a table used by several layers is stored
+   once; the manifest keeps its name, dimension, size and domain.
+5. **GPU**: the tables go into the tile table, once a dispatch, after every fill's own words
+   (a layer's word says where its table starts): no further storage buffer (downlevel devices
+   bind four per stage) and no texture.
+6. **Dither** is left out: SlopShop composites in floating point, without the 8-bit rounding
+   at this step that Photoshop's option hides. A PSD's Dither is reported as approximated.
+7. **PSD** (`clrL`): imported when the embedded file is a `.cube` or `.3dl`; exported with the
+   table written as a `.cube` file (lookup type 3D LUT, Dither off).
