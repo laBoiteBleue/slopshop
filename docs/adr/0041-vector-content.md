@@ -443,7 +443,7 @@ Paths panel (Window > Paths) also keeps paths of the document's own:
      new Work Path replaces the old one and is chosen.
    - **Add a Mask**: the chosen document path as the active layer's vector mask, placed in its
      space (amendment "vector masks").
-5. **`.slop` 0.42** writes them in the document's `paths` (their id, name, `work`, geometry as a
+5. **`.slop` 0.44** writes them in the document's `paths` (their id, name, `work`, geometry as a
    shape's) and `next_path_id`; older readers keep them as an unknown field. **PSD** path
    resources (1025 for the Work Path, 2000–2997 for saved paths, 26-byte records in 8.24 fixed
    point relative to the canvas) are left for later: how Photoshop combines subpaths (its
