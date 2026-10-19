@@ -388,3 +388,67 @@ Status: accepted (2026-10-19, under the maintainer's delegation; to review).
    new content and the style), applied over what they take from their neighbors, in order
    with the other edits. At a caret, the settings now show the character before it rather
    than the whole text.
+
+
+## Amendment: the Paths panel (2026-10-19)
+
+Status: accepted (2026-10-19, under the maintainer's delegation; to review).
+
+Amendments "the Pen" (point 2) and "vector masks" (point 4) left paths to layers. Photoshop's
+Paths panel (Window > Paths) also keeps paths of the document's own:
+
+1. **Document paths** (`Document::paths`, `paths::DocumentPath`): saved paths, named, and the
+   **Work Path**, one at most, the temporary path the Pen draws in Path mode, replaced by the
+   next one unless saved. Their geometry is always a path (`Geometry::Path`, possibly without
+   subpaths: an empty New Path) in **document pixels**; they have stable ids (`PathId`, never
+   reused) and are kept in the panel's order. They belong to no layer, so locks never refuse
+   their edits.
+2. **Edits**: `InsertPath`, `RemovePath` and `SetPath` (a path replaced by id: drawn into,
+   renamed, saved), each undoable; a second Work Path is refused. Image Size, Canvas Size, Crop
+   and Image Rotation map every path with the image, as Photoshop's. Over the IPC the panel's
+   commands are edit requests (a new Work Path in place of the old one, in its place in the
+   list; Save Path; New Path; Rename; Duplicate, also of a layer's path placed in the document,
+   a live shape as its regular path; Delete).
+3. **The panel** lists the document's paths, then, while a layer is active, its shape path (a
+   vector layer's, not a text layer's) and its vector mask path, as Photoshop's; the Work Path
+   and the layer's paths in italics. Each has a thumbnail as a vector mask's (gray canvas,
+   white inside). A click chooses a path, a press on the empty part chooses none; a chosen
+   layer path goes with its layer. **The Pen** edits the chosen path's anchors (amendment
+   "editing paths with the Pen", the gestures unchanged) and adds what it draws to it; with
+   none chosen, as before (the targeted vector mask, the active vector layer), what it draws
+   becomes a new shape layer in **Shape mode** or a new Work Path, then chosen, in **Path
+   mode** (the options bar's mode, Photoshop's Pick Tool Mode; Pixels mode is left out: Fill
+   Path covers it). Ctrl+Enter makes a selection of the chosen path.
+4. **Commands** (the panel's buttons, its menu, Ctrl+click on a thumbnail):
+   - **Fill Path**: the path's area (anti-aliased, its fill rule kept, open subpaths joined)
+     painted as Edit > Fill paints a selection, on what painting reaches (the layer's pixels,
+     its mask, Quick Mask); the button with the foreground color, Alt or the menu through Edit
+     > Fill's dialog (colors, pattern, opacity). The selection is not consulted, as in
+     Photoshop, whose Fill Path has its own feather (left out).
+   - **Stroke Path**: the Brush or the Eraser, with its options of the moment, along each
+     subpath in the document (curves flattened within a tenth of a pixel; open subpaths stay
+     open), every subpath a run of one stroke (`paint::Stroke::lift`), within the selection, as
+     painting does; Simulate Pressure raises the pressure from nothing to full and back along
+     each subpath (a sine). One undo entry. The dialog (Alt, or the menu) picks the tool and
+     Simulate Pressure, kept for the button. The other painting tools are left for later.
+   - **Load Path as Selection**: the area the path encloses, replacing the selection, or with
+     Shift, Alt, Shift+Alt on a Ctrl+click added, subtracted or intersected.
+   - **Make Work Path from Selection** (`shape::trace`): the selection's outline where it
+     crosses one half, along the pixels' edges; corners where its direction turns by more than
+     65° over a few pixels (twice the tolerance, 3 to 12); between corners, the staircase's
+     edge midpoints fitted with cubic Béziers within the **Tolerance** (0.5 to 10 pixels, 2 by
+     default, Photoshop's) by `kurbo`'s curve fitting, straight runs as lines; holes run the
+     other way, so the nonzero rule keeps them. A rectangle gives its four corners exactly. The
+     new Work Path replaces the old one and is chosen.
+   - **Add a Mask**: the chosen document path as the active layer's vector mask, placed in its
+     space (amendment "vector masks").
+5. **`.slop` 0.41** writes them in the document's `paths` (their id, name, `work`, geometry as a
+   shape's) and `next_path_id`; older readers keep them as an unknown field. **PSD** path
+   resources (1025 for the Work Path, 2000–2997 for saved paths, 26-byte records in 8.24 fixed
+   point relative to the canvas) are left for later: how Photoshop combines subpaths (its
+   per-subpath operations) must be checked against files it writes before mapping our fill
+   rules onto them.
+
+Left for later: the chosen path drawn on the canvas with every tool (only the Pen shows it
+now), dragging rows (to reorder, onto New Path to save or duplicate, onto Delete), the
+clipping path, path operations (answer 9), several paths selected.

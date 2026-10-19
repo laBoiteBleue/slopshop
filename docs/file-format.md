@@ -244,6 +244,14 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   origin, possibly fractional or outside the canvas; at most 10 000 guides. Absent: none. An
   unknown `axis` is refused as made by a newer SlopShop. A writer of an older schema keeps
   them as an unknown field, without moving them when the canvas changes.
+  `paths` (0.41, [ADR 0041](adr/0041-vector-content.md)): the Paths panel's paths, in its
+  order, each `{ "id": 3, "name": "Path 1", "path": { "path": {…} } }`: a unique id below
+  `next_path_id`, a name (absent for the Work Path), and a `path` geometry as a shape's (see
+  `shapes`) in document pixels, possibly with no subpaths (an empty New Path); the Work Path,
+  one at most, has `"work": true`. Absent: none. `next_path_id` (0.41): the next path id to
+  allocate; absent, one above the largest id. A geometry that is not a valid path makes the
+  file invalid. A writer of an older schema keeps them as an unknown field, without moving
+  them when the canvas changes.
   `global_light` (0.37, [ADR 0032](adr/0032-layer-styles.md)): Layer > Layer Style > Global
   Light, `[angle, altitude]` in degrees (a finite angle counterclockwise from the right, an
   altitude of 0 to 90); the effects whose `use_global_light` is true are lit by it. Absent:
