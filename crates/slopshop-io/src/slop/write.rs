@@ -22,10 +22,10 @@ use super::manifest::{
     NODE_FILL, NODE_GRADIENT_FILL, NODE_GROUP, NODE_PATTERN_FILL, NODE_RASTER, NODE_VECTOR,
     NODE_VERSION, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
     NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PATTERN,
-    NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK,
-    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NODE_VERSION_VECTOR_MASK, NODE_VERSION_PERSPECTIVE_WARP,
-    NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto,
-    Schema, ShapeDto, SourceDto, Writer,
+    NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE, NODE_VERSION_PERSPECTIVE_WARP,
+    NODE_VERSION_SATIN, NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED,
+    NODE_VERSION_VECTOR, NODE_VERSION_VECTOR_MASK, NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM,
+    SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto, Schema, ShapeDto, SourceDto, Writer,
 };
 use super::read::best_slot;
 use super::{FileError, ImageRecord, Residue, SaveReport, SlopFile};
@@ -535,7 +535,7 @@ fn numbers(transform: slopshop_core::Projective) -> Vec<f64> {
     }
 }
 
-/// A layer's warp as written (ADR 0044): a grid (node version 18) or planes (version 19).
+/// A layer's warp as written (ADR 0044): a grid (node version 18) or planes (version 20).
 fn warp_json(warp: &slopshop_core::warp::Warp) -> Value {
     use slopshop_core::warp::Warp;
     let flat =
