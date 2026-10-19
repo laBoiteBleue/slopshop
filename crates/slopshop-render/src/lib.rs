@@ -3145,8 +3145,20 @@ mod tests {
             (Filter::Median { radius: 2.0 }, 1),
             (Filter::BoxBlur { radius: 6.0 }, 1),
             (Filter::BoxBlur { radius: 40.0 }, 1),
-            (Filter::Maximum { radius: 3.0 }, 0),
-            (Filter::Minimum { radius: 9.0 }, 0),
+            (
+                Filter::Maximum {
+                    radius: 3.0,
+                    round: false,
+                },
+                0,
+            ),
+            (
+                Filter::Minimum {
+                    radius: 9.0,
+                    round: false,
+                },
+                0,
+            ),
             (Filter::Solarize, 1),
             (Filter::FindEdges, 1),
             (

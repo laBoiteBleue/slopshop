@@ -368,6 +368,130 @@ const OIL_TIE: f64 = 1e-7;
 pub const MIN_EXTREME_RADIUS: f32 = 1.0;
 pub const MAX_EXTREME_RADIUS: f32 = 500.0;
 
+/// Up to this radius, Maximum's and Minimum's Roundness is exact on the layer itself; beyond, on
+/// the layer reduced (blocks' extremes) so that the radius is at most that.
+pub const ROUND_UP_TO: f64 = 32.0;
+
+/// Custom's ranges (Photoshop's): each of the 5 × 5 weights, Scale and Offset, whole numbers.
+pub const MAX_CUSTOM_WEIGHT: f32 = 999.0;
+pub const MAX_CUSTOM_SCALE: f32 = 9999.0;
+pub const MAX_CUSTOM_OFFSET: f32 = 9999.0;
+
+/// Custom's weights: 5 × 5, row by row from the top left.
+pub const CUSTOM_WEIGHTS: usize = 25;
+
+/// How HSB/HSL reads and writes a pixel's three channels (Photoshop's Input Mode and Row
+/// Order): red, green, blue; or hue, saturation, brightness (HSV); or hue, saturation,
+/// lightness. A hue from 0 to 1 is 0° to 360°.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorModel {
+    Rgb,
+    Hsb,
+    Hsl,
+}
+
+impl ColorModel {
+    fn index(self) -> f32 {
+        match self {
+            Self::Rgb => 0.0,
+            Self::Hsb => 1.0,
+            Self::Hsl => 2.0,
+        }
+    }
+
+    fn of(v: f32) -> Option<Self> {
+        match v {
+            0.0 => Some(Self::Rgb),
+            1.0 => Some(Self::Hsb),
+            2.0 => Some(Self::Hsl),
+            _ => None,
+        }
+    }
+
+    /// Red, green and blue (0 to 1) as this model's three channels.
+    fn encode(self, [r, g, b]: [f64; 3]) -> [f64; 3] {
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let chroma = max - min;
+        let hue = if chroma <= 0.0 {
+            0.0
+        } else if max == r {
+            ((g - b) / chroma).rem_euclid(6.0) / 6.0
+        } else if max == g {
+            ((b - r) / chroma + 2.0) / 6.0
+        } else {
+            ((r - g) / chroma + 4.0) / 6.0
+        };
+        match self {
+            Self::Rgb => [r, g, b],
+            Self::Hsb => [hue, if max > 0.0 { chroma / max } else { 0.0 }, max],
+            Self::Hsl => {
+                let l = (max + min) / 2.0;
+                let d = 1.0 - (2.0 * l - 1.0).abs();
+                [hue, if d > 0.0 { chroma / d } else { 0.0 }, l]
+            }
+        }
+    }
+
+    /// This model's three channels (0 to 1) as red, green and blue.
+    fn decode(self, [h, s, v]: [f64; 3]) -> [f64; 3] {
+        let (chroma, low) = match self {
+            Self::Rgb => return [h, s, v],
+            Self::Hsb => (v * s, v - v * s),
+            Self::Hsl => {
+                let c = (1.0 - (2.0 * v - 1.0).abs()) * s;
+                (c, v - c / 2.0)
+            }
+        };
+        let h6 = h.rem_euclid(1.0) * 6.0;
+        let x = chroma * (1.0 - (h6.rem_euclid(2.0) - 1.0).abs());
+        let [r, g, b] = match h6 as u32 {
+            0 => [chroma, x, 0.0],
+            1 => [x, chroma, 0.0],
+            2 => [0.0, chroma, x],
+            3 => [0.0, x, chroma],
+            4 => [x, 0.0, chroma],
+            _ => [chroma, 0.0, x],
+        };
+        [r + low, g + low, b + low]
+    }
+}
+
+/// Reduce Noise's Strength range (Photoshop's), and how far apart (in values, 1 being white)
+/// two neighbours may be and still be smoothed together at Strength 10, Preserve Details 0.
+pub const MAX_NOISE_STRENGTH: f32 = 10.0;
+const NOISE_SIGMA: f64 = 0.1;
+
+/// The same for Reduce Color Noise at 100 %, on the colors without their lightness.
+const COLOR_NOISE_SIGMA: f64 = 0.15;
+
+/// The radii Reduce Noise smooths the lightness and the colors over, in the layer's pixels
+/// (color noise is blotchier).
+const NOISE_RADIUS: f64 = 2.0;
+const COLOR_NOISE_RADIUS: f64 = 4.0;
+
+/// Despeckle: the radius and the difference it smooths over (Reduce Noise's computation, on
+/// the lightness and the colors alike).
+const SPECKLE_RADIUS: f64 = 2.0;
+const SPECKLE_SIGMA: f64 = 0.04;
+
+/// Smart Sharpen's Amount and Radius ranges (Photoshop's).
+pub const MIN_SMART_SHARPEN_RADIUS: f32 = 0.1;
+pub const MAX_SMART_SHARPEN_RADIUS: f32 = 64.0;
+
+/// The difference (in values) Smart Sharpen's Reduce Noise at 100 % leaves half sharpened:
+/// smaller ones (grain) less, larger ones (edges) fully.
+const SHARPEN_NOISE: f64 = 0.04;
+
+/// What Smart Sharpen takes the blur it pushes colors from to be (Photoshop's Remove): a
+/// Gaussian of the radius; a lens's (the same, without halos: no color pushed beyond those
+/// around it); a motion along the angle, over twice the radius.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharpenRemove {
+    GaussianBlur,
+    LensBlur,
+    MotionBlur,
+}
+
 /// Up to this radius, a median is taken on the layer itself; beyond, on the layer reduced (see
 /// [`Plan::median`]).
 pub const MEDIAN_UP_TO: f64 = 8.0;
@@ -473,12 +597,56 @@ pub enum Filter {
     Median { radius: f32 },
     /// Photoshop's Box Blur: each pixel the average of the square of `radius` pixels around it.
     BoxBlur { radius: f32 },
-    /// Photoshop's Maximum (Squareness): each pixel the largest value of the square of `radius`
-    /// pixels around it, channel by channel: light areas spread, dark ones shrink.
-    Maximum { radius: f32 },
-    /// Photoshop's Minimum (Squareness): each pixel the smallest value of the square of
-    /// `radius` pixels around it, channel by channel: dark areas spread, light ones shrink.
-    Minimum { radius: f32 },
+    /// Photoshop's Maximum: each pixel the largest value of the square of `radius` pixels around
+    /// it (Squareness), or of the disk (`round`, Roundness), channel by channel: light areas
+    /// spread, dark ones shrink.
+    Maximum { radius: f32, round: bool },
+    /// Photoshop's Minimum: each pixel the smallest value of the square of `radius` pixels
+    /// around it (Squareness), or of the disk (`round`), channel by channel: dark areas spread,
+    /// light ones shrink.
+    Minimum { radius: f32, round: bool },
+    /// Photoshop's Custom: each channel the sum of the 5 × 5 pixels around it weighted by
+    /// `weights` (row by row from the top left, whole numbers from -999 to 999), divided by
+    /// `scale` (1 to 9999), plus `offset` levels of 8 bits (-9999 to 9999); each pixel keeps its
+    /// opacity.
+    Custom {
+        weights: [f32; CUSTOM_WEIGHTS],
+        scale: f32,
+        offset: f32,
+    },
+    /// Photoshop's HSB/HSL: each pixel's three channels read as `input` says and written as
+    /// `order` says (RGB to HSB: the hue in red, the saturation in green, the brightness in
+    /// blue), its opacity kept.
+    HsbHsl {
+        input: ColorModel,
+        order: ColorModel,
+    },
+    /// Photoshop's Despeckle: the layer smoothed except where it changes much (its edges).
+    /// `reduction` as Diffuse's: the radius shrinks by it.
+    Despeckle { reduction: f32 },
+    /// Photoshop's Reduce Noise (Basic): the lightness smoothed where neighbours differ little,
+    /// `strength` (0 to 10) how much, less with `preserve` (Preserve Details, percent); the
+    /// colors (without the lightness) likewise by `color` (Reduce Color Noise, percent); the
+    /// lightness then sharpened by `sharpen` percent (Sharpen Details). `reduction` as
+    /// Diffuse's: the radii shrink by it.
+    ReduceNoise {
+        strength: f32,
+        preserve: f32,
+        color: f32,
+        sharpen: f32,
+        reduction: f32,
+    },
+    /// Photoshop's Smart Sharpen: each color pushed away from the blur `remove` says (of
+    /// `radius` pixels, 0.1 to 64, along `angle` degrees for a motion) by `amount` percent (1 to
+    /// 500) of their difference, small differences (grain) less with `noise` (Reduce Noise,
+    /// percent).
+    SmartSharpen {
+        amount: f32,
+        radius: f32,
+        noise: f32,
+        remove: SharpenRemove,
+        angle: f32,
+    },
     /// Photoshop's Solarize: each color above the middle inverted, a negative and a positive
     /// blended (nothing lighter than middle gray).
     Solarize,
@@ -704,7 +872,7 @@ pub enum Filter {
 impl Filter {
     /// Every filter's identifier, in menu order.
     /// Shadows/Highlights last: it is in Image > Adjustments, not in the Filter menu.
-    pub const IDS: [&'static str; 42] = [
+    pub const IDS: [&'static str; 47] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -712,12 +880,17 @@ impl Filter {
         "smartBlur",
         "surfaceBlur",
         "average",
+        "smartSharpen",
         "unsharpMask",
         "addNoise",
+        "despeckle",
         "dustAndScratches",
         "median",
+        "reduceNoise",
         "clarityTexture",
+        "custom",
         "highPass",
+        "hsbHsl",
         "maximum",
         "minimum",
         "findEdges",
@@ -763,6 +936,11 @@ impl Filter {
             Self::BoxBlur { .. } => "boxBlur",
             Self::Maximum { .. } => "maximum",
             Self::Minimum { .. } => "minimum",
+            Self::Custom { .. } => "custom",
+            Self::HsbHsl { .. } => "hsbHsl",
+            Self::Despeckle { .. } => "despeckle",
+            Self::ReduceNoise { .. } => "reduceNoise",
+            Self::SmartSharpen { .. } => "smartSharpen",
             Self::Solarize => "solarize",
             Self::FindEdges => "findEdges",
             Self::Emboss { .. } => "emboss",
@@ -803,9 +981,41 @@ impl Filter {
             Self::GaussianBlur { radius }
             | Self::HighPass { radius }
             | Self::Median { radius }
-            | Self::BoxBlur { radius }
-            | Self::Maximum { radius }
-            | Self::Minimum { radius } => vec![radius],
+            | Self::BoxBlur { radius } => vec![radius],
+            Self::Maximum { radius, round } | Self::Minimum { radius, round } => {
+                vec![radius, f32::from(u8::from(round))]
+            }
+            Self::Custom {
+                weights,
+                scale,
+                offset,
+            } => [weights.as_slice(), &[scale, offset]].concat(),
+            Self::HsbHsl { input, order } => vec![input.index(), order.index()],
+            Self::Despeckle { .. } => Vec::new(),
+            Self::ReduceNoise {
+                strength,
+                preserve,
+                color,
+                sharpen,
+                ..
+            } => vec![strength, preserve, color, sharpen],
+            Self::SmartSharpen {
+                amount,
+                radius,
+                noise,
+                remove,
+                angle,
+            } => vec![
+                amount,
+                radius,
+                noise,
+                match remove {
+                    SharpenRemove::GaussianBlur => 0.0,
+                    SharpenRemove::LensBlur => 1.0,
+                    SharpenRemove::MotionBlur => 2.0,
+                },
+                angle,
+            ],
             Self::MotionBlur { angle, distance } => vec![angle, distance],
             Self::UnsharpMask {
                 amount,
@@ -1058,8 +1268,52 @@ impl Filter {
             ("highPass", &[radius]) => Some(Self::HighPass { radius }),
             ("median", &[radius]) => Some(Self::Median { radius }),
             ("boxBlur", &[radius]) => Some(Self::BoxBlur { radius }),
-            ("maximum", &[radius]) => Some(Self::Maximum { radius }),
-            ("minimum", &[radius]) => Some(Self::Minimum { radius }),
+            // Without Preserve (written before it existed): Squareness.
+            ("maximum", &[radius]) => Some(Self::Maximum {
+                radius,
+                round: false,
+            }),
+            ("minimum", &[radius]) => Some(Self::Minimum {
+                radius,
+                round: false,
+            }),
+            ("maximum", &[radius, round]) => Some(Self::Maximum {
+                radius,
+                round: flag(round)?,
+            }),
+            ("minimum", &[radius, round]) => Some(Self::Minimum {
+                radius,
+                round: flag(round)?,
+            }),
+            ("custom", values) if values.len() == CUSTOM_WEIGHTS + 2 => Some(Self::Custom {
+                weights: std::array::from_fn(|i| values[i]),
+                scale: values[CUSTOM_WEIGHTS],
+                offset: values[CUSTOM_WEIGHTS + 1],
+            }),
+            ("hsbHsl", &[input, order]) => Some(Self::HsbHsl {
+                input: ColorModel::of(input)?,
+                order: ColorModel::of(order)?,
+            }),
+            ("despeckle", &[]) => Some(Self::Despeckle { reduction: 1.0 }),
+            ("reduceNoise", &[strength, preserve, color, sharpen]) => Some(Self::ReduceNoise {
+                strength,
+                preserve,
+                color,
+                sharpen,
+                reduction: 1.0,
+            }),
+            ("smartSharpen", &[amount, radius, noise, remove, angle]) => Some(Self::SmartSharpen {
+                amount,
+                radius,
+                noise,
+                remove: match remove {
+                    0.0 => SharpenRemove::GaussianBlur,
+                    1.0 => SharpenRemove::LensBlur,
+                    2.0 => SharpenRemove::MotionBlur,
+                    _ => return None,
+                },
+                angle,
+            }),
             ("solarize", &[]) => Some(Self::Solarize),
             ("findEdges", &[]) => Some(Self::FindEdges),
             ("emboss", &[angle, height, amount]) => Some(Self::Emboss {
@@ -1330,8 +1584,43 @@ impl Filter {
             }),
             "median" => Some(Self::Median { radius: 1.0 }),
             "boxBlur" => Some(Self::BoxBlur { radius: 10.0 }),
-            "maximum" => Some(Self::Maximum { radius: 1.0 }),
-            "minimum" => Some(Self::Minimum { radius: 1.0 }),
+            "maximum" => Some(Self::Maximum {
+                radius: 1.0,
+                round: false,
+            }),
+            "minimum" => Some(Self::Minimum {
+                radius: 1.0,
+                round: false,
+            }),
+            // Photoshop's: a sharpening kernel, the center 5 and its four neighbours -1.
+            "custom" => Some(Self::Custom {
+                weights: std::array::from_fn(|i| match i {
+                    12 => 5.0,
+                    7 | 11 | 13 | 17 => -1.0,
+                    _ => 0.0,
+                }),
+                scale: 1.0,
+                offset: 0.0,
+            }),
+            "hsbHsl" => Some(Self::HsbHsl {
+                input: ColorModel::Rgb,
+                order: ColorModel::Hsb,
+            }),
+            "despeckle" => Some(Self::Despeckle { reduction: 1.0 }),
+            "reduceNoise" => Some(Self::ReduceNoise {
+                strength: 6.0,
+                preserve: 60.0,
+                color: 45.0,
+                sharpen: 25.0,
+                reduction: 1.0,
+            }),
+            "smartSharpen" => Some(Self::SmartSharpen {
+                amount: 200.0,
+                radius: 1.0,
+                noise: 10.0,
+                remove: SharpenRemove::LensBlur,
+                angle: 0.0,
+            }),
             "solarize" => Some(Self::Solarize),
             "findEdges" => Some(Self::FindEdges),
             "emboss" => Some(Self::Emboss {
@@ -1539,8 +1828,55 @@ impl Filter {
             Self::BoxBlur { radius } => {
                 radius.fract() == 0.0 && (MIN_BOX_RADIUS..=MAX_BOX_RADIUS).contains(&radius)
             }
-            Self::Maximum { radius } | Self::Minimum { radius } => {
+            Self::Maximum { radius, .. } | Self::Minimum { radius, .. } => {
                 radius.fract() == 0.0 && (MIN_EXTREME_RADIUS..=MAX_EXTREME_RADIUS).contains(&radius)
+            }
+            Self::Custom {
+                weights,
+                scale,
+                offset,
+            } => {
+                let whole =
+                    |v: f32, min: f32, max: f32| v.fract() == 0.0 && (min..=max).contains(&v);
+                weights
+                    .iter()
+                    .all(|&w| whole(w, -MAX_CUSTOM_WEIGHT, MAX_CUSTOM_WEIGHT))
+                    && whole(scale, 1.0, MAX_CUSTOM_SCALE)
+                    && whole(offset, -MAX_CUSTOM_OFFSET, MAX_CUSTOM_OFFSET)
+            }
+            Self::HsbHsl { .. } => true,
+            Self::Despeckle { reduction } => reduction.is_finite() && reduction >= 1.0,
+            Self::ReduceNoise {
+                strength,
+                preserve,
+                color,
+                sharpen,
+                reduction,
+            } => {
+                let percent = |v: f32| v.fract() == 0.0 && (0.0..=100.0).contains(&v);
+                strength.fract() == 0.0
+                    && (0.0..=MAX_NOISE_STRENGTH).contains(&strength)
+                    && percent(preserve)
+                    && percent(color)
+                    && percent(sharpen)
+                    && reduction.is_finite()
+                    && reduction >= 1.0
+            }
+            Self::SmartSharpen {
+                amount,
+                radius,
+                noise,
+                angle,
+                ..
+            } => {
+                amount.fract() == 0.0
+                    && (MIN_SHARPEN_AMOUNT..=MAX_SHARPEN_AMOUNT).contains(&amount)
+                    && radius.is_finite()
+                    && (MIN_SMART_SHARPEN_RADIUS..=MAX_SMART_SHARPEN_RADIUS).contains(&radius)
+                    && noise.fract() == 0.0
+                    && (0.0..=100.0).contains(&noise)
+                    && angle.fract() == 0.0
+                    && (-180.0..=180.0).contains(&angle)
             }
             Self::Solarize | Self::FindEdges => true,
             Self::Emboss {
@@ -1705,6 +2041,11 @@ impl Filter {
             | Self::BoxBlur { .. }
             | Self::Maximum { .. }
             | Self::Minimum { .. }
+            | Self::Custom { .. }
+            | Self::HsbHsl { .. }
+            | Self::Despeckle { .. }
+            | Self::ReduceNoise { .. }
+            | Self::SmartSharpen { .. }
             | Self::Solarize
             | Self::FindEdges
             | Self::Emboss { .. }
@@ -1802,11 +2143,44 @@ impl Filter {
             Self::BoxBlur { radius } => Self::BoxBlur {
                 radius: (radius / factor).round().max(MIN_BOX_RADIUS),
             },
-            Self::Maximum { radius } => Self::Maximum {
+            Self::Maximum { radius, round } => Self::Maximum {
                 radius: (radius / factor).round().max(MIN_EXTREME_RADIUS),
+                round,
             },
-            Self::Minimum { radius } => Self::Minimum {
+            Self::Minimum { radius, round } => Self::Minimum {
                 radius: (radius / factor).round().max(MIN_EXTREME_RADIUS),
+                round,
+            },
+            // Weights of the look's pixels: as on a reduced layer as Find Edges' lines.
+            Self::Custom { .. } | Self::HsbHsl { .. } => *self,
+            Self::Despeckle { reduction } => Self::Despeckle {
+                reduction: reduction * factor,
+            },
+            Self::ReduceNoise {
+                strength,
+                preserve,
+                color,
+                sharpen,
+                reduction,
+            } => Self::ReduceNoise {
+                strength,
+                preserve,
+                color,
+                sharpen,
+                reduction: reduction * factor,
+            },
+            Self::SmartSharpen {
+                amount,
+                radius,
+                noise,
+                remove,
+                angle,
+            } => Self::SmartSharpen {
+                amount,
+                radius: (radius / factor).max(MIN_SMART_SHARPEN_RADIUS),
+                noise,
+                remove,
+                angle,
             },
             Self::Solarize => Self::Solarize,
             // Lines of a pixel: as thin on a reduced layer.
@@ -1958,8 +2332,20 @@ impl Filter {
             Self::DustAndScratches { radius, .. }
             | Self::Median { radius }
             | Self::BoxBlur { radius }
-            | Self::Maximum { radius }
-            | Self::Minimum { radius } => f64::from(radius) + 2.0,
+            | Self::Maximum { radius, .. }
+            | Self::Minimum { radius, .. } => f64::from(radius) + 2.0,
+            Self::HsbHsl { .. } => 0.0,
+            Self::Custom { .. }
+            | Self::Despeckle { .. }
+            | Self::ReduceNoise { .. }
+            | Self::SmartSharpen { .. } => {
+                self.plans()
+                    .iter()
+                    .map(|plan| plan.kernel.reach())
+                    .max()
+                    .unwrap_or(0) as f64
+                    + 2.0
+            }
             Self::Solarize => 0.0,
             Self::FindEdges => 2.0,
             Self::Emboss { height, .. } => f64::from(height) + 2.0,
@@ -2000,9 +2386,27 @@ impl Filter {
     }
 
     /// How the filter is computed over a layer: what it blurs by, at what reduction; Clarity
-    /// and Texture blur twice ([`Self::finish`] gets one blur per plan, in this order).
+    /// and Texture blur twice, Smart Sharpen's Lens Blur takes the extremes around each pixel
+    /// too ([`Self::finish`] gets one blur per plan, in this order).
     pub(crate) fn plans(&self) -> Vec<Plan> {
         match *self {
+            Self::SmartSharpen {
+                radius,
+                remove: SharpenRemove::LensBlur,
+                ..
+            } => {
+                // The square's extremes: exact and as fast whatever the radius.
+                let around = f64::from(radius).ceil().max(1.0) as usize;
+                let extreme = |largest| Plan {
+                    factor: 1,
+                    kernel: Kernel::Extreme {
+                        radius: around,
+                        largest,
+                        round: false,
+                    },
+                };
+                vec![self.plan(), extreme(true), extreme(false)]
+            }
             Self::ClarityTexture { .. } => self
                 .clarity_radii()
                 .unwrap_or_default()
@@ -2098,19 +2502,84 @@ impl Filter {
                 Plan::median(f64::from(radius))
             }
             Self::BoxBlur { radius } => Plan::boxed(f64::from(radius)),
-            Self::Maximum { radius } => Plan {
+            Self::Maximum { radius, round } | Self::Minimum { radius, round } => {
+                let largest = matches!(self, Self::Maximum { .. });
+                Plan::extreme(f64::from(radius), largest, round)
+            }
+            Self::Custom { weights, scale, .. } => {
+                let scale = f64::from(scale);
+                Plan {
+                    factor: 1,
+                    kernel: Kernel::Convolve(Box::new(weights.map(|w| f64::from(w) / scale))),
+                }
+            }
+            Self::HsbHsl { .. } => Plan {
                 factor: 1,
-                kernel: Kernel::Extreme {
-                    radius: radius as usize,
-                    largest: true,
-                },
+                kernel: Kernel::Identity,
             },
-            Self::Minimum { radius } => Plan {
-                factor: 1,
-                kernel: Kernel::Extreme {
-                    radius: radius as usize,
-                    largest: false,
-                },
+            Self::Despeckle { reduction } => {
+                let radius = (SPECKLE_RADIUS / f64::from(reduction)).round() as usize;
+                let eps = SPECKLE_SIGMA * SPECKLE_SIGMA;
+                Plan {
+                    factor: 1,
+                    kernel: Kernel::Denoise(Denoise {
+                        radius,
+                        eps,
+                        color_radius: radius,
+                        color_eps: eps,
+                        sharpen: 0.0,
+                    }),
+                }
+            }
+            Self::ReduceNoise {
+                strength,
+                preserve,
+                color,
+                sharpen,
+                reduction,
+            } => {
+                let r = f64::from(reduction);
+                let sigma = NOISE_SIGMA * f64::from(strength) / f64::from(MAX_NOISE_STRENGTH)
+                    * (1.0 - 0.9 * f64::from(preserve) / 100.0);
+                let color_sigma = COLOR_NOISE_SIGMA * f64::from(color) / 100.0;
+                Plan {
+                    factor: 1,
+                    kernel: Kernel::Denoise(Denoise {
+                        radius: if sigma > 0.0 {
+                            (NOISE_RADIUS / r).round() as usize
+                        } else {
+                            0
+                        },
+                        eps: sigma * sigma,
+                        color_radius: if color_sigma > 0.0 {
+                            (COLOR_NOISE_RADIUS / r).round() as usize
+                        } else {
+                            0
+                        },
+                        color_eps: color_sigma * color_sigma,
+                        // Details of a pixel: none left to sharpen on a level reduced more.
+                        sharpen: if r < 1.5 {
+                            f64::from(sharpen) / 100.0
+                        } else {
+                            0.0
+                        },
+                    }),
+                }
+            }
+            Self::SmartSharpen {
+                radius,
+                remove,
+                angle,
+                ..
+            } => match remove {
+                SharpenRemove::GaussianBlur | SharpenRemove::LensBlur => {
+                    Plan::gaussian(f64::from(radius))
+                }
+                // Lines either way: the angle as Motion Blur's (-90 to 90).
+                SharpenRemove::MotionBlur => Plan::line(
+                    (f64::from(angle) + 90.0).rem_euclid(180.0) - 90.0,
+                    (2.0 * f64::from(radius)).max(f64::from(MIN_MOTION_DISTANCE)),
+                ),
             },
             Self::Solarize => Plan {
                 factor: 1,
@@ -2629,6 +3098,8 @@ impl Filter {
                 | Self::Fragment { .. }
                 | Self::Mezzotint { .. }
                 | Self::Pointillize { .. }
+                | Self::Despeckle { .. }
+                | Self::ReduceNoise { .. }
         )
     }
 
@@ -2738,7 +3209,58 @@ impl Filter {
             | Self::Facet { .. }
             | Self::Fragment { .. }
             | Self::Mezzotint { .. }
-            | Self::Pointillize { .. } => blurred,
+            | Self::Pointillize { .. }
+            | Self::Despeckle { .. }
+            | Self::ReduceNoise { .. } => blurred,
+            // The weighted sum of the premultiplied values (divided by the scale) as a color of
+            // the pixel's opacity, plus the offset.
+            Self::Custom { offset, .. } => {
+                if alpha <= 0.0 {
+                    return original;
+                }
+                let k = f64::from(offset) / 255.0;
+                let c: [f64; 3] = std::array::from_fn(|i| blurred[i] / alpha + k);
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
+            Self::HsbHsl { input, order } => {
+                if alpha <= 0.0 {
+                    return original;
+                }
+                let c = order.encode(input.decode(o.map(|v| v.clamp(0.0, 1.0))));
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
+            Self::SmartSharpen {
+                amount,
+                noise,
+                remove,
+                ..
+            } => {
+                if alpha <= 0.0 {
+                    return original;
+                }
+                let k = f64::from(amount) / 100.0;
+                // Differences well below the noise's level hardly sharpened, well above fully.
+                let n = f64::from(noise) / 100.0 * SHARPEN_NOISE;
+                let n2 = n * n;
+                let c: [f64; 3] = std::array::from_fn(|i| {
+                    let d = o[i] - b[i];
+                    let d2 = d * d;
+                    let pushed = if d2 + n2 > 0.0 {
+                        d * d2 / (d2 + n2)
+                    } else {
+                        0.0
+                    };
+                    o[i] + k * pushed
+                });
+                // Lens Blur: no color beyond those around (no halo).
+                let c = if remove == SharpenRemove::LensBlur && blurs.len() == 3 {
+                    let (high, low) = (straight(blurs[1]), straight(blurs[2]));
+                    std::array::from_fn(|i| c[i].clamp(low[i].min(high[i]), high[i]))
+                } else {
+                    c
+                };
+                [c[0] * alpha, c[1] * alpha, c[2] * alpha, alpha]
+            }
             // Each channel the difference of the pixel's color and the clouds' (`blurred`,
             // opaque), its own opacity.
             Self::DifferenceClouds { .. } => color(&|o, b| (o - b).abs()),
@@ -3147,6 +3669,26 @@ impl Plan {
         }
     }
 
+    /// Maximum's (`largest`) or Minimum's extremes of the square of `radius` whole pixels,
+    /// exact whatever the radius; or of the disk (`round`): up to [`ROUND_UP_TO`] directly,
+    /// beyond on the layer reduced (each reduced pixel its block's extreme) so that the radius
+    /// is at most that.
+    pub(crate) fn extreme(radius: f64, largest: bool, round: bool) -> Self {
+        let factor = if !round || radius <= ROUND_UP_TO {
+            1
+        } else {
+            1usize << (radius / ROUND_UP_TO).log2().ceil() as u32
+        };
+        Self {
+            factor,
+            kernel: Kernel::Extreme {
+                radius: (radius / factor as f64).round().max(1.0) as usize,
+                largest,
+                round,
+            },
+        }
+    }
+
     /// A line of `distance` pixels at `angle` degrees: up to [`LINE_UP_TO`] directly; beyond,
     /// the layer reduced so that the line is at most that long (a few reduced pixels of
     /// softness across it, hidden by the length along it).
@@ -3171,12 +3713,18 @@ pub(crate) enum Kernel {
     Line(Line),
     /// The median of the square of this radius around each pixel, channel by channel.
     Median(usize),
-    /// The largest (or smallest) value of the square of `radius` around each pixel, channel by
-    /// channel.
+    /// The largest (or smallest) value of the square of `radius` around each pixel, or of the
+    /// disk (`round`), channel by channel.
     Extreme {
         radius: usize,
         largest: bool,
+        round: bool,
     },
+    /// Custom's: the 5 × 5 pixels around each one weighted (row by row from the top left),
+    /// summed.
+    Convolve(Box<[f64; CUSTOM_WEIGHTS]>),
+    /// Reduce Noise's and Despeckle's smoothing (see [`denoise`]).
+    Denoise(Denoise),
     /// The magnitude of the Sobel gradient of each channel, a full step 1.
     Sobel,
     /// The difference of the pixels `offset` after and before each one (read bilinearly).
@@ -3295,6 +3843,26 @@ impl Oil {
     }
 }
 
+/// Reduce Noise's computation (see [`denoise`]): the lightness smoothed over boxes of `radius`
+/// where its variance is small against `eps`, the colors without it likewise over
+/// `color_radius` and `color_eps` (no smoothing at a radius of 0), then the lightness sharpened
+/// by `sharpen` (its difference with a 3 × 3 box's average).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Denoise {
+    radius: usize,
+    eps: f64,
+    color_radius: usize,
+    color_eps: f64,
+    sharpen: f64,
+}
+
+impl Denoise {
+    /// A guided filter reads two boxes away; sharpening one pixel more.
+    fn reach(&self) -> usize {
+        (2 * self.radius + usize::from(self.sharpen > 0.0)).max(2 * self.color_radius)
+    }
+}
+
 impl Kernel {
     /// How far a pixel's result reads, in pixels on each side.
     pub(crate) fn reach(&self) -> usize {
@@ -3304,6 +3872,8 @@ impl Kernel {
             Self::Median(radius) | Self::Extreme { radius, .. } | Self::Surface { radius, .. } => {
                 *radius
             }
+            Self::Convolve(_) => 2,
+            Self::Denoise(denoise) => denoise.reach(),
             Self::Smart { radius, .. } => radius.ceil() as usize + 1,
             Self::Diffuse { .. } | Self::Contour { .. } => 1,
             Self::Wind { length, .. } => *length,
@@ -3371,7 +3941,18 @@ impl Kernel {
                 let source = region.to_vec();
                 median_rows(&source, width, height, *radius, 0, region);
             }
-            &Self::Extreme { radius, largest } => extreme(region, width, height, radius, largest),
+            &Self::Extreme {
+                radius,
+                largest,
+                round: false,
+            } => extreme(region, width, height, [radius; 2], largest),
+            &Self::Extreme {
+                radius,
+                largest,
+                round: true,
+            } => round_extreme(region, width, height, radius, largest),
+            Self::Convolve(weights) => convolve(region, width, height, weights),
+            Self::Denoise(denoise) => self::denoise(region, width, height, denoise),
             Self::Sobel => sobel(region, width, height),
             &Self::Relief { offset } => relief(region, width, height, offset),
             &Self::Cells(cell) => cells(region, width, height, cell, [0, 0], [width, height]),
@@ -3402,8 +3983,11 @@ impl Kernel {
         match self {
             Self::Gaussian(blur) => blur.image(image, width, height),
             Self::Identity => image,
-            // Never reduced (no plan of a factor above 1 takes them): one thread is enough.
+            // Never reduced (no plan of a factor above 1 takes them, but a large Roundness, then
+            // small): one thread is enough.
             Self::Extreme { .. }
+            | Self::Convolve(_)
+            | Self::Denoise(_)
             | Self::Sobel
             | Self::Relief { .. }
             | Self::Cells(_)
@@ -3449,27 +4033,231 @@ impl Kernel {
 }
 
 /// `region` (`width` × `height`) in place: each pixel the largest (`largest`) or smallest value
-/// of the square of `radius` around it, channel by channel, its edges repeating outward. A row
-/// pass then a column pass, each exact in three comparisons a pixel whatever the radius (van
+/// of the rectangle `across` pixels to each side and `down` up and down around it, channel by
+/// channel, its edges repeating outward. A row pass then a column pass, each exact in three
+/// comparisons a pixel whatever the radius (van
 /// Herk and Gil–Werman: running extremes forward and backward within windows of the square's
 /// side, each window then spanning at most two of them).
-fn extreme(region: &mut [[f32; 4]], width: usize, height: usize, radius: usize, largest: bool) {
-    if width == 0 || height == 0 || radius == 0 {
+fn extreme(
+    region: &mut [[f32; 4]],
+    width: usize,
+    height: usize,
+    [across, down]: [usize; 2],
+    largest: bool,
+) {
+    if width == 0 || height == 0 {
         return;
     }
     let mut buffers = ExtremeLine::default();
-    for row in region.chunks_mut(width) {
-        buffers.line(row, radius, largest);
+    if across > 0 {
+        for row in region.chunks_mut(width) {
+            buffers.line(row, across, largest);
+        }
+    }
+    if down == 0 {
+        return;
     }
     let mut column = vec![[0.0f32; 4]; height];
     for x in 0..width {
         for (y, px) in column.iter_mut().enumerate() {
             *px = region[y * width + x];
         }
-        buffers.line(&mut column, radius, largest);
+        buffers.line(&mut column, down, largest);
         for (y, px) in column.iter().enumerate() {
             region[y * width + x] = *px;
         }
+    }
+}
+
+/// The rectangles whose union is the disk of `radius` (the pixels within `radius` of the
+/// center): their half widths and half heights, each the widest of its height.
+fn disk_rectangles(radius: usize) -> Vec<[usize; 2]> {
+    let r2 = radius * radius;
+    let half = |dy: usize| (r2 - dy * dy).isqrt();
+    (0..=radius)
+        .filter(|&dy| dy == radius || half(dy + 1) < half(dy))
+        .map(|dy| [half(dy), dy])
+        .collect()
+}
+
+/// `region` (`width` × `height`) in place: each pixel the largest (`largest`) or smallest value
+/// of the disk of `radius` around it, channel by channel, its edges repeating outward. Exact:
+/// the disk the union of rectangles (see [`disk_rectangles`]), each one's extremes rows then
+/// columns as [`extreme`]'s.
+fn round_extreme(
+    region: &mut [[f32; 4]],
+    width: usize,
+    height: usize,
+    radius: usize,
+    largest: bool,
+) {
+    if width == 0 || height == 0 || radius == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    let mut rectangle = Vec::with_capacity(source.len());
+    for (n, half) in disk_rectangles(radius).into_iter().enumerate() {
+        let out: &mut [[f32; 4]] = if n == 0 {
+            region.copy_from_slice(&source);
+            &mut *region
+        } else {
+            rectangle.clear();
+            rectangle.extend_from_slice(&source);
+            &mut rectangle
+        };
+        extreme(out, width, height, half, largest);
+        if n > 0 {
+            for (px, v) in region.iter_mut().zip(&rectangle) {
+                *px = std::array::from_fn(|c| {
+                    if largest {
+                        px[c].max(v[c])
+                    } else {
+                        px[c].min(v[c])
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// `region` (`width` × `height`) in place: each pixel the sum of the 5 × 5 pixels around it
+/// weighted by `weights` (row by row from the top left), the edges repeating outward.
+fn convolve(region: &mut [[f32; 4]], width: usize, height: usize, weights: &[f64; CUSTOM_WEIGHTS]) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    // Only the weights that count.
+    let taps: Vec<(i64, i64, f64)> = weights
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| **w != 0.0)
+        .map(|(i, &w)| (i as i64 % 5 - 2, i as i64 / 5 - 2, w))
+        .collect();
+    let (w, h) = (width as i64, height as i64);
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = [0.0f64; 4];
+            for &(dx, dy, weight) in &taps {
+                let sx = (x + dx).clamp(0, w - 1) as usize;
+                let sy = (y + dy).clamp(0, h - 1) as usize;
+                let px = source[sy * width + sx];
+                for c in 0..4 {
+                    sum[c] += weight * f64::from(px[c]);
+                }
+            }
+            region[y as usize * width + x as usize] = sum.map(|v| v as f32);
+        }
+    }
+}
+
+/// The average of the box of `radius` around each value of `plane` (`width` × `height`), the
+/// edges repeating outward: running sums along the rows, then down the columns.
+fn box_plane(plane: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
+    if radius == 0 || width == 0 || height == 0 {
+        return plane.to_vec();
+    }
+    let r = radius as i64;
+    let side = (2 * radius + 1) as f64;
+    let mut rows = vec![0.0f32; plane.len()];
+    for (src, out) in plane.chunks(width).zip(rows.chunks_mut(width)) {
+        let at = |i: i64| f64::from(src[i.clamp(0, width as i64 - 1) as usize]);
+        let mut sum: f64 = (-r..=r).map(at).sum();
+        for (i, v) in out.iter_mut().enumerate() {
+            *v = (sum / side) as f32;
+            sum += at(i as i64 + r + 1) - at(i as i64 - r);
+        }
+    }
+    let mut out = vec![0.0f32; plane.len()];
+    let row = |y: i64| y.clamp(0, height as i64 - 1) as usize * width;
+    let mut sums: Vec<f64> = vec![0.0; width];
+    for dy in -r..=r {
+        let start = row(dy);
+        for (s, v) in sums.iter_mut().zip(&rows[start..start + width]) {
+            *s += f64::from(*v);
+        }
+    }
+    for y in 0..height {
+        let line = &mut out[y * width..(y + 1) * width];
+        for (o, s) in line.iter_mut().zip(&sums) {
+            *o = (s / side) as f32;
+        }
+        let (add, sub) = (row(y as i64 + r + 1), row(y as i64 - r));
+        for (x, s) in sums.iter_mut().enumerate() {
+            *s += f64::from(rows[add + x]) - f64::from(rows[sub + x]);
+        }
+    }
+    out
+}
+
+/// `plane` smoothed where it varies little (a guided filter guided by itself, He et al.): over
+/// each box of `radius`, the values pulled toward their average by `eps / (variance + eps)`;
+/// those pulls averaged in turn, so that a box across an edge (a variance far above `eps`)
+/// leaves it as it is.
+fn guided(plane: &[f32], width: usize, height: usize, radius: usize, eps: f64) -> Vec<f32> {
+    if radius == 0 || eps <= 0.0 {
+        return plane.to_vec();
+    }
+    let mean = box_plane(plane, width, height, radius);
+    let squares: Vec<f32> = plane.iter().map(|v| v * v).collect();
+    let mean_squares = box_plane(&squares, width, height, radius);
+    let (mut a, mut b) = (vec![0.0f32; plane.len()], vec![0.0f32; plane.len()]);
+    for i in 0..plane.len() {
+        let m = f64::from(mean[i]);
+        let variance = (f64::from(mean_squares[i]) - m * m).max(0.0);
+        let k = variance / (variance + eps);
+        a[i] = k as f32;
+        b[i] = (m - k * m) as f32;
+    }
+    let (a, b) = (
+        box_plane(&a, width, height, radius),
+        box_plane(&b, width, height, radius),
+    );
+    plane
+        .iter()
+        .zip(a.iter().zip(&b))
+        .map(|(v, (a, b))| a * v + b)
+        .collect()
+}
+
+/// Rec. 601's weights of red, green and blue in the lightness Reduce Noise smooths.
+const LUMA: [f32; 3] = [0.299, 0.587, 0.114];
+
+/// `region` (`width` × `height`, premultiplied) in place, as Reduce Noise and Despeckle smooth
+/// it: its lightness and its colors without it (blue and red minus the lightness, linear in
+/// the premultiplied values) smoothed apart (see [`guided`]), the lightness then sharpened
+/// against its 3 × 3 average; alpha kept.
+fn denoise(region: &mut [[f32; 4]], width: usize, height: usize, denoise: &Denoise) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let luma: Vec<f32> = region
+        .iter()
+        .map(|p| LUMA[0] * p[0] + LUMA[1] * p[1] + LUMA[2] * p[2])
+        .collect();
+    let mut y = guided(&luma, width, height, denoise.radius, denoise.eps);
+    if denoise.sharpen > 0.0 {
+        let k = denoise.sharpen as f32;
+        let soft = box_plane(&y, width, height, 1);
+        for (v, s) in y.iter_mut().zip(&soft) {
+            *v += k * (*v - s);
+        }
+    }
+    let color = |c: usize| -> Vec<f32> {
+        let plane: Vec<f32> = region.iter().zip(&luma).map(|(p, l)| p[c] - l).collect();
+        guided(
+            &plane,
+            width,
+            height,
+            denoise.color_radius,
+            denoise.color_eps,
+        )
+    };
+    let (blue, red) = (color(2), color(0));
+    for (i, px) in region.iter_mut().enumerate() {
+        let (r, b) = (red[i] + y[i], blue[i] + y[i]);
+        let g = (y[i] - LUMA[0] * r - LUMA[2] * b) / LUMA[1];
+        *px = [r, g, b, px[3]];
     }
 }
 
@@ -5223,13 +6011,16 @@ mod tests {
     }
 
     #[test]
-    fn maximum_and_minimum_are_the_extremes_of_the_square_around() {
+    fn maximum_and_minimum_are_the_extremes_of_the_square_or_the_disk_around() {
         let (w, h) = (23, 17);
         let source = speckled(w * h, 3);
-        let brute = |x: usize, y: usize, r: usize, largest: bool| -> [f32; 4] {
+        let brute = |x: usize, y: usize, r: usize, largest: bool, round: bool| -> [f32; 4] {
             let mut best = [if largest { f32::MIN } else { f32::MAX }; 4];
             for dy in -(r as i64)..=r as i64 {
                 for dx in -(r as i64)..=r as i64 {
+                    if round && dx * dx + dy * dy > (r * r) as i64 {
+                        continue;
+                    }
                     let sx = (x as i64 + dx).clamp(0, w as i64 - 1) as usize;
                     let sy = (y as i64 + dy).clamp(0, h as i64 - 1) as usize;
                     let px = source[sy * w + sx];
@@ -5246,15 +6037,20 @@ mod tests {
         };
         // Radii within the region, as wide as it, and wider.
         for r in [1, 2, 5, 11, 30] {
-            for largest in [true, false] {
+            for (largest, round) in [(true, false), (false, false), (true, true), (false, true)] {
                 let mut region = source.clone();
-                Kernel::Extreme { radius: r, largest }.region(&mut region, w, h);
+                Kernel::Extreme {
+                    radius: r,
+                    largest,
+                    round,
+                }
+                .region(&mut region, w, h);
                 for y in 0..h {
                     for x in 0..w {
                         assert_eq!(
                             region[y * w + x],
-                            brute(x, y, r, largest),
-                            "{r} {largest} ({x}, {y})"
+                            brute(x, y, r, largest, round),
+                            "{r} {largest} {round} ({x}, {y})"
                         );
                     }
                 }
@@ -5271,6 +6067,7 @@ mod tests {
         Kernel::Extreme {
             radius: 2,
             largest: true,
+            round: false,
         }
         .region(&mut grown, w, h);
         for y in 0..h {
@@ -5287,6 +6084,7 @@ mod tests {
         Kernel::Extreme {
             radius: 1,
             largest: false,
+            round: false,
         }
         .region(&mut gone, w, h);
         assert!(gone.iter().all(|px| *px == [0.0; 4]));
@@ -5322,8 +6120,20 @@ mod tests {
         for (filter, max) in [
             (Filter::Median { radius: 1.0 }, 500.0),
             (Filter::BoxBlur { radius: 1.0 }, 2000.0),
-            (Filter::Maximum { radius: 1.0 }, 500.0),
-            (Filter::Minimum { radius: 1.0 }, 500.0),
+            (
+                Filter::Maximum {
+                    radius: 1.0,
+                    round: false,
+                },
+                500.0,
+            ),
+            (
+                Filter::Minimum {
+                    radius: 1.0,
+                    round: false,
+                },
+                500.0,
+            ),
         ] {
             let id = filter.id();
             let with = |radius: f32| Filter::from_params(id, &[radius]).unwrap();
@@ -6693,5 +7503,497 @@ mod tests {
                 .all(|p| ((p[0] / p[3]) * 16.0).fract().abs() < 1e-4)
         );
         assert!(reduced.iter().any(|p| p[0] > 0.0 && p[0] < p[3]));
+    }
+
+    #[test]
+    fn other_noise_and_sharpen_settings_are_photoshops_ranges() {
+        // Photoshop's defaults.
+        let custom = Filter::defaults("custom").unwrap().params();
+        assert_eq!(custom.len(), CUSTOM_WEIGHTS + 2);
+        assert_eq!(custom[12], 5.0);
+        assert_eq!([custom[7], custom[11], custom[13], custom[17]], [-1.0; 4]);
+        assert_eq!(
+            custom.iter().sum::<f32>(),
+            2.0,
+            "the rest 0, Scale 1, Offset 0"
+        );
+        assert_eq!(&custom[CUSTOM_WEIGHTS..], [1.0, 0.0]);
+        assert_eq!(Filter::defaults("hsbHsl").unwrap().params(), [0.0, 1.0]);
+        assert!(Filter::defaults("despeckle").unwrap().params().is_empty());
+        assert_eq!(
+            Filter::defaults("reduceNoise").unwrap().params(),
+            [6.0, 60.0, 45.0, 25.0]
+        );
+        assert_eq!(
+            Filter::defaults("smartSharpen").unwrap().params(),
+            [200.0, 1.0, 10.0, 1.0, 0.0],
+            "Lens Blur"
+        );
+        assert_eq!(Filter::defaults("maximum").unwrap().params(), [1.0, 0.0]);
+        // Written before Preserve: Squareness.
+        assert_eq!(
+            Filter::from_params("minimum", &[3.0]),
+            Some(Filter::Minimum {
+                radius: 3.0,
+                round: false
+            })
+        );
+        assert_eq!(
+            Filter::from_params("maximum", &[3.0, 1.0]),
+            Some(Filter::Maximum {
+                radius: 3.0,
+                round: true
+            })
+        );
+        assert_eq!(Filter::from_params("maximum", &[3.0, 2.0]), None);
+        // Custom's ranges.
+        let with = |i: usize, v: f32| {
+            let mut values = custom.clone();
+            values[i] = v;
+            Filter::from_params("custom", &values).unwrap()
+        };
+        assert!(with(0, -999.0).is_valid() && with(24, 999.0).is_valid());
+        assert!(with(25, 9999.0).is_valid() && with(26, -9999.0).is_valid());
+        for (i, wrong) in [
+            (0, 1000.0),
+            (3, 0.5),
+            (25, 0.0),
+            (25, 10000.0),
+            (26, 10000.0),
+        ] {
+            assert!(!with(i, wrong).is_valid(), "{i} {wrong}");
+        }
+        assert_eq!(Filter::from_params("custom", &custom[..26]), None);
+        // HSB/HSL's three models each way.
+        for input in 0..3 {
+            for order in 0..3 {
+                let values = [input as f32, order as f32];
+                let filter = Filter::from_params("hsbHsl", &values).unwrap();
+                assert_eq!(filter.params(), values);
+            }
+        }
+        assert_eq!(Filter::from_params("hsbHsl", &[3.0, 0.0]), None);
+        // Reduce Noise's and Smart Sharpen's ranges.
+        let noise = |strength, preserve| Filter::ReduceNoise {
+            strength,
+            preserve,
+            color: 100.0,
+            sharpen: 0.0,
+            reduction: 1.0,
+        };
+        assert!(noise(0.0, 0.0).is_valid() && noise(10.0, 100.0).is_valid());
+        for wrong in [noise(11.0, 0.0), noise(5.5, 0.0), noise(5.0, 101.0)] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        let sharpen = |amount, radius, angle| Filter::SmartSharpen {
+            amount,
+            radius,
+            noise: 0.0,
+            remove: SharpenRemove::MotionBlur,
+            angle,
+        };
+        assert!(sharpen(1.0, 0.1, -180.0).is_valid() && sharpen(500.0, 64.0, 180.0).is_valid());
+        for wrong in [
+            sharpen(0.0, 1.0, 0.0),
+            sharpen(501.0, 1.0, 0.0),
+            sharpen(100.0, 64.5, 0.0),
+            sharpen(100.0, 0.05, 0.0),
+            sharpen(100.0, 1.0, 181.0),
+        ] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        assert_eq!(
+            Filter::from_params("smartSharpen", &[100.0, 1.0, 0.0, 3.0, 0.0]),
+            None
+        );
+        // Looks of reduced levels: the radii shrink, the weights and models stay.
+        assert_eq!(
+            sharpen(100.0, 8.0, 30.0).scaled(4.0),
+            sharpen(100.0, 2.0, 30.0)
+        );
+        let default = |id| Filter::defaults(id).unwrap();
+        assert_eq!(default("custom").scaled(4.0), default("custom"));
+        assert_eq!(default("hsbHsl").scaled(4.0), default("hsbHsl"));
+        assert_eq!(
+            default("despeckle").scaled(4.0),
+            Filter::Despeckle { reduction: 4.0 }
+        );
+    }
+
+    #[test]
+    fn custom_weighs_the_pixels_around_each_divides_by_its_scale_and_adds_its_offset() {
+        let (w, h) = (9, 7);
+        let source = speckled(w * h, 5);
+        let at = |x: i64, y: i64| {
+            source[y.clamp(0, h as i64 - 1) as usize * w + x.clamp(0, w as i64 - 1) as usize]
+        };
+        let run = |weights: [f32; CUSTOM_WEIGHTS], scale: f32| {
+            let filter = Filter::Custom {
+                weights,
+                scale,
+                offset: 0.0,
+            };
+            let mut region = source.clone();
+            filter.plan().kernel.region(&mut region, w, h);
+            region
+        };
+        // One weight right of the center: each pixel its right neighbour's value (the grid as
+        // Photoshop shows it, over the pixels around).
+        let right = run(std::array::from_fn(|i| f32::from(u8::from(i == 13))), 1.0);
+        // Two below, halved by a scale of 2 and doubled by a weight of 2.
+        let below = run(
+            std::array::from_fn(|i| if i == 22 { 2.0 } else { 0.0 }),
+            2.0,
+        );
+        for y in 0..h as i64 {
+            for x in 0..w as i64 {
+                let i = y as usize * w + x as usize;
+                assert_eq!(right[i], at(x + 1, y), "({x}, {y})");
+                for (got, want) in below[i].iter().zip(at(x, y + 2)) {
+                    assert!((got - want).abs() < 1e-6, "({x}, {y})");
+                }
+            }
+        }
+        // The offset in levels of 8 bits, each pixel its opacity.
+        let filter = Filter::Custom {
+            weights: std::array::from_fn(|i| f32::from(u8::from(i == 12))),
+            scale: 1.0,
+            offset: 51.0,
+        };
+        let half = [0.1, 0.2, 0.3, 0.5];
+        let out = filter.finish(half, &[half], [0, 0]);
+        let expected = [0.4, 0.6, 0.8].map(|c| c * 0.5);
+        for c in 0..3 {
+            assert!((out[c] - expected[c]).abs() < 1e-6, "{out:?}");
+        }
+        assert_eq!(out[3], 0.5);
+        // Photoshop's default sharpens, a flat area unchanged.
+        let mut region = vec![[0.25f32; 4]; 25];
+        Filter::defaults("custom")
+            .unwrap()
+            .plan()
+            .kernel
+            .region(&mut region, 5, 5);
+        assert!(region.iter().all(|p| (p[0] - 0.25).abs() < 1e-6));
+    }
+
+    #[test]
+    fn hsb_hsl_converts_the_channels_as_photoshop_does() {
+        use ColorModel::{Hsb, Hsl, Rgb};
+        let convert = |input, order, rgb: [f64; 3]| {
+            let c = Filter::HsbHsl { input, order }.finish(
+                [rgb[0], rgb[1], rgb[2], 1.0],
+                &[[0.0; 4]],
+                [0, 0],
+            );
+            [c[0], c[1], c[2]]
+        };
+        let close = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9);
+        // The hue in red (0 to 1 for 0° to 360°), the saturation in green, the brightness or
+        // the lightness in blue.
+        assert!(close(convert(Rgb, Hsb, [1.0, 0.0, 0.0]), [0.0, 1.0, 1.0]));
+        assert!(close(convert(Rgb, Hsl, [1.0, 0.0, 0.0]), [0.0, 1.0, 0.5]));
+        assert!(close(
+            convert(Rgb, Hsb, [0.0, 0.5, 0.0]),
+            [1.0 / 3.0, 1.0, 0.5]
+        ));
+        assert!(close(
+            convert(Rgb, Hsl, [0.5, 0.5, 1.0]),
+            [2.0 / 3.0, 1.0, 0.75]
+        ));
+        assert!(close(convert(Rgb, Hsb, [0.4, 0.4, 0.4]), [0.0, 0.0, 0.4]));
+        assert!(close(convert(Hsb, Rgb, [0.5, 1.0, 1.0]), [0.0, 1.0, 1.0]));
+        // Each way back, whatever the color; a model to itself changes nothing.
+        for px in speckled(200, 9) {
+            let rgb = [px[0], px[1], px[2]].map(f64::from);
+            for model in [Rgb, Hsb, Hsl] {
+                assert!(close(convert(model, Rgb, convert(Rgb, model, rgb)), rgb));
+                assert!(close(convert(model, model, rgb), rgb));
+            }
+            assert!(close(
+                convert(Hsl, Rgb, convert(Hsb, Hsl, convert(Rgb, Hsb, rgb))),
+                rgb
+            ));
+        }
+        // Its opacity kept, the colors premultiplied by it.
+        let half =
+            Filter::defaults("hsbHsl")
+                .unwrap()
+                .finish([0.5, 0.0, 0.0, 0.5], &[[0.0; 4]], [0, 0]);
+        assert_eq!(half, [0.0, 0.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn the_disk_is_the_union_of_its_rectangles() {
+        for radius in 1..=40usize {
+            let r = radius as i64;
+            let rectangles = disk_rectangles(radius);
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    let inside = dx * dx + dy * dy <= r * r;
+                    let covered = rectangles.iter().any(|&[hw, hh]| {
+                        dx.unsigned_abs() as usize <= hw && dy.unsigned_abs() as usize <= hh
+                    });
+                    assert_eq!(covered, inside, "{radius} ({dx}, {dy})");
+                }
+            }
+        }
+        assert_eq!(disk_rectangles(1), [[1, 0], [0, 1]], "a plus");
+        // A large Roundness on the layer reduced, Squareness never.
+        let round = Plan::extreme(100.0, true, true);
+        assert_eq!(round.factor, 4);
+        assert_eq!(round.kernel.reach(), 25);
+        assert_eq!(Plan::extreme(100.0, true, false).factor, 1);
+        assert_eq!(Plan::extreme(32.0, false, true).factor, 1);
+    }
+
+    #[test]
+    fn box_planes_and_guided_smoothing_keep_flat_areas_and_edges() {
+        let (w, h) = (25, 11);
+        let plane: Vec<f32> = speckled(w * h, 2).iter().map(|p| p[0]).collect();
+        let at = |x: i64, y: i64| {
+            plane[y.clamp(0, h as i64 - 1) as usize * w + x.clamp(0, w as i64 - 1) as usize]
+        };
+        for radius in [1usize, 3, 8] {
+            let boxed = box_plane(&plane, w, h, radius);
+            let r = radius as i64;
+            for y in 0..h as i64 {
+                for x in 0..w as i64 {
+                    let sum: f32 = (-r..=r)
+                        .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
+                        .map(|(dx, dy)| at(x + dx, y + dy))
+                        .sum();
+                    let mean = sum / ((2 * r + 1) * (2 * r + 1)) as f32;
+                    let got = boxed[y as usize * w + x as usize];
+                    assert!((got - mean).abs() < 1e-5, "{radius} ({x}, {y})");
+                }
+            }
+        }
+        // A step of half the range kept, small grain smoothed.
+        let step: Vec<f32> = (0..w * h)
+            .map(|i| {
+                let base = if i % w < 12 { 0.2 } else { 0.7 };
+                base + (plane[i] - 0.5) * 0.04
+            })
+            .collect();
+        let smooth = guided(&step, w, h, 2, 0.02 * 0.02);
+        let spread = |v: &[f32], columns: std::ops::Range<usize>| {
+            let values: Vec<f32> = (0..h)
+                .flat_map(|y| columns.clone().map(move |x| v[y * w + x]))
+                .collect();
+            let max = values.iter().copied().fold(f32::MIN, f32::max);
+            let min = values.iter().copied().fold(f32::MAX, f32::min);
+            max - min
+        };
+        assert!(spread(&smooth, 0..6) < spread(&step, 0..6) / 2.0);
+        let edge = smooth[5 * w + 13] - smooth[5 * w + 10];
+        assert!(edge > 0.45, "{edge}");
+        assert_eq!(guided(&step, w, h, 2, 0.0), step, "no smoothing at 0");
+    }
+
+    /// A gray of `level` with grain of up to `grain` on each channel, opaque.
+    fn grainy(w: usize, h: usize, level: f32, grain: f32) -> Vec<[f32; 4]> {
+        speckled(w * h, 11)
+            .into_iter()
+            .map(|p| {
+                let mut px = [level; 4];
+                for c in 0..3 {
+                    px[c] += (p[c] - 0.5) * 2.0 * grain;
+                }
+                px[3] = 1.0;
+                px
+            })
+            .collect()
+    }
+
+    fn deviation(region: &[[f32; 4]], c: usize) -> f64 {
+        let n = region.len() as f64;
+        let mean = region.iter().map(|p| f64::from(p[c])).sum::<f64>() / n;
+        (region
+            .iter()
+            .map(|p| (f64::from(p[c]) - mean).powi(2))
+            .sum::<f64>()
+            / n)
+            .sqrt()
+    }
+
+    #[test]
+    fn reduce_noise_and_despeckle_smooth_grain_and_keep_edges_and_opacity() {
+        let (w, h) = (40, 30);
+        let noisy = grainy(w, h, 0.5, 0.05);
+        for filter in [
+            Filter::defaults("reduceNoise").unwrap(),
+            Filter::defaults("despeckle").unwrap(),
+        ] {
+            let mut region = noisy.clone();
+            filter.plan().kernel.region(&mut region, w, h);
+            for c in 0..3 {
+                let (before, after) = (deviation(&noisy, c), deviation(&region, c));
+                assert!(after < before * 0.6, "{filter:?} {c}: {before} {after}");
+            }
+            assert!(region.iter().all(|p| p[3] == 1.0));
+            // A step of black to white across the middle stays one.
+            let mut step: Vec<[f32; 4]> = (0..w * h)
+                .map(|i| {
+                    let v = if i % w < w / 2 { 0.0 } else { 1.0 };
+                    [v, v, v, 1.0]
+                })
+                .collect();
+            filter.plan().kernel.region(&mut step, w, h);
+            let row = 10 * w;
+            assert!(
+                step[row + w / 2 - 2][1] < 0.05 && step[row + w / 2 + 1][1] > 0.95,
+                "{filter:?}"
+            );
+            assert!(!filter.reads_original());
+        }
+        // Reduce Color Noise: the colors' grain smoothed, the lightness left.
+        let colors_only = Filter::ReduceNoise {
+            strength: 0.0,
+            preserve: 0.0,
+            color: 100.0,
+            sharpen: 0.0,
+            reduction: 1.0,
+        };
+        let mut region = noisy.clone();
+        colors_only.plan().kernel.region(&mut region, w, h);
+        let split = |r: &[[f32; 4]]| {
+            let planes: Vec<[f32; 4]> = r
+                .iter()
+                .map(|p| {
+                    let y = LUMA[0] * p[0] + LUMA[1] * p[1] + LUMA[2] * p[2];
+                    [p[0] - y, y, 0.0, 1.0]
+                })
+                .collect();
+            (deviation(&planes, 0), deviation(&planes, 1))
+        };
+        let ((red_before, luma_before), (red_after, luma_after)) = (split(&noisy), split(&region));
+        assert!(red_after < red_before * 0.5, "{red_before} {red_after}");
+        assert!(
+            (luma_after - luma_before).abs() < 1e-4,
+            "lightness untouched"
+        );
+        // Nothing asked: nothing changes.
+        let none = Filter::ReduceNoise {
+            strength: 0.0,
+            preserve: 60.0,
+            color: 0.0,
+            sharpen: 0.0,
+            reduction: 1.0,
+        };
+        let mut same = noisy.clone();
+        none.plan().kernel.region(&mut same, w, h);
+        for (a, b) in same.iter().zip(&noisy) {
+            assert!((0..4).all(|c| (a[c] - b[c]).abs() < 1e-5));
+        }
+        // Sharpen Details: a light dot on a ramp lighter still.
+        let dot = |sharpen| {
+            let mut ramp: Vec<[f32; 4]> = (0..w * h)
+                .map(|i| {
+                    let v = (i % w) as f32 / w as f32;
+                    [v, v, v, 1.0]
+                })
+                .collect();
+            ramp[5 * w + 20] = [0.9, 0.9, 0.9, 1.0];
+            Filter::ReduceNoise {
+                strength: 0.0,
+                preserve: 0.0,
+                color: 0.0,
+                sharpen,
+                reduction: 1.0,
+            }
+            .plan()
+            .kernel
+            .region(&mut ramp, w, h);
+            ramp[5 * w + 20][0]
+        };
+        assert!(dot(100.0) > dot(0.0) + 0.1);
+        // Looks of reduced levels: the radii shrink, down to nothing.
+        let far = Filter::defaults("despeckle").unwrap().scaled(8.0);
+        assert_eq!(far.plan().kernel.reach(), 0);
+    }
+
+    #[test]
+    fn smart_sharpen_pushes_edges_lens_blur_without_halos_and_spares_grain() {
+        // A soft edge from 0.2 to 0.8 across a few pixels.
+        let (w, h) = (40, 8);
+        let edge: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let x = (i % w) as f32;
+                let v = 0.2 + 0.6 / (1.0 + (-(x - 20.0) / 1.5).exp());
+                [v, v, v, 1.0]
+            })
+            .collect();
+        let sharpened = |remove| {
+            let filter = Filter::SmartSharpen {
+                amount: 300.0,
+                radius: 2.0,
+                noise: 0.0,
+                remove,
+                angle: 0.0,
+            };
+            let blurs: Vec<Vec<[f32; 4]>> = filter
+                .plans()
+                .iter()
+                .map(|plan| {
+                    let mut region = edge.clone();
+                    plan.kernel.region(&mut region, w, h);
+                    region
+                })
+                .collect();
+            (0..w)
+                .map(|x| {
+                    let i = 4 * w + x;
+                    let b: Vec<[f64; 4]> = blurs.iter().map(|r| r[i].map(f64::from)).collect();
+                    filter.finish(edge[i].map(f64::from), &b, [0, 0])[0]
+                })
+                .collect::<Vec<f64>>()
+        };
+        let gaussian = sharpened(SharpenRemove::GaussianBlur);
+        let lens = sharpened(SharpenRemove::LensBlur);
+        let motion = sharpened(SharpenRemove::MotionBlur);
+        let original = |x: usize| f64::from(edge[4 * w + x][0]);
+        // Steeper across the edge each way.
+        for row in [&gaussian, &lens, &motion] {
+            assert!(
+                row[22] - row[18] > original(22) - original(18) + 0.1,
+                "{row:?}"
+            );
+        }
+        // Gaussian Blur overshoots (halos); Lens Blur stays within the values around.
+        let high = gaussian.iter().copied().fold(f64::MIN, f64::max);
+        let low = gaussian.iter().copied().fold(f64::MAX, f64::min);
+        assert!(high > 0.82 && low < 0.18, "{high} {low}");
+        assert!(
+            lens.iter().all(|v| (0.2 - 1e-6..=0.8 + 1e-6).contains(v)),
+            "{lens:?}"
+        );
+        // Reduce Noise: a small difference (grain) pushed less, a large one about as much.
+        let filter = |noise| Filter::SmartSharpen {
+            amount: 100.0,
+            radius: 1.0,
+            noise,
+            remove: SharpenRemove::GaussianBlur,
+            angle: 0.0,
+        };
+        let push = |noise, d: f64| {
+            filter(noise).finish([0.5 + d, 0.5, 0.5, 1.0], &[[0.5, 0.5, 0.5, 1.0]], [0, 0])[0]
+                - 0.5
+                - d
+        };
+        assert!(push(100.0, 0.01) < push(0.0, 0.01) * 0.2);
+        assert!(push(100.0, 0.3) > push(0.0, 0.3) * 0.95);
+        // Motion Blur: a line along the angle.
+        let motion = Filter::SmartSharpen {
+            amount: 100.0,
+            radius: 5.0,
+            noise: 0.0,
+            remove: SharpenRemove::MotionBlur,
+            angle: 135.0,
+        };
+        assert!(matches!(motion.plan().kernel, Kernel::Line(_)));
+        assert_eq!(motion.plans().len(), 1);
+        assert_eq!(filter(0.0).plans().len(), 1);
+        assert_eq!(Filter::defaults("smartSharpen").unwrap().plans().len(), 3);
     }
 }
