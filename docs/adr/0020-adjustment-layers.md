@@ -90,7 +90,7 @@ from a file (3DLUT File, Load 3D LUT), the file's name shown.
    a gray reads only the cube's diagonal; the usual choice of grading software), linear for 1D
    ones; the same tetrahedra on the CPU and the GPU, tested against each other.
 4. **The table is data of the document** (non-destructive, as Gradient Map's stops): shared
-   by reference (`Arc`, immutable), so `Adjustment` is no longer `Copy`. In `.slop` (0.43) it
+   by reference (`Arc`, immutable), so `Adjustment` is no longer `Copy`. In `.slop` (0.46) it
    is an image of its `f32` values, as Liquify's displacement: content-addressed records, so
    a table saved again is not written again, and a table used by several layers is stored
    once; the manifest keeps its name, dimension, size and domain.

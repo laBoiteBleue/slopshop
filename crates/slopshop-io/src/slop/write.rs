@@ -205,7 +205,7 @@ fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
             }
             // Without a stack: the pixels themselves, always there.
             LayerContent::Raster { image, .. } => out.push(image.get()),
-            // Color Lookup's table (schema 0.43).
+            // Color Lookup's table (schema 0.46).
             LayerContent::Adjustment { adjustment } => {
                 if let Some(lut) = adjustment.lut() {
                     out.push(lut.image().map_err(FileError::Image)?);
@@ -542,7 +542,7 @@ pub(super) fn adjustment_params(
     if let Adjustment::GradientMap { gradient, .. } = adjustment {
         params["gradient"] = json!(gradient_stops(gradient));
     }
-    // Schema 0.43: Color Lookup's table, its values as an image (absent: none chosen).
+    // Schema 0.46: Color Lookup's table, its values as an image (absent: none chosen).
     if let Some(lut) = adjustment.lut() {
         let dimension = match lut.dimension() {
             slopshop_core::lut::LutDimension::One => 1,

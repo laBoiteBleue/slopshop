@@ -1593,7 +1593,7 @@ fn damaged_layer_trees_are_refused() {
         Err("newerVersion"),
         "an adjustment from a newer SlopShop"
     );
-    // Schema 0.43: Color Lookup without a table chooses none; a table must be whole, its
+    // Schema 0.46: Color Lookup without a table chooses none; a table must be whole, its
     // values in an image of the file.
     assert_eq!(
         read(

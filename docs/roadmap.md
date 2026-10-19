@@ -163,7 +163,7 @@ including the ones it leaves out: [feature-map.md](feature-map.md).
 - [x] Selective Color (Bœsch's measured model of Photoshop's), `.slop` 0.15, PSD import and
       export
 - [x] Color Lookup: `.cube` (3D and 1D) and `.3dl` tables, tetrahedral interpolation on the
-      CPU and the GPU, `.slop` 0.43, PSD import and export (the table embedded); Abstract and
+      CPU and the GPU, `.slop` 0.46, PSD import and export (the table embedded); Abstract and
       Device Link profiles and Dither left out
 - [x] Groups in the engine ([ADR 0015](adr/0015-layer-groups.md)): a layer tree, pass-through
       and isolated groups with opacity, blend mode and mask, one-pass CPU and GPU compositing,

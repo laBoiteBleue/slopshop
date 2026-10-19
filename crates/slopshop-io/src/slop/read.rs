@@ -828,7 +828,7 @@ fn adjustment_of(
     Ok(adjustment)
 }
 
-/// Color Lookup's table (schema 0.43): `params.lut`, its `name`, `dimension` (1 or 3), `size`,
+/// Color Lookup's table (schema 0.46): `params.lut`, its `name`, `dimension` (1 or 3), `size`,
 /// `domain` and the key of the image of its values, `table`; absent, none is chosen.
 fn color_lookup_of(
     params: &Map<String, Value>,
