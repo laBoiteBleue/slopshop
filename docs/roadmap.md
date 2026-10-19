@@ -212,6 +212,9 @@ including the ones it leaves out: [feature-map.md](feature-map.md).
       Satin (Gaussian by default), Bevel and Emboss's Gloss Contour and Contour element; the
       Layer Style dialog's Contour pickers; `.slop` 0.39, PSD `TrnS`/`MpgS` (any curve of up to
       16 points comes over and goes back). Not yet: a custom contour editor (curve editing)
+- [x] Gradients' Angle, Reflected and Diamond styles (2026-10-19), next to Linear and Radial:
+      the Gradient tool's five style buttons, gradient fill layers, Gradient Overlay; CPU and
+      GPU; `.slop` 0.42, PSD `GrFl` `Type` (`Angl`, `Rflc`, `Dmnd`)
 - [ ] Stack-to-DAG evolution of the model
       ([ADR 0003](adr/0003-document-model-edits-history.md)): settled by
       [ADR 0040](adr/0040-sources.md), a tree of layers referencing read-only sources

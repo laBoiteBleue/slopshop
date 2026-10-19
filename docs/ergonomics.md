@@ -389,12 +389,12 @@ built. Contributors: propose here first.
   is healed from there on release, the outline coming back; one undo entry. Not yet: a pattern
   as source, Patch's Destination mode.
 - The Gradient (G, the Paint Bucket in its group): a drag draws the gradient's line (Shift: by
-  steps of 45°, Esc drops it); on release the gradient is laid along it, Linear or Radial,
+  steps of 45°, Esc drops it); on release the gradient is laid along it in the options bar's
+  style (Photoshop's five: Linear, Radial, Angle, Reflected, Diamond),
   Photoshop's first presets (Foreground to Background, Foreground to Transparent, Black, White;
   Reverse) at the options bar's Opacity, within the selection, as Edit > Fill paints: paint of
   the active layer (which grows to the canvas), grays on its mask or in Quick Mask; one undo
-  entry. Not yet: editing a gradient's stops for the tool, the other shapes (Angle, Reflected,
-  Diamond), dithering.
+  entry. Not yet: editing a gradient's stops for the tool, dithering.
 - Blur and Sharpen (their group has no key, as in Photoshop; the tooltip says so): strokes
   soften what the active layer shows (a Gaussian blur of 0.5 to 5 pixels by the options bar's
   Strength) or sharpen it (an unsharp mask), with their own soft brush. They take the layer as
