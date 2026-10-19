@@ -25,6 +25,8 @@
     validValues,
   } from "./filters";
   import { t } from "./i18n/index.svelte";
+  import ShearCurveEditor from "./ShearCurveEditor.svelte";
+  import { shearPoints, shearValues } from "./shearCurve";
 
   let {
     filter,
@@ -194,6 +196,15 @@
               </div>
             </div>
           {/if}
+        {:else if param.kind === "curve"}
+          <!-- Shear's curve, above Undefined Areas as Photoshop shows it: the values after
+               the others. -->
+          <div class="curve-setting">
+            <ShearCurveEditor
+              points={shearPoints(current.slice(i))}
+              onchange={(points) => (current = [...current.slice(0, i), ...shearValues(points)])}
+            />
+          </div>
         {:else if param.kind === "weight"}
           {#if param.cell === 0}
             <!-- Custom's weights: the grid of the pixels around, row by row. -->
@@ -342,6 +353,10 @@
     padding: 4px 8px 6px;
     border: 1px solid var(--border-dark);
     border-radius: 3px;
+  }
+
+  .curve-setting {
+    order: -1;
   }
 
   /* Custom's 5 × 5 weights. */

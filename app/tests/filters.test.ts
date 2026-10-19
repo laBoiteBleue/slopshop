@@ -266,11 +266,24 @@ test("the distortions: Twirl's angle, Pinch's and Spherize's amounts, Polar's wa
     "pinch",
     "polarCoordinates",
     "ripple",
+    "shear",
     "spherize",
     "twirl",
     "wave",
     "zigZag",
   ]);
+});
+
+test("Shear: Undefined Areas, then its curve's points, as many as it has", () => {
+  expect(FILTERS.shear.params.map((p) => p.key)).toEqual(["edge", "curve"]);
+  expect(FILTERS.shear.defaults).toEqual([0, 0, 0, 100, 0]);
+  expect(validValues("shear", [1, 0, -100, 33.3, 12.5, 100, 100])).toBe(true);
+  expect(validValues("shear", [0, 0, 0, 100])).toBe(false);
+  expect(validValues("shear", [2, 0, 0, 100, 0])).toBe(false);
+  expect(validValues("shear", [0, 0, 0, 50, 0])).toBe(false);
+  expect(validValues("shear", [0, 0, 101, 100, 0])).toBe(false);
+  expect(validValues("shear", [0])).toBe(false);
+  expect(hasSettings("shear")).toBe(true);
 });
 
 test("Ripple, Wave and ZigZag: Photoshop's settings, ranges and defaults", () => {
