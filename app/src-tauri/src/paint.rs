@@ -885,7 +885,9 @@ pub struct StrokeRequest {
 /// do. With `target` the mask, the mask is hidden or painted with the color's gray. With
 /// `pattern` (a library pattern loaded for the document, `load_pattern`), Fill paints that
 /// pattern instead, repeated from the document's origin (Photoshop's Fill > Pattern, ADR 0042).
-/// One undo entry; nothing to paint, nothing changes.
+/// With `path` (the Paths panel's Fill Path, ADR 0041), the area that path encloses
+/// (anti-aliased) is filled instead of the selection. One undo entry; nothing to paint,
+/// nothing changes.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn fill(
@@ -897,6 +899,7 @@ pub async fn fill(
     opacity: f32,
     stroke: Option<StrokeRequest>,
     pattern: Option<u64>,
+    path: Option<crate::paths::PathRef>,
 ) -> Result<DocumentView, String> {
     on_worker(move || {
         let state = app.state::<AppState>();
@@ -916,11 +919,21 @@ pub async fn fill(
             request.pattern = Some(pattern);
         }
         let label = HistoryLabel::new(match (&stroke, request.color, &request.pattern) {
+            _ if path.is_some() => "fillPath",
             (Some(_), _, _) => "stroke",
             (None, None, None) => "clear",
             (None, _, _) => "fill",
         });
-        if let Some(edit) = fill_edit(document.session.document(), &request, stroke)? {
+        let doc = document.session.document();
+        let filled = match path {
+            Some(path) => path_filled(doc, path)?,
+            None => Some(doc.clone()),
+        };
+        let edit = match filled {
+            Some(doc) => fill_edit(&doc, &request, stroke)?,
+            None => None,
+        };
+        if let Some(edit) = edit {
             document
                 .session
                 .with_label(Some(label), |s| s.perform(edit))
@@ -1261,6 +1274,123 @@ fn fill_edit_with(
         },
     };
     painting.fill();
+    if !painting.has_paint() {
+        return Ok(None);
+    }
+    let painted = painted_so_far(request.target(), &mut painting)?;
+    Ok(Some(paint_edit(request.target(), painted, growth.as_ref())))
+}
+
+/// `doc` with the area `path` encloses as its selection, for Fill to paint (a copy: the pixels
+/// are shared); `None` when it encloses nothing.
+fn path_filled(doc: &Document, path: crate::paths::PathRef) -> Result<Option<Document>, String> {
+    use slopshop_core::selection::Combine;
+    let Some(area) = crate::paths::path_selection(doc, path, Combine::Replace)? else {
+        return Ok(None);
+    };
+    let mut filled = doc.clone();
+    Edit::SetSelection {
+        selection: Selection::new(Arc::new(area)),
+    }
+    .apply(&mut filled)
+    .map_err(|e| e.to_string())?;
+    Ok(Some(filled))
+}
+
+/// Paths panel > Stroke Path (ADR 0041): `path` painted along by the Brush (`color`, sRGB
+/// RGB in `[0, 1]`) or the Eraser (`color` absent) with `brush`, on `target` as a stroke of
+/// those tools paints it (within the selection, the layer grown to the canvas), each subpath a
+/// run of its own; with `simulate_pressure`, the pressure rises from nothing to full and back
+/// along each one (Photoshop's Simulate Pressure). One undo entry; nothing painted, nothing
+/// changes.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn stroke_path(
+    app: tauri::AppHandle,
+    document_id: u64,
+    layer_id: u64,
+    target: PaintTarget,
+    path: crate::paths::PathRef,
+    brush: BrushRequest,
+    color: Option<[f32; 3]>,
+    simulate_pressure: bool,
+) -> Result<DocumentView, String> {
+    on_worker(move || {
+        let state = app.state::<AppState>();
+        let mut documents = state.documents()?;
+        let document = documents.get_mut(document_id)?;
+        let request = PaintRequest {
+            brush,
+            color,
+            ..fill_request(layer_id, target, color, 1.0)
+        };
+        let doc = document.session.document();
+        let lines = path.polylines(doc)?;
+        if let Some(edit) = stroke_path_edit(doc, &request, &lines, simulate_pressure)? {
+            document
+                .session
+                .with_label(Some(HistoryLabel::new("strokePath")), |s| s.perform(edit))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(document.view())
+    })
+    .await
+}
+
+/// The longest step between two samples when the pressure is simulated: it varies along the
+/// polyline, which the stroke interpolates between samples only.
+const PRESSURE_STEP: f64 = 2.0;
+
+/// The samples a stroke along `line` gets: its points at full pressure, or with `simulated`,
+/// points at most [`PRESSURE_STEP`] apart whose pressure rises from 0 to 1 and back.
+pub(crate) fn path_samples(line: &[[f64; 2]], simulated: bool) -> Vec<PointerSample> {
+    let sample = |[x, y]: [f64; 2], pressure: f32| PointerSample { x, y, pressure };
+    if !simulated {
+        return line.iter().map(|&p| sample(p, 1.0)).collect();
+    }
+    let total: f64 = line
+        .windows(2)
+        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+        .sum();
+    let pressure = |at: f64| {
+        if total > 0.0 {
+            (std::f64::consts::PI * at / total).sin().max(0.0) as f32
+        } else {
+            1.0
+        }
+    };
+    let mut samples = Vec::new();
+    let mut travelled = 0.0;
+    if let Some(&first) = line.first() {
+        samples.push(sample(first, pressure(0.0)));
+    }
+    for w in line.windows(2) {
+        let ([x0, y0], [x1, y1]) = (w[0], w[1]);
+        let length = (x1 - x0).hypot(y1 - y0);
+        let steps = (length / PRESSURE_STEP).ceil().max(1.0) as usize;
+        for k in 1..=steps {
+            let t = k as f64 / steps as f64;
+            let at = [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t];
+            samples.push(sample(at, pressure(travelled + length * t)));
+        }
+        travelled += length;
+    }
+    samples
+}
+
+/// The edit [`stroke_path`] performs on `doc`: `request`'s target painted along `lines` (see
+/// [`slopshop_core::shape::path::stroke_polylines`]). `None`: nothing painted.
+pub(crate) fn stroke_path_edit(
+    doc: &Document,
+    request: &PaintRequest,
+    lines: &[slopshop_core::shape::path::Polyline],
+    simulated: bool,
+) -> Result<Option<Edit>, String> {
+    let (mut painting, growth) = start(doc, request, request.color.is_some(), None)?;
+    for (line, _) in lines {
+        painting.lift();
+        painting.add(&path_samples(line, simulated));
+    }
     if !painting.has_paint() {
         return Ok(None);
     }
@@ -1625,6 +1755,131 @@ mod tests {
         // Outside the selection as shown: untouched.
         let (u, v) = back.apply(32.0, 10.0);
         assert_eq!(image.alpha_at(u as u32, v as u32), 0.0);
+    }
+
+    /// `doc` with a document path: two open subpaths, along rows 10 and 30 from x = 10 to 50.
+    fn with_path(mut doc: Document) -> (Document, crate::paths::PathRef) {
+        use slopshop_core::shape::{FillRule, Geometry, Segment, Subpath};
+        let id = doc.allocate_path_id();
+        let line = |y: f64| Subpath {
+            start: [10.0, y],
+            segments: vec![Segment::Line([50.0, y])],
+            closed: false,
+        };
+        Edit::InsertPath {
+            index: 0,
+            path: slopshop_core::DocumentPath {
+                id,
+                name: "Rows".into(),
+                geometry: Geometry::Path {
+                    subpaths: vec![line(10.5), line(30.5)],
+                    rule: FillRule::NonZero,
+                },
+                work: false,
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        (doc, crate::paths::PathRef::Path { id: id.get() })
+    }
+
+    #[test]
+    fn fill_path_fills_what_the_path_encloses_whatever_the_selection() {
+        // A triangle path, filled with a selection elsewhere.
+        let mut doc = document(Some([50.0, 40.0, 60.0, 45.0]));
+        let id = doc.allocate_path_id();
+        let geometry: crate::shape::GeometryDto = serde_json::from_str(
+            r#"{"kind":"path","rule":"nonzero","subpaths":[
+                {"start":[0,0],"segments":[[40,0],[0,40]],"closed":false}]}"#,
+        )
+        .unwrap();
+        Edit::InsertPath {
+            index: 0,
+            path: slopshop_core::DocumentPath {
+                id,
+                name: "Triangle".into(),
+                geometry: geometry.geometry().unwrap(),
+                work: false,
+            },
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let path = crate::paths::PathRef::Path { id: id.get() };
+        let area = path_filled(&doc, path).unwrap().unwrap();
+        let image = filled(&area, &request(1.0), None);
+        assert_eq!(image.alpha_at(5, 5), 1.0);
+        assert_eq!(image.alpha_at(35, 35), 0.0);
+        assert_eq!(image.alpha_at(55, 42), 0.0);
+        // A path enclosing nothing fills nothing.
+        let (rows, open) = with_path(document(None));
+        let line: crate::shape::GeometryDto = serde_json::from_str(
+            r#"{"kind":"path","rule":"nonzero","subpaths":[
+                {"start":[0,0],"segments":[[40,0]],"closed":false}]}"#,
+        )
+        .unwrap();
+        let crate::paths::PathRef::Path { id } = open else {
+            unreachable!("a document path");
+        };
+        let mut flat = rows;
+        crate::paths::set_path_geometry(&flat, id, &line)
+            .unwrap()
+            .apply(&mut flat)
+            .unwrap();
+        assert!(path_filled(&flat, open).unwrap().is_none());
+    }
+
+    #[test]
+    fn stroke_path_paints_along_each_subpath_with_the_brush() {
+        let (doc, path) = with_path(document(None));
+        let mut brush = request(1.0);
+        brush.brush.size = 4.0;
+        let lines = path.polylines(&doc).unwrap();
+        let edit = stroke_path_edit(&doc, &brush, &lines, false)
+            .unwrap()
+            .unwrap();
+        let mut painted = doc.clone();
+        edit.apply(&mut painted).unwrap();
+        let LayerContent::Raster { image, .. } =
+            &painted.layer(LayerId::from_raw(1)).unwrap().content
+        else {
+            panic!("a raster layer");
+        };
+        let image = image.get();
+        for x in [10, 30, 49] {
+            assert_eq!(image.alpha_at(x, 10), 1.0, "({x}, 10)");
+            assert_eq!(image.alpha_at(x, 30), 1.0, "({x}, 30)");
+        }
+        // Not joined from one subpath's end to the next one's start, nor beyond the brush.
+        assert_eq!(image.alpha_at(30, 20), 0.0);
+        assert_eq!(image.alpha_at(30, 14), 0.0);
+        // The Eraser takes it away again.
+        let mut eraser = brush;
+        eraser.color = None;
+        eraser.brush.size = 8.0;
+        let edit = stroke_path_edit(&painted, &eraser, &lines, false)
+            .unwrap()
+            .unwrap();
+        edit.apply(&mut painted).unwrap();
+        let LayerContent::Raster { image, .. } =
+            &painted.layer(LayerId::from_raw(1)).unwrap().content
+        else {
+            panic!("a raster layer");
+        };
+        assert_eq!(image.get().alpha_at(30, 10), 0.0);
+    }
+
+    #[test]
+    fn simulated_pressure_rises_and_falls_along_a_subpath() {
+        let line = [[0.0, 0.0], [100.0, 0.0]];
+        let plain = path_samples(&line, false);
+        assert_eq!(plain.len(), 2);
+        assert!(plain.iter().all(|s| s.pressure == 1.0));
+        let simulated = path_samples(&line, true);
+        assert_eq!(simulated.len(), 51);
+        assert_eq!(simulated[0].pressure, 0.0);
+        assert!((simulated[25].pressure - 1.0).abs() < 1e-6);
+        assert!(simulated[50].pressure < 1e-6);
+        assert!(simulated[10].pressure < simulated[20].pressure);
     }
 
     #[test]

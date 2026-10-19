@@ -187,14 +187,18 @@ pub fn selection_rings(
     (rings, rule)
 }
 
+/// A polyline in the document, and whether it is closed (its first point then repeated at its
+/// end).
+pub type Polyline = (Vec<[f64; 2]>, bool);
+
 /// `geometry`'s subpaths placed by `transform` as polylines in the document (curves within
 /// [`TOLERANCE`]), each with whether it is closed (its first point then repeated at its end):
 /// what Stroke Path paints along. A live shape's outline is one closed polyline, a line an
 /// open one.
-pub fn stroke_polylines(geometry: &Geometry, transform: Projective) -> Vec<(Vec<[f64; 2]>, bool)> {
+pub fn stroke_polylines(geometry: &Geometry, transform: Projective) -> Vec<Polyline> {
     let local = TOLERANCE / scale_at(transform, outline(geometry, 1.0).bounding_box().center());
     let path = placed(&outline(geometry, local), transform, local);
-    let mut lines: Vec<(Vec<[f64; 2]>, bool)> = Vec::new();
+    let mut lines: Vec<Polyline> = Vec::new();
     kurbo::flatten(path.iter(), TOLERANCE, |el| match el {
         PathEl::MoveTo(p) => lines.push((vec![[p.x, p.y]], false)),
         PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => {

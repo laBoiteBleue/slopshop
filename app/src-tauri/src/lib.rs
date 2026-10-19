@@ -20,6 +20,7 @@ mod liquify;
 mod maps;
 mod move_pixels;
 mod paint;
+mod paths;
 mod patterns;
 mod print;
 mod recent;
@@ -2577,6 +2578,9 @@ pub fn run() {
             selection::color_range,
             selection::select_layer_pixels,
             selection::make_selection,
+            paths::load_path_selection,
+            paths::work_path_from_selection,
+            paint::stroke_path,
             selection::selection_outline,
             layer_at,
             layers_at,
@@ -5478,6 +5482,88 @@ mod tests {
         let json = format!(r#"{{"kind":"convertToShape","ids":[{id}]}}"#);
         let request: EditRequest = serde_json::from_str(&json).unwrap();
         assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
+    fn paths_are_drawn_saved_duplicated_and_mask_a_layer_through_requests() {
+        let mut s = blank_session();
+        let perform = |s: &mut Session, json: &str| {
+            let request: EditRequest = serde_json::from_str(json).unwrap();
+            let label = request.history_label().map(|l| l.kind);
+            let edit = request.into_edit(s)?;
+            s.perform(edit).map_err(|e| e.to_string())?;
+            Ok::<_, String>(label)
+        };
+        let path = r#"{"kind":"path","rule":"nonzero","subpaths":[{"start":[10,10],"segments":[[60,10],[10,40]],"closed":true}]}"#;
+        assert_eq!(
+            perform(
+                &mut s,
+                &format!(r#"{{"kind":"setWorkPath","path":{path}}}"#)
+            ),
+            Ok(Some("workPath"))
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let shown = serde_json::to_value(&view.paths).unwrap();
+        assert_eq!(shown[0]["work"], true);
+        assert_eq!(shown[0]["name"], "");
+        assert_eq!(shown[0]["geometry"]["kind"], "path");
+        let work = view.paths[0].id;
+        assert_eq!(
+            perform(
+                &mut s,
+                &format!(r#"{{"kind":"savePath","id":{work},"name":"Path 1"}}"#)
+            ),
+            Ok(Some("savePath"))
+        );
+        perform(
+            &mut s,
+            &format!(
+                r#"{{"kind":"duplicatePath","from":{{"kind":"path","id":{work}}},"name":"Path 1 copy"}}"#
+            ),
+        )
+        .unwrap();
+        perform(&mut s, r#"{"kind":"newPath","name":"Path 2"}"#).unwrap();
+        let names: Vec<String> = s
+            .document()
+            .paths()
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        assert_eq!(names, ["Path 1", "Path 1 copy", "Path 2"]);
+        // The empty one drawn in, renamed, deleted.
+        let empty = s.document().paths()[2].id.get();
+        perform(
+            &mut s,
+            &format!(r#"{{"kind":"setPathGeometry","id":{empty},"path":{path}}}"#),
+        )
+        .unwrap();
+        perform(
+            &mut s,
+            &format!(r#"{{"kind":"renamePath","id":{empty},"name":"Edge"}}"#),
+        )
+        .unwrap();
+        assert_eq!(s.document().paths()[2].name, "Edge");
+        perform(&mut s, &format!(r#"{{"kind":"deletePath","id":{empty}}}"#)).unwrap();
+        assert_eq!(s.document().paths().len(), 2);
+        // Add a Mask: the background masked by the path, where it is.
+        let background = s.document().layers()[0].id.get();
+        perform(
+            &mut s,
+            &format!(
+                r#"{{"kind":"addVectorMask","ids":[{background}],"mask":"path","path":{work}}}"#
+            ),
+        )
+        .unwrap();
+        let mask = s.document().layers()[0].vector_mask.clone().unwrap();
+        assert_eq!(mask.geometry(), &s.document().paths()[0].geometry);
+        assert!(!mask.inverted());
+        assert!(
+            perform(
+                &mut s,
+                r#"{"kind":"addVectorMask","ids":[1],"mask":"path","path":99}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
