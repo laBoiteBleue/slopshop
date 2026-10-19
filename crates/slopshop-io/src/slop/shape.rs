@@ -37,6 +37,12 @@
 //! `color`, `tracking`, `leading`, null for automatic leading); absent: the text's. A text in
 //! several colors also has `paints` beside its `shape`: its glyphs by color.
 //!
+//! Character styles (schema 0.44), on a text and on its spans: `faux_bold`, `faux_italic`,
+//! `underline`, `strikethrough` (booleans), `ligatures` (the standard ligatures, `true` when
+//! absent from a text), `case` (`normal`, `all_caps`, `small_caps`) and `baseline` (`normal`,
+//! `superscript`, `subscript`). A text writes them when they are not the defaults; a span
+//! when it sets them.
+//!
 //! A vector mask (schema 0.40, node version 19) is a node's `params.vector_mask`, its geometry
 //! written as a shape's, in the layer's own space:
 //!
@@ -50,7 +56,7 @@ use serde_json::{Value, json};
 use slopshop_core::color::LinearRgba;
 use slopshop_core::shape::{
     CharStyle, FillRule, Geometry, Paint, Segment, Shape, ShapeStroke, StrokeAlign, StrokeCap,
-    StrokeJoin, Subpath, Text, TextAlign, TextSpan, VectorMask,
+    StrokeJoin, Subpath, Text, TextAlign, TextBaseline, TextCase, TextSpan, VectorMask,
 };
 
 /// A vector mask as the manifest writes it.
@@ -101,7 +107,67 @@ pub(super) fn text_to_json(text: &Text) -> Value {
     if !text.spans.is_empty() {
         value["spans"] = text.spans.iter().map(span_to_json).collect();
     }
+    let flags = [
+        ("faux_bold", text.faux_bold, false),
+        ("faux_italic", text.faux_italic, false),
+        ("underline", text.underline, false),
+        ("strikethrough", text.strikethrough, false),
+        ("ligatures", text.ligatures, true),
+    ];
+    for (key, set, default) in flags {
+        if set != default {
+            value[key] = json!(set);
+        }
+    }
+    if text.case != TextCase::Normal {
+        value["case"] = json!(case_name(text.case));
+    }
+    if text.baseline != TextBaseline::Normal {
+        value["baseline"] = json!(baseline_name(text.baseline));
+    }
     value
+}
+
+fn case_name(case: TextCase) -> &'static str {
+    match case {
+        TextCase::Normal => "normal",
+        TextCase::AllCaps => "all_caps",
+        TextCase::SmallCaps => "small_caps",
+    }
+}
+
+fn case_of(value: &Value) -> Option<TextCase> {
+    match value.as_str()? {
+        "normal" => Some(TextCase::Normal),
+        "all_caps" => Some(TextCase::AllCaps),
+        "small_caps" => Some(TextCase::SmallCaps),
+        _ => None,
+    }
+}
+
+fn baseline_name(baseline: TextBaseline) -> &'static str {
+    match baseline {
+        TextBaseline::Normal => "normal",
+        TextBaseline::Superscript => "superscript",
+        TextBaseline::Subscript => "subscript",
+    }
+}
+
+fn baseline_of(value: &Value) -> Option<TextBaseline> {
+    match value.as_str()? {
+        "normal" => Some(TextBaseline::Normal),
+        "superscript" => Some(TextBaseline::Superscript),
+        "subscript" => Some(TextBaseline::Subscript),
+        _ => None,
+    }
+}
+
+/// An optional field: `Some(None)` when absent, `None` when it cannot be read by `read`.
+fn optional<T>(value: &Value, key: &str, read: impl Fn(&Value) -> Option<T>) -> Option<Option<T>> {
+    match value.get(key) {
+        None => Some(None),
+        Some(v) => read(v).map(Some),
+    }
 }
 
 fn span_to_json(span: &TextSpan) -> Value {
@@ -127,6 +193,24 @@ fn span_to_json(span: &TextSpan) -> Value {
     }
     if let Some(leading) = s.leading {
         value["leading"] = json!(leading);
+    }
+    let flags = [
+        ("faux_bold", s.faux_bold),
+        ("faux_italic", s.faux_italic),
+        ("underline", s.underline),
+        ("strikethrough", s.strikethrough),
+        ("ligatures", s.ligatures),
+    ];
+    for (key, set) in flags {
+        if let Some(set) = set {
+            value[key] = json!(set);
+        }
+    }
+    if let Some(case) = s.case {
+        value["case"] = json!(case_name(case));
+    }
+    if let Some(baseline) = s.baseline {
+        value["baseline"] = json!(baseline_name(baseline));
     }
     value
 }
@@ -167,6 +251,13 @@ fn span_from_json(value: &Value) -> Option<TextSpan> {
             Some(Value::Null) => Some(None),
             Some(v) => Some(Some(v.as_f64()?)),
         },
+        faux_bold: optional(value, "faux_bold", Value::as_bool)?,
+        faux_italic: optional(value, "faux_italic", Value::as_bool)?,
+        case: optional(value, "case", case_of)?,
+        baseline: optional(value, "baseline", baseline_of)?,
+        underline: optional(value, "underline", Value::as_bool)?,
+        strikethrough: optional(value, "strikethrough", Value::as_bool)?,
+        ligatures: optional(value, "ligatures", Value::as_bool)?,
     };
     Some(TextSpan {
         start: index("start")?,
@@ -190,6 +281,13 @@ pub(super) fn text_from_json(value: &Value) -> Option<Text> {
             None => None,
             Some(v) => Some(v.as_f64()?),
         },
+        faux_bold: optional(value, "faux_bold", Value::as_bool)?.unwrap_or(false),
+        faux_italic: optional(value, "faux_italic", Value::as_bool)?.unwrap_or(false),
+        case: optional(value, "case", case_of)?.unwrap_or_default(),
+        baseline: optional(value, "baseline", baseline_of)?.unwrap_or_default(),
+        underline: optional(value, "underline", Value::as_bool)?.unwrap_or(false),
+        strikethrough: optional(value, "strikethrough", Value::as_bool)?.unwrap_or(false),
+        ligatures: optional(value, "ligatures", Value::as_bool)?.unwrap_or(true),
         align: match value.get("align")?.as_str()? {
             "left" => TextAlign::Left,
             "center" => TextAlign::Center,

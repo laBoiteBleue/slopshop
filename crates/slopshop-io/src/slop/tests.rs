@@ -2957,6 +2957,7 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
     use slopshop_core::LayerId;
     use slopshop_core::shape::{
         FillRule, Geometry, Paint, Segment, Shape, ShapeSource, Subpath, Text, TextAlign,
+        TextBaseline, TextCase,
     };
     let color = LinearRgba::new(0.2, 0.4, 0.6, 1.0);
     // Outlines as the layout gives them (a path), with the text they come from.
@@ -2984,6 +2985,13 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         color,
         tracking: -25.0,
         leading,
+        faux_bold: false,
+        faux_italic: false,
+        case: TextCase::Normal,
+        baseline: TextBaseline::Normal,
+        underline: false,
+        strikethrough: false,
+        ligatures: true,
         align,
         position: [10.0, 30.0],
         frame: None,
@@ -3062,6 +3070,35 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         )),
         1.0,
     );
+    // Character styles (schema 0.44), on the text and on a span.
+    let styles = Text {
+        faux_bold: true,
+        faux_italic: true,
+        case: TextCase::AllCaps,
+        baseline: TextBaseline::Subscript,
+        underline: true,
+        strikethrough: true,
+        ligatures: false,
+        ..text(None, TextAlign::Left)
+    }
+    .styled(
+        Some(0..1),
+        &slopshop_core::shape::CharStyle {
+            faux_bold: Some(false),
+            case: Some(TextCase::SmallCaps),
+            baseline: Some(TextBaseline::Normal),
+            ligatures: Some(true),
+            underline: Some(false),
+            ..Default::default()
+        },
+    );
+    assert_eq!(styles.spans.len(), 1);
+    let e = push(
+        &mut doc,
+        "e",
+        LayerContent::vector(ShapeSource::text(styles, outlines.clone(), Vec::new(), "")),
+        1.0,
+    );
     let path = temp_path("text.slop");
     SlopFile::create(&path, &doc).unwrap();
     let (loaded, _) = SlopFile::open(&path).unwrap();
@@ -3069,7 +3106,7 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         LayerContent::Vector { source, .. } => Arc::clone(source),
         _ => panic!("not a vector layer"),
     };
-    for id in [a, b, c, d] {
+    for id in [a, b, c, d, e] {
         let (before, after) = (source(&doc, id), source(&loaded, id));
         assert_eq!(after.paints(), before.paints());
         assert_eq!(after.shape(), before.shape());
@@ -3100,6 +3137,25 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
     assert!(super::shape::text_from_json(&value).is_none());
     value.as_object_mut().unwrap().remove("frame");
     // Spans out of the content, or setting nothing.
+    // Texts of older files have the defaults; an unknown case or baseline is refused.
+    let defaults = super::shape::text_to_json(&text(None, TextAlign::Right));
+    for key in ["faux_bold", "case", "baseline", "ligatures", "underline"] {
+        assert!(defaults.get(key).is_none(), "{key} written at its default");
+    }
+    value["case"] = serde_json::json!("title");
+    assert!(super::shape::text_from_json(&value).is_none());
+    value["case"] = serde_json::json!("small_caps");
+    value["baseline"] = serde_json::json!(1);
+    assert!(super::shape::text_from_json(&value).is_none());
+    value["baseline"] = serde_json::json!("superscript");
+    let read = super::shape::text_from_json(&value).unwrap();
+    assert_eq!(
+        (read.case, read.baseline),
+        (TextCase::SmallCaps, TextBaseline::Superscript)
+    );
+    assert!(read.ligatures);
+    value["spans"] = serde_json::json!([{ "start": 0, "end": 1, "underline": "yes" }]);
+    assert!(super::shape::text_from_json(&value).is_none());
     value["spans"] = serde_json::json!([{ "start": 0, "end": 99, "weight": 700 }]);
     assert!(super::shape::text_from_json(&value).is_none());
     value["spans"] = serde_json::json!([{ "start": 0, "end": 1 }]);
