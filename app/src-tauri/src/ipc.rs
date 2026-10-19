@@ -274,6 +274,94 @@ pub struct BevelDto {
     pub shadow_color: [f32; 3],
     pub shadow_mode: String,
     pub shadow_opacity: f32,
+    /// Its Gloss Contour. Absent: linear.
+    #[serde(default)]
+    pub gloss_contour: Option<ContourDto>,
+    #[serde(default)]
+    pub gloss_anti_aliased: bool,
+    /// Its Contour element (the dialog's Contour page, under Bevel & Emboss). Absent: off.
+    #[serde(default)]
+    pub contour_enabled: bool,
+    /// Absent: linear.
+    #[serde(default)]
+    pub contour: Option<ContourDto>,
+    #[serde(default)]
+    pub contour_anti_aliased: bool,
+    /// Percent, 1 to 100. Absent: Photoshop's 50.
+    #[serde(default = "half_range")]
+    pub contour_range: f64,
+}
+
+/// A layer style's contour (Photoshop's Quality > Contour): its points `[input, output, corner]`
+/// on 0–255, and its output at `i / CONTOUR_SAMPLES` (0 to 1) for the UI to draw, not read back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContourDto {
+    pub points: Vec<(u8, u8, bool)>,
+    #[serde(default, skip_deserializing)]
+    pub samples: Vec<f32>,
+}
+
+/// Intervals of [`ContourDto::samples`]: enough for a thumbnail.
+const CONTOUR_SAMPLES: usize = 64;
+
+impl ContourDto {
+    pub fn new(contour: &slopshop_core::contour::Contour) -> Self {
+        Self {
+            points: contour
+                .points()
+                .iter()
+                .map(|p| (p.x, p.y, p.corner))
+                .collect(),
+            samples: (0..=CONTOUR_SAMPLES)
+                .map(|i| contour.value(i as f64 / CONTOUR_SAMPLES as f64) as f32)
+                .collect(),
+        }
+    }
+
+    /// The contour it describes; `None` (absent from the request) is `absent`.
+    fn contour(
+        dto: &Option<ContourDto>,
+        absent: slopshop_core::contour::Contour,
+    ) -> Result<slopshop_core::contour::Contour, String> {
+        let Some(dto) = dto else {
+            return Ok(absent);
+        };
+        let points: Vec<_> = dto
+            .points
+            .iter()
+            .map(|&(x, y, corner)| slopshop_core::contour::ContourPoint { x, y, corner })
+            .collect();
+        slopshop_core::contour::Contour::new(&points).ok_or("invalid contour".to_owned())
+    }
+}
+
+/// One of Photoshop's contours, as the Contour picker shows it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContourPresetView {
+    /// `ContourPreset::id`, which the UI names.
+    pub id: &'static str,
+    pub contour: ContourDto,
+}
+
+/// Photoshop's contours, in its picker's order.
+pub fn contour_presets() -> Vec<ContourPresetView> {
+    slopshop_core::contour::ContourPreset::ALL
+        .into_iter()
+        .map(|p| ContourPresetView {
+            id: p.id(),
+            contour: ContourDto::new(&p.contour()),
+        })
+        .collect()
+}
+
+fn half_range() -> f64 {
+    50.0
+}
+
+fn yes() -> bool {
+    true
 }
 
 const BEVEL_STYLES: [(slopshop_core::style::BevelStyle, &str); 4] = [
@@ -297,6 +385,12 @@ pub struct SatinDto {
     pub distance: f64,
     pub size: f64,
     pub invert: bool,
+    /// Absent: Photoshop's Gaussian.
+    #[serde(default)]
+    pub contour: Option<ContourDto>,
+    /// Absent: Photoshop's, on.
+    #[serde(default = "yes")]
+    pub anti_aliased: bool,
 }
 
 /// A Gradient Overlay: its gradient's stops as Gradient Map's (`[location 0–4096, r, g, b]`,
@@ -329,6 +423,11 @@ pub struct DropShadowDto {
     pub distance: f64,
     pub spread: f64,
     pub size: f64,
+    /// Absent: linear.
+    #[serde(default)]
+    pub contour: Option<ContourDto>,
+    #[serde(default)]
+    pub anti_aliased: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -340,6 +439,14 @@ pub struct GlowDto {
     pub opacity: f32,
     pub spread: f64,
     pub size: f64,
+    /// Absent: linear.
+    #[serde(default)]
+    pub contour: Option<ContourDto>,
+    #[serde(default)]
+    pub anti_aliased: bool,
+    /// Percent, 1 to 100. Absent: Photoshop's 50.
+    #[serde(default = "half_range")]
+    pub range: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -391,6 +498,8 @@ impl StyleDto {
             distance: s.distance,
             spread: s.spread,
             size: s.size,
+            contour: Some(ContourDto::new(&s.contour)),
+            anti_aliased: s.anti_aliased,
         };
         let glow = |g: slopshop_core::style::Glow| GlowDto {
             enabled: g.enabled,
@@ -399,6 +508,9 @@ impl StyleDto {
             opacity: g.opacity,
             spread: g.spread,
             size: g.size,
+            contour: Some(ContourDto::new(&g.contour)),
+            anti_aliased: g.anti_aliased,
+            range: g.range,
         };
         Self {
             fill_opacity: style.fill_opacity,
@@ -433,6 +545,12 @@ impl StyleDto {
                 shadow_color: srgb(b.shadow_color),
                 shadow_mode: b.shadow_mode.id().to_owned(),
                 shadow_opacity: b.shadow_opacity,
+                gloss_contour: Some(ContourDto::new(&b.gloss_contour)),
+                gloss_anti_aliased: b.gloss_anti_aliased,
+                contour_enabled: b.contour_enabled,
+                contour: Some(ContourDto::new(&b.contour)),
+                contour_anti_aliased: b.contour_anti_aliased,
+                contour_range: b.contour_range,
             }),
             satin: style.satin.map(|s| SatinDto {
                 enabled: s.enabled,
@@ -443,6 +561,8 @@ impl StyleDto {
                 distance: s.distance,
                 size: s.size,
                 invert: s.invert,
+                contour: Some(ContourDto::new(&s.contour)),
+                anti_aliased: s.anti_aliased,
             }),
             pattern_overlay: style.pattern_overlay.as_ref().map(|o| PatternOverlayDto {
                 enabled: o.enabled,
@@ -490,6 +610,7 @@ impl StyleDto {
         &self,
         source: &dyn Fn(u64) -> Option<Arc<slopshop_core::Source>>,
     ) -> Result<slopshop_core::style::LayerStyle, String> {
+        use slopshop_core::contour::{Contour, ContourPreset};
         use slopshop_core::selection::StrokeLocation;
         use slopshop_core::style::{
             BevelEmboss, ColorOverlay, DropShadow, Glow, GradientOverlay, LayerStyle, Satin, Stroke,
@@ -506,6 +627,8 @@ impl StyleDto {
                     distance: s.distance,
                     spread: s.spread,
                     size: s.size,
+                    contour: ContourDto::contour(&s.contour, Contour::LINEAR)?,
+                    anti_aliased: s.anti_aliased,
                 }),
                 None => None,
             })
@@ -519,6 +642,9 @@ impl StyleDto {
                     opacity: g.opacity,
                     spread: g.spread,
                     size: g.size,
+                    contour: ContourDto::contour(&g.contour, Contour::LINEAR)?,
+                    anti_aliased: g.anti_aliased,
+                    range: g.range,
                 }),
                 None => None,
             })
@@ -560,6 +686,12 @@ impl StyleDto {
                     shadow_color: working(b.shadow_color),
                     shadow_mode: mode(&b.shadow_mode)?,
                     shadow_opacity: b.shadow_opacity,
+                    gloss_contour: ContourDto::contour(&b.gloss_contour, Contour::LINEAR)?,
+                    gloss_anti_aliased: b.gloss_anti_aliased,
+                    contour_enabled: b.contour_enabled,
+                    contour: ContourDto::contour(&b.contour, Contour::LINEAR)?,
+                    contour_anti_aliased: b.contour_anti_aliased,
+                    contour_range: b.contour_range,
                 }),
                 None => None,
             },
@@ -573,6 +705,8 @@ impl StyleDto {
                     distance: s.distance,
                     size: s.size,
                     invert: s.invert,
+                    contour: ContourDto::contour(&s.contour, ContourPreset::Gaussian.contour())?,
+                    anti_aliased: s.anti_aliased,
                 }),
                 None => None,
             },
