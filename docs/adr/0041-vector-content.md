@@ -414,11 +414,12 @@ Paths panel (Window > Paths) also keeps paths of the document's own:
    and the layer's paths in italics. Each has a thumbnail as a vector mask's (gray canvas,
    white inside). A click chooses a path, a press on the empty part chooses none; a chosen
    layer path goes with its layer. **The Pen** edits the chosen path's anchors (amendment
-   "editing paths with the Pen", the gestures unchanged) and adds what it draws to it; with
-   none chosen, as before (the targeted vector mask, the active vector layer), what it draws
-   becomes a new shape layer in **Shape mode** or a new Work Path, then chosen, in **Path
-   mode** (the options bar's mode, Photoshop's Pick Tool Mode; Pixels mode is left out: Fill
-   Path covers it). Ctrl+Enter makes a selection of the chosen path.
+   "editing paths with the Pen", the gestures unchanged; with none chosen, as before, the
+   targeted vector mask's or the active vector layer's). What it draws goes to the vector mask
+   it edits, in either mode; else, in **Path mode**, into the chosen document path, or a new
+   Work Path, then chosen; in **Shape mode**, a new shape layer (the options bar's mode,
+   Photoshop's Pick Tool Mode; Pixels mode is left out: Fill Path covers it). Ctrl+Enter makes
+   a selection of the chosen path.
 4. **Commands** (the panel's buttons, its menu, Ctrl+click on a thumbnail):
    - **Fill Path**: the path's area (anti-aliased, its fill rule kept, open subpaths joined)
      painted as Edit > Fill paints a selection, on what painting reaches (the layer's pixels,

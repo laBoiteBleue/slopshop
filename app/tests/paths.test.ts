@@ -129,7 +129,9 @@ describe("what the Pen edits and draws into", () => {
     const editable = penEditable(d, shape, { kind: "path", id: 3 }, false);
     expect(editable).toMatchObject({ pathId: 3, live: false, matrix: [1, 0, 0, 1, 0, 0] });
     expect(editable?.geometry).toEqual(triangle);
-    expect(penDestination(editable, "shape")).toEqual({ kind: "path", id: 3 });
+    expect(penDestination(editable, "path")).toEqual({ kind: "path", id: 3 });
+    // In Shape mode, a new shape layer whatever path is chosen.
+    expect(penDestination(editable, "shape")).toEqual({ kind: "shapeLayer" });
     expect(penEditable(d, shape, { kind: "path", id: 99 }, false)).toBeNull();
   });
 

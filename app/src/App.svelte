@@ -1699,9 +1699,9 @@
   });
 
   /**
-   * A path the Pen finished: added to the path chosen in the Paths panel, or to the vector mask
-   * edited (as Photoshop's Pen draws in a vector mask); else a new Work Path in Path mode,
-   * chosen, or a vector layer in Shape mode.
+   * A path the Pen finished: added to the vector mask edited (as Photoshop's Pen draws in a
+   * vector mask); in Path mode, to the path chosen in the Paths panel, else a new Work Path,
+   * chosen; in Shape mode, a vector layer.
    */
   function finishPath(geometry: PathGeometry) {
     const target = penEditable;
