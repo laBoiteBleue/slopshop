@@ -573,6 +573,7 @@ impl Pass {
             | Filter::Ripple { .. }
             | Filter::Wave { .. }
             | Filter::ZigZag { .. }
+            | Filter::Shear { .. }
             | Filter::PolarCoordinates { .. } => {
                 // A layer without transparency can't take Offset's transparent edge: the CPU
                 // writes what it becomes there.
@@ -656,13 +657,18 @@ impl Pass {
                     Filter::PolarCoordinates { to_polar } => {
                         (4.0, [f32::from(u8::from(to_polar)), 0.0, 0.0])
                     }
+                    Filter::Shear { curve, wrap } => (
+                        8.0,
+                        [curve.points().len() as f32, f32::from(u8::from(wrap)), 0.0],
+                    ),
                     _ => return None,
                 };
                 // Without a selection, the frame is the whole layer (`stack::frame_box`).
                 let factor = job.factor as f32;
                 let (w, h) = (job.layer.width as f32, job.layer.height as f32);
-                // Wave's ranges, scales and seed after the rest (a seed below 2^24: exact).
-                let wave = match filter {
+                // Wave's ranges, scales and seed after the rest (a seed below 2^24: exact), or
+                // Shear's points.
+                let extra = match filter {
                     Filter::Wave {
                         wavelength,
                         amplitude,
@@ -678,6 +684,14 @@ impl Pass {
                         scale[1],
                         seed as f32,
                     ],
+                    // Shear's points (row and offset as fractions) and the spline's second
+                    // derivatives, a triple per point.
+                    Filter::Shear { curve, .. } => curve
+                        .points()
+                        .iter()
+                        .zip(curve.second())
+                        .flat_map(|(&[row, x], &second)| [row / 100.0, x / 100.0, second])
+                        .collect(),
                     _ => Vec::new(),
                 };
                 return Some(vec![Self {
@@ -698,7 +712,7 @@ impl Pass {
                             job.origin[1] as f32 * factor,
                             factor,
                         ],
-                        wave,
+                        extra,
                     ]
                     .concat(),
                     ..none

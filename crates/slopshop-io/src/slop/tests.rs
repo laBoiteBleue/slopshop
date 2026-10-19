@@ -2470,6 +2470,59 @@ fn drawing_filters_keep_their_colors_and_seeds_in_a_file() {
     fs::remove_file(&path).ok();
 }
 
+#[test]
+fn shear_keeps_its_curve_in_a_file() {
+    use slopshop_core::filter::{Filter, ShearCurve};
+    let mut doc = golden_document();
+    let id = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster { stack: Some(_), .. } => Some(l.id),
+            _ => None,
+        })
+        .expect("a layer with a stack");
+    // Two points, and as many as it takes, a fraction of a percent kept.
+    let many: Vec<[f32; 2]> = (0..16)
+        .map(|i| [i as f32 * 100.0 / 15.0, (i as f32 * 37.3) % 200.0 - 100.0])
+        .collect();
+    let filters = [
+        Filter::Shear {
+            curve: ShearCurve::new(&[[0.0, -12.5], [100.0, 33.3]]).unwrap(),
+            wrap: false,
+        },
+        Filter::Shear {
+            curve: ShearCurve::new(&many).unwrap(),
+            wrap: true,
+        },
+    ];
+    for filter in filters {
+        Edit::apply_filter(&doc, id, filter)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+    }
+    let path = temp_path("shear.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let LayerContent::Raster {
+        stack: Some(read), ..
+    } = &loaded.layer(id).unwrap().content
+    else {
+        panic!("a layer with a stack");
+    };
+    let read: Vec<Filter> = read
+        .entries()
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Filter(filter) => Some(filter.steps()[0].filter),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(read, filters);
+    fs::remove_file(&path).ok();
+}
+
 /// A field that pushed pixels around and froze a spot, over a layer of `size`.
 fn liquified_field(size: slopshop_core::Size) -> Arc<slopshop_core::liquify::Field> {
     use slopshop_core::liquify::{Brush, Field, Stroke, Tool};

@@ -6731,6 +6731,41 @@ mod tests {
     }
 
     #[test]
+    fn shear_moves_each_row_wrapped_around_the_layer_or_its_edges_repeated() {
+        use crate::filter::ShearCurve;
+        let original = gradient(true);
+        // Every row by a fifth of half the layer's width (30 pixels), to the right.
+        let curve = ShearCurve::new(&[[0.0, 20.0], [100.0, 20.0]]).unwrap();
+        let wrapped = applied(&original, Filter::Shear { curve, wrap: true })
+            .evaluate()
+            .unwrap();
+        for (x, y) in [(0, 0), (29, 10), (30, 255), (299, 259), (150, 3)] {
+            assert_eq!(
+                pixel(&wrapped, x, y),
+                pixel(&original, (x + W - 30) % W, y),
+                "({x}, {y})"
+            );
+        }
+        let repeated = applied(&original, Filter::Shear { curve, wrap: false })
+            .evaluate()
+            .unwrap();
+        for (x, y) in [(0, 0), (29, 10), (30, 255), (299, 259)] {
+            assert_eq!(
+                pixel(&repeated, x, y),
+                pixel(&original, x.saturating_sub(30), y),
+                "({x}, {y})"
+            );
+        }
+        // A bend: the top and bottom rows stay, the middle ones move.
+        let curve = ShearCurve::new(&[[0.0, 0.0], [50.0, 40.0], [100.0, 0.0]]).unwrap();
+        let bent = applied(&original, Filter::Shear { curve, wrap: true })
+            .evaluate()
+            .unwrap();
+        assert_eq!(pixel(&bent, 10, 0), pixel(&original, 10, 0));
+        assert_ne!(pixel(&bent, 10, H / 2), pixel(&original, 10, H / 2));
+    }
+
+    #[test]
     fn a_looks_cells_and_centers_are_the_layers_whatever_its_crop() {
         // A look of the second column of tiles: Mosaic's cells start at the layer's origin, as
         // when the whole layer is evaluated.

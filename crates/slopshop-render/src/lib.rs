@@ -3277,6 +3277,31 @@ mod tests {
             ),
             (Filter::PolarCoordinates { to_polar: true }, 2),
             (Filter::PolarCoordinates { to_polar: false }, 2),
+            (
+                Filter::Shear {
+                    curve: slopshop_core::filter::ShearCurve::new(&[
+                        [0.0, 30.0],
+                        [35.0, -60.0],
+                        [80.0, 10.0],
+                        [100.0, 45.0],
+                    ])
+                    .unwrap(),
+                    wrap: true,
+                },
+                2,
+            ),
+            (
+                Filter::Shear {
+                    curve: slopshop_core::filter::ShearCurve::new(&[
+                        [0.0, -100.0],
+                        [50.0, 70.0],
+                        [100.0, 0.0],
+                    ])
+                    .unwrap(),
+                    wrap: false,
+                },
+                2,
+            ),
             // The CPU's broad blur is three boxes: a little off the GPU's exact one.
             (
                 Filter::ClarityTexture {

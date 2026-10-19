@@ -447,10 +447,10 @@ fn cells_columns_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 // The distortions (`Filter::source` on the CPU): where the pixel at layer point `p` (layer
 // pixels) is read from; `z` is 0 where nothing is (Offset's transparent edge). `weights`: the
-// kind (0 Offset, 1 Twirl, 2 Pinch, 3 Spherize, 4 Polar Coordinates, 5 Ripple, 6 ZigZag, 7 Wave),
-// its three settings, the frame's box (left, top, right, bottom), the layer's size, the crop's
-// first pixel on the layer and its pixels' size there (layer pixels); then Wave's wavelengths,
-// amplitudes, scales and seed.
+// kind (0 Offset, 1 Twirl, 2 Pinch, 3 Spherize, 4 Polar Coordinates, 5 Ripple, 6 ZigZag, 7 Wave,
+// 8 Shear), its three settings, the frame's box (left, top, right, bottom), the layer's size, the
+// crop's first pixel on the layer and its pixels' size there (layer pixels); then Wave's
+// wavelengths, amplitudes, scales and seed, or Shear's points.
 fn distortion_source(p: vec2<f32>) -> vec3<f32> {
     let kind = u32(weights[0]);
     let a = weights[1];
@@ -541,6 +541,9 @@ fn distortion_source(p: vec2<f32>) -> vec3<f32> {
     if kind == 7u {
         return vec3<f32>(wave_source(p, u32(a), b, e == 1.0, vec4<f32>(left, top, w, h)), 1.0);
     }
+    if kind == 8u {
+        return vec3<f32>(shear_source(p, u32(a), b == 1.0, vec4<f32>(left, top, w, h)), 1.0);
+    }
     // Polar Coordinates.
     let tau = 6.2831853;
     if w <= 0.0 || h <= 0.0 || radius <= 0.0 {
@@ -593,6 +596,36 @@ fn wave_source(p: vec2<f32>, n: u32, kind: f32, wrap: bool, frame: vec4<f32>) ->
         return frame.xy + o - floor(o / frame.zw) * frame.zw;
     }
     return q;
+}
+
+// Shear's source for `p` (`Filter::source`, `ShearCurve::offset`): the row moved by the natural
+// spline through its `n` points, `weights[13..]` a triple per point (row and offset as fractions,
+// the second derivative), wrapped within `frame` (left, top, width, height) when `wrap`, else
+// its edge pixels repeated.
+fn shear_source(p: vec2<f32>, n: u32, wrap: bool, frame: vec4<f32>) -> vec2<f32> {
+    if frame.z <= 0.0 || frame.w <= 0.0 || n < 2u {
+        return p;
+    }
+    let t = clamp((p.y - frame.y) / frame.w, 0.0, 1.0);
+    // The segment `t` is in: the first point after it, at most the last.
+    var k = 1u;
+    while k < n - 1u && weights[13u + 3u * k] <= t {
+        k++;
+    }
+    let i = 13u + 3u * (k - 1u);
+    let x0 = weights[i];
+    let x1 = weights[i + 3u];
+    let span = x1 - x0;
+    let a = (x1 - t) / span;
+    let b = (t - x0) / span;
+    let curve = a * weights[i + 1u] + b * weights[i + 4u]
+        + ((a * a * a - a) * weights[i + 2u] + (b * b * b - b) * weights[i + 5u]) * span * span / 6.0;
+    let x = p.x - clamp(curve, -1.0, 1.0) * frame.z * 0.5;
+    if wrap {
+        let o = x - frame.x;
+        return vec2<f32>(frame.x + o - floor(o / frame.z) * frame.z, p.y);
+    }
+    return vec2<f32>(clamp(x, frame.x + 0.5, max(frame.x + frame.z - 0.5, frame.x + 0.5)), p.y);
 }
 
 @compute @workgroup_size(16, 16)
