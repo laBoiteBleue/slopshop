@@ -17,6 +17,7 @@ mod info;
 mod ipc;
 mod layer_style;
 mod liquify;
+mod lut;
 mod maps;
 mod move_pixels;
 mod paint;
@@ -2594,6 +2595,7 @@ pub fn run() {
             patterns::replace_pattern,
             patterns::load_pattern,
             maps::load_displacement_map,
+            lut::load_color_lookup,
             paint::patch_selection,
             move_snap_targets,
             warp_grid,
@@ -4548,6 +4550,57 @@ mod tests {
             (s.document().size(), s.document().resolution()),
             (size, slopshop_core::document::DEFAULT_RESOLUTION)
         );
+    }
+
+    #[test]
+    fn color_lookup_requests_name_their_table_by_id() {
+        let mut s = blank_session();
+        let edit = serde_json::from_str::<EditRequest>(
+            r#"{"kind":"addAdjustmentLayer","name":"Color Lookup 1","adjustment":"colorLookup","parent":null,"index":1}"#,
+        )
+        .unwrap()
+        .into_edit(&mut s)
+        .unwrap();
+        s.perform(edit).unwrap();
+        let id = s.document().layers()[1].id.get();
+        // A table loaded (the Load 3D LUT button), then used by id.
+        let path = std::env::temp_dir().join(format!("slopshop-app-{}.cube", std::process::id()));
+        std::fs::write(
+            &path,
+            "LUT_3D_SIZE 2
+0 0 0
+1 0 0
+0 1 0
+1 1 0
+0 0 1
+1 0 1
+0 1 1
+1 1 1
+",
+        )
+        .unwrap();
+        let loaded = lut::load(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let set = |lut: Option<u64>| {
+            let lut = lut.map_or(String::new(), |id| format!(r#","lut":{id}"#));
+            serde_json::from_str::<EditRequest>(&format!(
+                r#"{{"kind":"setAdjustment","id":{id},"adjustment":"colorLookup","values":[]{lut}}}"#
+            ))
+            .unwrap()
+        };
+        let edit = set(Some(loaded.id)).into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(
+            view.layers[1].adjustment.as_ref().unwrap().lut.as_ref(),
+            Some(&loaded)
+        );
+        // Without: none; an unknown table is refused.
+        assert!(set(Some(u64::MAX)).into_edit(&mut s).is_err());
+        let edit = set(None).into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        assert_eq!(view.layers[1].adjustment.as_ref().unwrap().lut, None);
     }
 
     #[test]
