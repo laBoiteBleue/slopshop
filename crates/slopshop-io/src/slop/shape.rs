@@ -31,7 +31,7 @@
 //! `size` and `leading` in pixels (`leading` absent: automatic), `tracking` in thousandths of an
 //! em, `align` `left`, `center` or `right`, `position` the anchor (the first baseline at the
 //! alignment point) in the layer's own space; paragraph text (schema 0.38) has a `frame`, its
-//! box's size, and `position` is then the box's top left corner. `spans` (schema 0.39) set
+//! box's size, and `position` is then the box's top left corner. `spans` (schema 0.41) set
 //! characters otherwise: `start` and `end` in UTF-8 bytes of `content` (on character
 //! boundaries, sorted, apart), and what they set (`family`, `weight`, `italic`, `size`,
 //! `color`, `tracking`, `leading`, null for automatic leading); absent: the text's. A text in

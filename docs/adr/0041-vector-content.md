@@ -275,7 +275,7 @@ Status: accepted (2026-10-15, under the maintainer's delegation; to review).
    draws a new box; while the text is edited, its box shows with eight handles that resize it,
    live, within the typing's undo entry. A file of an older reader draws paragraph text from
    its outlines and, edited, takes it as point text.
-3. **Per-character styles** (`.slop` 0.39): a text keeps its own settings and **spans**,
+3. **Per-character styles** (`.slop` 0.41): a text keeps its own settings and **spans**,
    sorted and apart, in UTF-8 bytes of its content, each setting only what differs (family,
    weight, italic, size, color, tracking, leading, automatic leading included), as Photoshop's
    character attributes. Core keeps them with the characters: typed characters take the style
