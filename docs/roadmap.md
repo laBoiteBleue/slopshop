@@ -367,7 +367,13 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       Generators, Wavelength and Amplitude Min/Max, Scale, Type Sine/Triangle/Square, Undefined
       Areas Wrap Around/Repeat Edge Pixels, Randomize: a new seed), ZigZag (Amount -100 to 100,
       Ridges 1 to 20, Around Center/Out From Center/Pond Ripples) and Spherize's Horizontal Only and
-      Vertical Only modes, sampled as the distortions are; CPU and GPU (looks). Not yet: Displace
+      Vertical Only modes, sampled as the distortions are; CPU and GPU (looks)
+- [x] Distort > Displace (Horizontal and Vertical Scale -999 to 999 %, Displacement Map
+      Stretch to Fit/Tile, Undefined Areas Wrap Around/Repeat Edge Pixels): the map an image of
+      the Sources panel or a file (any format SlopShop opens, a PSD's composite), kept as a
+      source by the entry ([ADR 0040](adr/0040-sources.md), amended), deleting it from the bin
+      removing the entry; red moves across, green down, a gray map both; on the CPU (its looks
+      too). Not yet: on the GPU, another map for an entry edited again
 - [x] Distort > Shear: Photoshop's curve editor (a grid with the vertical line through 2 to 16
       points: a press adds one and drags it, the top and bottom ones move along their row, one
       dragged off the grid is removed, Default straightens the line; arrows and Delete on a point

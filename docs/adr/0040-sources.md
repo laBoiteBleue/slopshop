@@ -156,3 +156,34 @@ The maintainer's answers, as Photoshop does with Smart Objects:
 - **Deleting a source from the bin** deletes the layers that show it, after a confirmation
   listing them, as one undo entry; a Pattern Overlay using it is removed from its style, the
   layer kept.
+
+## Amendment (2026-10-19): Displace's maps
+
+Status: accepted (2026-10-19, under the maintainer's delegation; to review).
+
+Filter > Distort > Displace reads a displacement map, in Photoshop a PSD file chosen after the
+dialog. SlopShop keeps it non-destructively as a source:
+
+- **The map is a source the filter step names** (`FilterStep::map`, an `Arc<Source>`). The
+  dialog chooses it among the images of the Sources panel (a layer's source, shared, nothing
+  copied) or from a file in any format SlopShop opens (a layered file's composite, as
+  Photoshop reads a PSD's), which becomes a new source named after the file. The filter's
+  settings (scales, Stretch to Fit or Tile, Undefined Areas) stay its values, editable again;
+  the map stays the step's (edited again, it is shown, not chosen: apply Displace anew for
+  another map).
+- **A source a map uses lives as long as the step**, as a Pattern Overlay's pattern
+  (point 4): the layer keeps it (`Layer::sources`), the history too, and a saved file lists it
+  in `sources`. A map opened from a file is not in the Sources panel while no layer shows it,
+  as a Pattern Overlay's pattern.
+- **Deleting a source from the bin** (the 2026-10-08 cascade) also removes the Displace
+  entries reading it from their stacks, the layers kept, in the same undo entry, as a Pattern
+  Overlay using it leaves its style.
+- **`.slop`**: a filter step may have `"map"`, the index of its source in `sources`. Displace is
+  a new filter identifier: older readers refuse it as coming from a newer SlopShop, so no
+  schema minor is needed.
+- Displace is computed on the CPU (its looks too); the GPU would need the map uploaded as a
+  texture, left for later.
+
+Alternatives: the map's pixels copied into the step (a second copy of a bin image, and no
+link to it); the map named by a file path (a document moved elsewhere would lose it, as ADR
+0042 declined for patterns).
