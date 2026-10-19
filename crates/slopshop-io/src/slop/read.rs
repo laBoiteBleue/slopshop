@@ -541,7 +541,7 @@ pub(super) fn read_node(
                 || node.version == NODE_VERSION_VECTOR_MASK =>
         {
             LayerContent::Adjustment {
-                adjustment: adjustment_of(&node.params)?,
+                adjustment: adjustment_of(&node.params, rasters)?,
             }
         }
         NODE_PATTERN_FILL if node.version == NODE_VERSION_PATTERN || overlaid => {
@@ -793,10 +793,11 @@ fn transform_of(
 }
 
 /// An adjustment from its parameters (an adjustment node's, or an effect's): `adjustment`, its
-/// `values` and, for Curves, `curves`. Parameters out of range are refused when the document
-/// is restored.
+/// `values` and, for Curves, `curves`; Color Lookup's table from the images of the file,
+/// `rasters`. Parameters out of range are refused when the document is restored.
 fn adjustment_of(
     params: &Map<String, Value>,
+    rasters: &HashMap<Hash, Arc<RasterImage>>,
 ) -> Result<slopshop_core::adjust::Adjustment, FileError> {
     let id = params
         .get("adjustment")
@@ -821,7 +822,58 @@ fn adjustment_of(
     if let slopshop_core::adjust::Adjustment::GradientMap { reverse, .. } = adjustment {
         return gradient_map_of(params, reverse);
     }
+    if let slopshop_core::adjust::Adjustment::ColorLookup { .. } = adjustment {
+        return color_lookup_of(params, rasters);
+    }
     Ok(adjustment)
+}
+
+/// Color Lookup's table (schema 0.43): `params.lut`, its `name`, `dimension` (1 or 3), `size`,
+/// `domain` and the key of the image of its values, `table`; absent, none is chosen.
+fn color_lookup_of(
+    params: &Map<String, Value>,
+    rasters: &HashMap<Hash, Arc<RasterImage>>,
+) -> Result<slopshop_core::adjust::Adjustment, FileError> {
+    use slopshop_core::lut::{ColorLut, LutDimension};
+    let Some(lut) = params.get("lut") else {
+        return Ok(slopshop_core::adjust::Adjustment::ColorLookup { lut: None });
+    };
+    let invalid = || corrupt("color lookup without a valid table");
+    let lut = lut.as_object().ok_or_else(invalid)?;
+    let dimension = match lut.get("dimension").and_then(Value::as_u64) {
+        Some(1) => LutDimension::One,
+        Some(3) => LutDimension::Three,
+        _ => return Err(invalid()),
+    };
+    let size = lut
+        .get("size")
+        .and_then(Value::as_u64)
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or_else(invalid)?;
+    let triple = |v: &Value| -> Option<[f32; 3]> {
+        let v = v.as_array().filter(|v| v.len() == 3)?;
+        Some([
+            v[0].as_f64()? as f32,
+            v[1].as_f64()? as f32,
+            v[2].as_f64()? as f32,
+        ])
+    };
+    let domain = lut
+        .get("domain")
+        .and_then(Value::as_array)
+        .filter(|d| d.len() == 2)
+        .and_then(|d| Some([triple(&d[0])?, triple(&d[1])?]))
+        .ok_or_else(invalid)?;
+    let image = lut
+        .get("table")
+        .and_then(Value::as_str)
+        .and_then(Hash::from_key)
+        .and_then(|key| rasters.get(&key))
+        .ok_or_else(|| corrupt("color lookup with a missing image"))?;
+    let name = lut.get("name").and_then(Value::as_str).unwrap_or_default();
+    let table = ColorLut::from_image(name, dimension, size, domain, image)
+        .map_err(|e| corrupt(&format!("color lookup: {e}")))?;
+    Ok(slopshop_core::adjust::Adjustment::ColorLookup { lut: Some(table) })
 }
 
 /// Gradient Map's gradient (schema 0.14): `params.gradient`, a list of `[location, r, g, b]`.
@@ -1015,7 +1067,7 @@ fn raster_content(
                     .map_or(&[][..], Vec::as_slice);
                 let to_document = transform_of(node, values, "an effect's transform")?;
                 effect.push(Arc::new(Effect {
-                    adjustment: adjustment_of(params)?,
+                    adjustment: adjustment_of(params, rasters)?,
                     selection,
                     to_document,
                     space: space_of(params.get("space"))?,

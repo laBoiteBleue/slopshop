@@ -1587,12 +1587,49 @@ fn damaged_layer_trees_are_refused() {
     );
     assert_eq!(
         read(
-            &adjustment(r#""adjustment":"colorLookup","values":[0,0,0,0,0]"#),
+            &adjustment(r#""adjustment":"hdrToning","values":[0,0,0,0,0]"#),
             "[1]"
         ),
         Err("newerVersion"),
         "an adjustment from a newer SlopShop"
     );
+    // Schema 0.43: Color Lookup without a table chooses none; a table must be whole, its
+    // values in an image of the file.
+    assert_eq!(
+        read(
+            &adjustment(r#""adjustment":"colorLookup","values":[]"#),
+            "[1]"
+        )
+        .map(|l| l[0].content.clone()),
+        Ok(LayerContent::Adjustment {
+            adjustment: slopshop_core::adjust::Adjustment::ColorLookup { lut: None }
+        })
+    );
+    let table = |lut: &str| {
+        read(
+            &adjustment(&format!(
+                r#""adjustment":"colorLookup","values":[],"lut":{lut}"#
+            )),
+            "[1]",
+        )
+    };
+    let key = format!("b3:{}", "0".repeat(64));
+    for lut in [
+        format!(
+            r#"{{"name":"a","dimension":3,"size":2,"domain":[[0,0,0],[1,1,1]],"table":"{key}"}}"#
+        ),
+        format!(
+            r#"{{"name":"a","dimension":2,"size":2,"domain":[[0,0,0],[1,1,1]],"table":"{key}"}}"#
+        ),
+        format!(
+            r#"{{"name":"a","dimension":3,"size":-2,"domain":[[0,0,0],[1,1,1]],"table":"{key}"}}"#
+        ),
+        format!(r#"{{"name":"a","dimension":3,"size":2,"domain":[[0,0,0]],"table":"{key}"}}"#),
+        r#"{"name":"a","dimension":3,"size":2,"domain":[[0,0,0],[1,1,1]]}"#.to_string(),
+        "7".to_string(),
+    ] {
+        assert_eq!(table(&lut).map(|_| ()), Err("corrupt"), "{lut}");
+    }
     // Schema 0.8: missing values read as 0; more than 37 are refused (16 before schema 0.13,
     // 20 before 0.15).
     assert!(
@@ -1638,7 +1675,7 @@ fn levels_keep_their_channels_and_write_five_values_without_them() {
     };
     // Without channels of their own: the five numbers earlier readers read.
     let values = |a: &Adjustment| {
-        super::write::adjustment_params(a)["values"]
+        super::write::adjustment_params(a, |_| None)["values"]
             .as_array()
             .unwrap()
             .len()
@@ -3445,5 +3482,102 @@ fn pattern_overlays_round_trip_with_their_source() {
     slopshop_core::composite::composite_region(&doc, region, &mut before).unwrap();
     slopshop_core::composite::composite_region(&loaded, region, &mut after).unwrap();
     assert_eq!(before, after);
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn color_lookups_keep_their_table_in_layers_and_stacks() {
+    use slopshop_core::adjust::Adjustment;
+    use slopshop_core::lut::{ColorLut, LutDimension};
+    let size = 9;
+    let values: Vec<f32> = (0..size * size * size * 3)
+        .map(|i| (i % 97) as f32 / 96.0 - 0.1)
+        .collect();
+    let film = ColorLut::new(
+        "film.cube",
+        LutDimension::Three,
+        size,
+        [[-0.1; 3], [1.0, 1.1, 1.2]],
+        values,
+    )
+    .unwrap();
+    let curves = ColorLut::new(
+        "curves.cube",
+        LutDimension::One,
+        3,
+        ColorLut::UNIT_DOMAIN,
+        vec![0.0, 0.1, 0.2, 0.5, 0.5, 0.5, 1.0, 0.9, 0.8],
+    )
+    .unwrap();
+    let mut doc = golden_document_v0_10();
+    let (id, stack) = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster { .. } => Some((l.id, l.content.stack()?)),
+            _ => None,
+        })
+        .expect("a raster layer");
+    let effect = |lut: &Arc<ColorLut>| Effect {
+        adjustment: Adjustment::ColorLookup {
+            lut: Some(Arc::clone(lut)),
+        },
+        selection: None,
+        to_document: slopshop_core::Affine::IDENTITY.into(),
+        space: doc.blend_space(),
+    };
+    let stack = stack
+        .with_effect(effect(&curves))
+        .unwrap()
+        .with_effect(effect(&film))
+        .unwrap();
+    Edit::SetLayerStack {
+        id,
+        stack,
+        shown: None,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    // The same table in an adjustment layer, and one without a table.
+    for lut in [Some(Arc::clone(&film)), None] {
+        push(
+            &mut doc,
+            "lookup",
+            LayerContent::Adjustment {
+                adjustment: Adjustment::ColorLookup { lut },
+            },
+            1.0,
+        );
+    }
+    let lookups = |doc: &Document| -> Vec<Adjustment> {
+        doc.all_layers()
+            .flat_map(|l| match &l.content {
+                LayerContent::Adjustment { adjustment } => vec![adjustment.clone()],
+                content => content
+                    .stack()
+                    .map(|s| {
+                        s.entries()
+                            .iter()
+                            .filter_map(|e| match e {
+                                Entry::Effect(e) => Some(e.steps()[0].adjustment.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .filter(|a| a.id() == "colorLookup")
+            .collect()
+    };
+    let path = temp_path("color-lookup.slop");
+    let mut file = SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_eq!(lookups(&loaded), lookups(&doc));
+    assert_eq!(lookups(&loaded).len(), 4);
+    // Saved again unchanged: the tables' images are known, nothing is added but the manifest.
+    let before = file.len();
+    file.save(&doc).unwrap();
+    let (again, _) = SlopFile::open(&path).unwrap();
+    assert_eq!(lookups(&again), lookups(&doc));
+    assert!(file.len() - before < 64 * 1024, "{}", file.len() - before);
     fs::remove_file(&path).ok();
 }

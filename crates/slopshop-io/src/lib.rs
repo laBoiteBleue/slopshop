@@ -25,6 +25,7 @@ mod icc;
 mod jpeg2000;
 mod jxl;
 mod lab;
+pub mod lut;
 mod orient;
 pub mod patterns;
 pub mod pdf;

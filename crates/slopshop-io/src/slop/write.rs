@@ -173,13 +173,14 @@ fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
                             let (color, keep) = paint.images().map_err(stack_error)?;
                             out.extend([color, keep]);
                         }
-                        Entry::Effect(effect) => out.extend(
-                            effect
-                                .steps()
-                                .iter()
-                                .filter_map(|s| s.selection.as_ref())
-                                .map(|s| Arc::clone(s.image())),
-                        ),
+                        Entry::Effect(effect) => {
+                            for step in effect.steps() {
+                                out.extend(step.selection.as_ref().map(|s| Arc::clone(s.image())));
+                                if let Some(lut) = step.adjustment.lut() {
+                                    out.push(lut.image().map_err(FileError::Image)?);
+                                }
+                            }
+                        }
                         Entry::Filter(filter) => out.extend(
                             filter
                                 .steps()
@@ -204,6 +205,12 @@ fn rasters(document: &Document) -> Result<Vec<Arc<RasterImage>>, FileError> {
             }
             // Without a stack: the pixels themselves, always there.
             LayerContent::Raster { image, .. } => out.push(image.get()),
+            // Color Lookup's table (schema 0.43).
+            LayerContent::Adjustment { adjustment } => {
+                if let Some(lut) = adjustment.lut() {
+                    out.push(lut.image().map_err(FileError::Image)?);
+                }
+            }
             _ => {}
         }
         // A source the layer grew around (ADR 0040) is not its original.
@@ -506,8 +513,12 @@ pub(super) fn image_key(image: &RasterImage, level0_table: Hash) -> Hash {
     Hash(*hasher.finalize().as_bytes())
 }
 
-/// An adjustment's parameters, as adjustment nodes and effects store them.
-pub(super) fn adjustment_params(adjustment: &Adjustment) -> Value {
+/// An adjustment's parameters, as adjustment nodes and effects store them; `key` gives the key
+/// of an image the file stores (Color Lookup's table).
+pub(super) fn adjustment_params(
+    adjustment: &Adjustment,
+    key: impl Fn(&Arc<RasterImage>) -> Option<String>,
+) -> Value {
     // At least five values: what readers of schema 0.7 expect. Levels without settings of
     // their own for the channels keep their five (schema 0.13 added the channels' fifteen),
     // so that earlier readers still read them.
@@ -530,6 +541,20 @@ pub(super) fn adjustment_params(adjustment: &Adjustment) -> Value {
     // Schema 0.14: Gradient Map's stops, `[location, r, g, b]` (not reversed: `values` says).
     if let Adjustment::GradientMap { gradient, .. } = adjustment {
         params["gradient"] = json!(gradient_stops(gradient));
+    }
+    // Schema 0.43: Color Lookup's table, its values as an image (absent: none chosen).
+    if let Some(lut) = adjustment.lut() {
+        let dimension = match lut.dimension() {
+            slopshop_core::lut::LutDimension::One => 1,
+            slopshop_core::lut::LutDimension::Three => 3,
+        };
+        params["lut"] = json!({
+            "name": lut.name(),
+            "dimension": dimension,
+            "size": lut.size(),
+            "domain": lut.domain(),
+            "table": lut.image().ok().as_ref().and_then(&key),
+        });
     }
     params
 }
@@ -670,7 +695,7 @@ fn build_manifest(
                                     .steps()
                                     .iter()
                                     .map(|step| {
-                                        let mut value = adjustment_params(&step.adjustment);
+                                        let mut value = adjustment_params(&step.adjustment, key);
                                         value["selection"] = json!(
                                             step.selection.as_ref().and_then(|s| key(s.image()))
                                         );
@@ -746,9 +771,10 @@ fn build_manifest(
                 inputs = children.iter().map(|child| child.id.get()).collect();
                 (NODE_GROUP, json!({ "pass_through": pass_through }))
             }
-            LayerContent::Adjustment { adjustment } => {
-                (NODE_ADJUSTMENT, adjustment_params(adjustment))
-            }
+            LayerContent::Adjustment { adjustment } => (
+                NODE_ADJUSTMENT,
+                adjustment_params(adjustment, |image| key_of(image).map(Hash::to_key)),
+            ),
             // Its source is written below, as a raster's.
             LayerContent::PatternFill { pattern } => (
                 NODE_PATTERN_FILL,
