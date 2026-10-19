@@ -18,6 +18,7 @@ const GRID: WarpGrid = {
   bend: 0,
   vertical: false,
   warped: false,
+  perspective: false,
   columns: 1,
   rows: 1,
   frame: [0, 0, 3, 3],

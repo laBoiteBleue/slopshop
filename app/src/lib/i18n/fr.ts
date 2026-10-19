@@ -113,6 +113,7 @@ const fr: Messages = {
   "vectorDialog.tooLarge": "Trop grand : {max} pixels par côté au plus",
   "vectorDialog.ok": "OK",
   "vectorDialog.cancel": "Annuler",
+  "menu.edit.perspectiveWarp": "Déformation de la perspective",
   "menu.edit.freeTransform": "Transformation libre",
   "menu.edit.transform": "Transformer",
   "menu.edit.transform.again": "Répéter la transformation",
@@ -160,6 +161,12 @@ const fr: Messages = {
   "warp.split.crosswise": "Fractionner la déformation en croix",
   "warp.split.vertical": "Fractionner la déformation verticalement",
   "warp.split.horizontal": "Fractionner la déformation horizontalement",
+  "warp.perspectiveWarped":
+    "Ce calque a une déformation de la perspective : Édition > Déformation de la perspective la modifie, et Calque > Figer en pixels > Pixelliser l'applique avant une déformation.",
+  "perspectiveWarp.mode.layout": "Disposition",
+  "perspectiveWarp.mode.warp": "Déformation",
+  "perspectiveWarp.gridWarped":
+    "Ce calque est déformé par Édition > Transformation > Déformation : Calque > Figer en pixels > Pixelliser l'applique avant une déformation de la perspective.",
   "transform.readout.angle": "{angle}°",
   "transform.readout.scale": "L {w} % · H {h} %",
   "paste.layerName": "Image collée",
@@ -1295,6 +1302,7 @@ const fr: Messages = {
   "history.arrange": "Ordre des calques",
   "history.transform": "Transformation",
   "history.warp": "Déformation",
+  "history.perspectiveWarp": "Déformation de la perspective",
   "history.pixels": "Modifier les pixels",
   "history.maskPixels": "Modifier le masque de fusion",
   "history.fillColor": "Couleur de remplissage",

@@ -287,6 +287,15 @@
   import TransformFields from "./lib/TransformFields.svelte";
   import WarpFields from "./lib/WarpFields.svelte";
   import WarpOverlay from "./lib/WarpOverlay.svelte";
+  import PerspectiveWarpFields from "./lib/PerspectiveWarpFields.svelte";
+  import PerspectiveWarpOverlay from "./lib/PerspectiveWarpOverlay.svelte";
+  import {
+    NO_PLANES,
+    planesRequest,
+    samePlanes,
+    type PerspectiveMode,
+    type Planes,
+  } from "./lib/perspectiveWarp";
   import {
     gridRequest,
     isStyle,
@@ -644,7 +653,8 @@
   const cancelGesture = (id: number) => sync(engine.cancelGesture(id));
   // Undo during a Free Transform cancels it (the transform is not applied yet).
   const undo = () => {
-    if (warping) cancelWarp();
+    if (perspectiveWarping) cancelPerspectiveWarp();
+    else if (warping) cancelWarp();
     else if (transforming) cancelTransform();
     else if (active) void sync(engine.undo(active.id));
   };
@@ -3948,6 +3958,7 @@
   function commitTransform() {
     // Another edit applies a warp under way first, as it does a Free Transform.
     commitWarp();
+    commitPerspectiveWarp();
     const current = transforming;
     if (!current) return;
     transforming = null;
@@ -4105,7 +4116,7 @@
     const doc = active;
     if (!doc) return;
     commitTransform();
-    if (warping || transforming) return;
+    if (warping || transforming || perspectiveWarping) return;
     const layer = layersPanel?.selectedLayer() ?? null;
     if (!layer || layer.kind !== "raster") return;
     if (tool === "crop") tool = "move";
@@ -4113,7 +4124,12 @@
       showError(String(e));
       return null;
     });
-    if (!grid || active?.id !== doc.id || warping || transforming) return;
+    if (!grid || active?.id !== doc.id || warping || transforming || perspectiveWarping) return;
+    // One warp per layer: a perspective warp is edited as such (ADR 0044).
+    if (grid.perspective) {
+      showError(t("warp.perspectiveWarped"));
+      return;
+    }
     const settings = settingsOf(grid);
     warping = {
       document: doc.id,
@@ -4199,6 +4215,104 @@
     void cancelGesture(current.document);
   }
 
+  // Edit > Perspective Warp (ADR 0044): the active pixel layer's planes over the image (its current
+  // planes on a layer warped by some, in Warp mode; none yet otherwise, in Layout mode). Layout
+  // mode shows the layer unwarped, its planes drawn and fitted over it; Warp mode shows it warped
+  // live as the corners move, one gesture replaced at each step (the whole planes sent each
+  // time). Enter applies the planes' warp (one undo entry), Esc or undo cancels it. Another edit,
+  // another tab, Free Transform or Warp applies it first.
+  type PerspectiveWarping = {
+    document: number;
+    id: number;
+    /** The planes when it began: unchanged, Enter changes nothing. */
+    start: Planes;
+    planes: Planes;
+    mode: PerspectiveMode;
+    /** The plane selected (Delete removes it in Layout mode). */
+    selected: number | null;
+    /** The map placing the layer's content in the document. */
+    toDocument: Homography;
+  };
+  let perspectiveWarping = $state<PerspectiveWarping | null>(null);
+
+  async function startPerspectiveWarp() {
+    const doc = active;
+    if (!doc) return;
+    commitTransform();
+    if (warping || transforming || perspectiveWarping) return;
+    const layer = layersPanel?.selectedLayer() ?? null;
+    if (!layer || layer.kind !== "raster") return;
+    if (tool === "crop") tool = "move";
+    const found = await engine.warpPlanes(doc.id, layer.id).catch((e) => {
+      showError(String(e));
+      return null;
+    });
+    if (!found || active?.id !== doc.id || warping || transforming || perspectiveWarping) return;
+    // One warp per layer: Warp's grid is edited as such (ADR 0044).
+    if (found.grid) {
+      showError(t("perspectiveWarp.gridWarped"));
+      return;
+    }
+    const planes: Planes =
+      found.planes.length > 0
+        ? { layout: found.layout, warped: found.warped, planes: found.planes }
+        : NO_PLANES;
+    perspectiveWarping = {
+      document: doc.id,
+      id: layer.id,
+      start: planes,
+      planes,
+      mode: planes.planes.length > 0 ? "warp" : "layout",
+      selected: null,
+      toDocument: found.toDocument,
+    };
+  }
+
+  /** The layer as the mode shows it: unwarped in Layout mode, warped by the planes in Warp mode. */
+  function sendPlanes(current: PerspectiveWarping) {
+    const planes = current.mode === "warp" ? current.planes : null;
+    void sync(engine.performLive(current.document, planesRequest(current.id, planes), true));
+  }
+
+  function onPerspectiveMode(mode: PerspectiveMode) {
+    const current = perspectiveWarping;
+    if (!current || current.mode === mode) return;
+    current.mode = mode;
+    current.selected = null;
+    sendPlanes(current);
+  }
+
+  /** The planes edited on the canvas (a corner's drag, a plane drawn, joined or removed). */
+  function onPlanesEdit(planes: Planes) {
+    const current = perspectiveWarping;
+    if (!current) return;
+    current.planes = planes;
+    // Layout mode shows the layer unwarped: nothing to send until Warp mode or Enter.
+    if (current.mode === "warp") sendPlanes(current);
+  }
+
+  function commitPerspectiveWarp() {
+    const current = perspectiveWarping;
+    if (!current) return;
+    perspectiveWarping = null;
+    if (samePlanes(current.planes, current.start)) {
+      void cancelGesture(current.document);
+      return;
+    }
+    // Layout mode showed the layer unwarped: the planes' warp is what is applied.
+    void sync(
+      engine.performLive(current.document, planesRequest(current.id, current.planes), true),
+    );
+    void endGesture(current.document);
+  }
+
+  function cancelPerspectiveWarp() {
+    const current = perspectiveWarping;
+    if (!current) return;
+    perspectiveWarping = null;
+    void cancelGesture(current.document);
+  }
+
   /** Esc: the layers as they were; layers just placed are taken back, as in Photoshop. */
   function cancelTransform() {
     const current = transforming;
@@ -4243,6 +4357,9 @@
   });
   $effect(() => {
     if (warping && warping.document !== activeId) commitWarp();
+  });
+  $effect(() => {
+    if (perspectiveWarping && perspectiveWarping.document !== activeId) commitPerspectiveWarp();
   });
 
   /**
@@ -5291,7 +5408,7 @@
       undo: {
         label: t("menu.edit.undo"),
         run: undo,
-        disabled: !transforming && !warping && !doc?.canUndo,
+        disabled: !transforming && !warping && !perspectiveWarping && !doc?.canUndo,
         repeats: true,
       },
       redo: { label: t("menu.edit.redo"), run: redo, disabled: !doc?.canRedo, repeats: true },
@@ -5950,6 +6067,13 @@
           separator,
           cmd(t("menu.edit.definePattern"), openDefinePattern, undefined, !doc),
           separator,
+          // Pixel layers only, as Warp (ADR 0044): planes drawn over the image, then moved.
+          cmd(
+            t("menu.edit.perspectiveWarp"),
+            () => void startPerspectiveWarp(),
+            undefined,
+            activeLayer?.kind !== "raster",
+          ),
           item("freeTransform"),
           {
             kind: "submenu",
@@ -6648,7 +6772,13 @@
       bind:crop={cropAspect}
       bind:straighten={straightening}
       canvasSize={active ?? undefined}
-      transform={transforming ? transformBar : warping ? warpBar : undefined}
+      transform={transforming
+        ? transformBar
+        : warping
+          ? warpBar
+          : perspectiveWarping
+            ? perspectiveBar
+            : undefined}
       quickMask={active?.quickMask ?? false}
       bind:quickMaskOpacity
       alignable={(layersPanel?.selectedLayers().length ?? 0) > 0}
@@ -6670,6 +6800,15 @@
         onchange={onWarpChange}
         onsize={onWarpGridSize}
         onsplit={(mode) => warping && (warping.split = mode)}
+      />
+    {/if}
+  {/snippet}
+  {#snippet perspectiveBar()}
+    {#if perspectiveWarping}
+      <PerspectiveWarpFields
+        mode={perspectiveWarping.mode}
+        warpable={perspectiveWarping.planes.planes.length > 0}
+        onmode={onPerspectiveMode}
       />
     {/if}
   {/snippet}
@@ -6819,7 +6958,11 @@
               quickMaskOpacity={active.quickMaskOpacity}
               onframe={(stats) => (frame = stats)}
               onmovestart={onMoveStart}
-              onmove={tool === "move" && !transforming && !warping && !overlayTakesPointer
+              onmove={tool === "move" &&
+              !transforming &&
+              !warping &&
+              !perspectiveWarping &&
+              !overlayTakesPointer
                 ? onMoveDrag
                 : undefined}
               onmoveend={onMoveEnd}
@@ -6902,6 +7045,18 @@
                     onchange={onWarpGridEdit}
                     oncommit={commitWarp}
                     oncancel={cancelWarp}
+                  />
+                {:else if perspectiveWarping && perspectiveWarping.document === active?.id}
+                  <PerspectiveWarpOverlay
+                    {mapping}
+                    planes={perspectiveWarping.planes}
+                    mode={perspectiveWarping.mode}
+                    toDocument={perspectiveWarping.toDocument}
+                    selected={perspectiveWarping.selected}
+                    onchange={onPlanesEdit}
+                    onselect={(k) => perspectiveWarping && (perspectiveWarping.selected = k)}
+                    oncommit={commitPerspectiveWarp}
+                    oncancel={cancelPerspectiveWarp}
                   />
                 {:else if refining?.document === active?.id && refineSettings.brush.on}
                   <!-- Select and Mask's refine-edge brush: strokes mark where the model decides. -->
