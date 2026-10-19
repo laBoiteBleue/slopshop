@@ -7019,6 +7019,48 @@ mod tests {
     }
 
     #[test]
+    fn pixelate_filters_give_the_same_pixels_in_a_look_and_in_the_whole_layer() {
+        let original = gradient(true);
+        for id in [
+            "colorHalftone",
+            "crystallize",
+            "facet",
+            "fragment",
+            "mezzotint",
+            "pointillize",
+        ] {
+            let filter = Filter::defaults(id).unwrap();
+            let stack = applied(&original, filter);
+            assert!(
+                difference(&stack.evaluate().unwrap(), &original) > 0,
+                "{id}"
+            );
+            look_matches_evaluation(&stack);
+        }
+    }
+
+    #[test]
+    fn pointillize_shows_its_background_between_its_dots() {
+        let original = gradient(true);
+        let dots = applied(
+            &original,
+            Filter::Pointillize {
+                cell: 6.0,
+                background: [255, 0, 255],
+                seed: 1,
+            },
+        )
+        .evaluate()
+        .unwrap();
+        let background = (0..H)
+            .flat_map(|y| (0..W).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixel(&dots, x, y) == [255, 0, 255, 255])
+            .count();
+        let share = background as f64 / f64::from(W * H);
+        assert!((0.15..0.5).contains(&share), "{share}");
+    }
+
+    #[test]
     fn trace_contour_draws_a_line_on_white_where_the_layer_crosses_its_level() {
         // Black then white at x = 150: Upper outlines the white side, Lower the black one.
         let original = halves();
