@@ -15,7 +15,9 @@ pub(crate) enum Value {
     Text(String),
     /// An enumerated value: its type and the value.
     Enum(Vec<u8>, Vec<u8>),
-    /// A reference, a class, an alias or raw data: read past, not kept.
+    /// Raw data (`tdta`), e.g. a Color Lookup's embedded file.
+    Data(Vec<u8>),
+    /// A reference, a class or an alias: read past, not kept.
     Other,
 }
 
@@ -65,6 +67,21 @@ impl Descriptor {
     pub fn enumerated(&self, key: &[u8]) -> Option<&[u8]> {
         match self.get(key)? {
             Value::Enum(_, value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn text(&self, key: &[u8]) -> Option<&str> {
+        match self.get(key)? {
+            Value::Text(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// Raw data (`tdta`).
+    pub fn data(&self, key: &[u8]) -> Option<&[u8]> {
+        match self.get(key)? {
+            Value::Data(data) => Some(data),
             _ => None,
         }
     }
@@ -173,10 +190,14 @@ impl<'a> Reader<'a> {
                 self.id()?;
                 Value::Other
             }
-            b"alis" | b"tdta" => {
+            b"alis" => {
                 let length = self.u32()? as usize;
                 self.take(length)?;
                 Value::Other
+            }
+            b"tdta" => {
+                let length = self.u32()? as usize;
+                Value::Data(self.take(length)?.to_vec())
             }
             b"obj " => {
                 let count = self.u32()?;

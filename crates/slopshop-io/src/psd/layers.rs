@@ -741,6 +741,39 @@ fn read_record<R: Read + Seek>(input: &mut Input<R>, max_side: u32) -> Result<Re
     Ok(record)
 }
 
+/// A Color Lookup's `clrL` block: version 1, then a descriptor (version 16) with the kind
+/// (`lookupType`), Dither (`Dthr`) and, for a 3D LUT, the file embedded (`LUT3DFileData`), its
+/// format (`LUTFormat`) and name (`LUT3DFileName`). Read when the file is a `.cube` or `.3dl`
+/// one, or when there is none (none chosen yet); Abstract and Device Link profiles, and `.look`
+/// and `.csp` files, are not. Approximated when Dither is on (SlopShop composites in floating
+/// point, without dithering).
+fn color_lookup(block: &[u8]) -> Option<(Adjustment, bool)> {
+    use crate::lut::LutFormat;
+    if block.get(..2)? != [0, 1] {
+        return None;
+    }
+    let d = super::descriptor::read(block.get(6..)?)?;
+    if d.enumerated(b"lookupType")? != b"3DLUT" {
+        return None;
+    }
+    let dither = d.bool(b"Dthr").unwrap_or(false);
+    let Some(file) = d.data(b"LUT3DFileData") else {
+        // None chosen yet.
+        return Some((Adjustment::ColorLookup { lut: None }, dither));
+    };
+    let format = match d.enumerated(b"LUTFormat")? {
+        b"LUTFormatCUBE" => LutFormat::Cube,
+        b"LUTFormat3DL" => LutFormat::ThreeDl,
+        _ => return None,
+    };
+    let name = d
+        .text(b"LUT3DFileName")
+        .or_else(|| d.text(b"Nm  "))
+        .unwrap_or_default();
+    let lut = crate::lut::parse_lut(file, format, name).ok()?;
+    Some((Adjustment::ColorLookup { lut: Some(lut) }, dither))
+}
+
 /// A Gradient Map's `grdm` block (Adobe's layout): version, reverse, dither, a Unicode name,
 /// the color stops (location 0–4096, midpoint, mode, a color: space and four components), the
 /// transparency stops, then the smoothness among the noise settings. Approximated (reported)
@@ -932,6 +965,7 @@ fn read_adjustment(key: &[u8; 4], block: &[u8]) -> Option<(Adjustment, bool)> {
         ),
         b"nvrt" => (Adjustment::Invert, false),
         b"grdm" => gradient_map(block)?,
+        b"clrL" => color_lookup(block)?,
         // Version, the method (0 relative, 1 absolute), then ten records of cyan, magenta,
         // yellow and black (-100 to 100): an unused one, then the ranges in Photoshop's order.
         b"selc" => {

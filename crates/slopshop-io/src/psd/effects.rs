@@ -550,7 +550,7 @@ fn unit(unit: &[u8; 4], v: f64) -> Vec<u8> {
     out
 }
 
-fn enumerated(ty: &[u8], value: &[u8]) -> Vec<u8> {
+pub(crate) fn enumerated(ty: &[u8], value: &[u8]) -> Vec<u8> {
     let mut out = id(ty);
     out.extend(id(value));
     out
@@ -584,7 +584,7 @@ fn list(objects: Vec<Vec<u8>>) -> Vec<u8> {
 }
 
 /// A Unicode string (`TEXT`): its length with the closing zero, UTF-16 big-endian.
-fn text(s: &str) -> Vec<u8> {
+pub(crate) fn text(s: &str) -> Vec<u8> {
     let units: Vec<u16> = s.encode_utf16().chain([0]).collect();
     let mut out = (units.len() as u32).to_be_bytes().to_vec();
     for unit in units {
