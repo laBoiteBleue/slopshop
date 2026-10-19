@@ -76,7 +76,7 @@ Menu,Edit > Generative Fill,,planned,"AI track: local and optional, as a non-des
 Menu,Edit > Stroke,,done,"inside, centered or outside the selection; width, color, opacity; as paint in the layer's stack"
 Menu,Edit > Content-Aware Scale,,open,proposed as an option of Free Transform's scaling; an ADR first (roadmap: advanced transforms)
 Menu,Edit > Puppet Warp,,open,editable and non-destructive; an ADR first (roadmap: advanced transforms)
-Menu,Edit > Perspective Warp,,open,editable and non-destructive; an ADR first (roadmap: advanced transforms)
+Menu,Edit > Perspective Warp,,partial,"ADR 0044: planes on pixel layers, non-destructive, CPU and GPU, editable again; Layout mode (planes drawn, fitted, joined at their corners, deleted) and Warp mode (corners moved, each plane a homography, joined planes kept joined, the content outside following); Shift+click to straighten an edge, the automatic Straighten buttons and other layer kinds are open"
 Menu,Edit > Free Transform,,done,"a vector layer's shape is reshaped, its stroke keeping its width, when it stays a live shape or is a path (ADR 0041)"
 Menu,Edit > Transform > Again,,done,with Duplicate and Transform Again
 Menu,Edit > Transform > Scale,,done,"Free Transform (Ctrl+T), non-destructive"

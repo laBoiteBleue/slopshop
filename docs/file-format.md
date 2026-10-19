@@ -467,6 +467,25 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     one, else its image's for a raster, else the canvas seen from the layer and a shape's
     bounds), feathered, inverted, and multiplied with the layer's enabled mask. A node of v19
     reads every parameter of the versions before it. Only those nodes are written at v19.
+  - v20 (schema 0.41, [ADR 0044](adr/0044-mesh-warps.md)) is a raster node warped by Edit >
+    Perspective Warp's planes: `params.warp` is `{"kind": "planes", "frame": [x0, y0, x1, y1],
+    "layout", "warped", "planes"}`. `layout` and `warped` are the planes' corners flattened
+    `[x, y, …]` (content pixels, as many in each): where they were laid out and where they were
+    moved. `planes` lists each plane's corners, `[[a, b, c, d], …]` (1 to 32 planes), indices
+    into them in order around it; every corner is in a plane, and two planes listing the same
+    two corners one after the other are joined along that edge. Each plane as laid out is
+    convex (at least a pixel²), and its homography to the plane as moved keeps the whole plane
+    on one side of its horizon line. A content point inside a plane as laid out (the last one
+    listed where they overlap), at bilinear parameters `(u, v)` of its quad, goes to its
+    homography's image plus, along each joined edge, the mean of the joined planes'
+    homographies' images of the edge's point at that parameter minus its own, weighted as a
+    Coons patch blends its edges (`1 − v` for the edge from corner 0 to 1, `u` from 1 to 2, `v`
+    from 2 to 3, `1 − u` from 3 to 0). A point outside every plane goes to the mean of each
+    plane's map extended to it by its first order at the plane's point nearest to it, weighted
+    by the inverse fourth power of their distance. What is drawn is the content within
+    `frame` and within the planes, through a mesh of that map. A node of v20 reads every parameter of the versions
+    before it. Only those nodes are written at v20; a node of an earlier version with planes
+    is refused.
   - From schema 0.21 ([ADR 0034](adr/0034-editable-operations.md)), a stack entry may be a
     filter entry, `{"filter": [steps]}`: steps of one kind applied in order, each
     `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier
