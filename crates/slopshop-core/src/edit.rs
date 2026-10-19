@@ -1234,7 +1234,18 @@ impl Edit {
         id: LayerId,
         filter: crate::filter::Filter,
     ) -> Result<Edit, EditError> {
-        if !filter.is_valid() {
+        Self::apply_filter_with_map(doc, id, filter, None)
+    }
+
+    /// [`Self::apply_filter`] with the displacement map a Displace reads (`map`, a source the
+    /// layer then keeps, ADR 0040); `None` for every other filter.
+    pub fn apply_filter_with_map(
+        doc: &Document,
+        id: LayerId,
+        filter: crate::filter::Filter,
+        map: Option<Arc<crate::source::Source>>,
+    ) -> Result<Edit, EditError> {
+        if !filter.is_valid() || filter.takes_map() != map.is_some() {
             return Err(EditError::InvalidAdjustment);
         }
         let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
@@ -1250,6 +1261,7 @@ impl Edit {
             selection: doc.selection().cloned(),
             to_document: layer.transform.then(doc.parent_transform(id)),
             space: doc.blend_space(),
+            map,
         };
         Ok(Edit::SetLayerStack {
             id,
@@ -1440,8 +1452,9 @@ impl Edit {
     }
 
     /// The edit that deletes source `source` (an image or a shape) from the document (the
-    /// Sources panel, ADR 0040 amended): the layers showing it go, and a Pattern Overlay using it leaves its style (the
-    /// layer stays). One undo entry. [`EditError::NoLayers`] when nothing uses it.
+    /// Sources panel, ADR 0040 amended): the layers showing it go, a Pattern Overlay using it
+    /// leaves its style and a Displace entry using it as its map leaves its stack (the layer
+    /// stays). One undo entry. [`EditError::NoLayers`] when nothing uses it.
     pub fn delete_source(
         doc: &Document,
         source: crate::source::SourceId,
@@ -1472,6 +1485,36 @@ impl Edit {
                     id: layer.id,
                     style: Some(Box::new(settings)),
                 });
+            }
+            // Displace entries reading it, from the top: the indices below stay.
+            if let LayerContent::Raster {
+                stack: Some(stack), ..
+            } = &layer.content
+            {
+                let mapped: Vec<usize> = stack
+                    .entries()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, entry)| match entry {
+                        crate::stack::Entry::Filter(filter) => filter
+                            .steps()
+                            .iter()
+                            .any(|step| step.map.as_ref().is_some_and(|m| m.id() == source)),
+                        _ => false,
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                if !mapped.is_empty() {
+                    let mut kept = stack.clone();
+                    for &i in mapped.iter().rev() {
+                        kept = kept.without(i).map_err(EditError::Stack)?;
+                    }
+                    restyled.push(Edit::SetLayerStack {
+                        id: layer.id,
+                        stack: kept,
+                        shown: None,
+                    });
+                }
             }
         }
         // Groups show no source: none of these is inside another.
@@ -4418,6 +4461,70 @@ mod tests {
         assert_eq!(
             Edit::apply_filter(&doc, id, Filter::GaussianBlur { radius: 0.0 }),
             Err(EditError::InvalidAdjustment)
+        );
+    }
+
+    #[test]
+    fn displace_keeps_its_map_and_leaves_with_the_source_deleted() {
+        use crate::filter::Filter;
+        let size = Size::new(8, 8);
+        let mut doc = Document::new(size);
+        let shown = raster_layer(&mut doc, image(size, false, 128));
+        let id = raster_layer(&mut doc, image(size, false, 10));
+        let map = Arc::clone(doc.layer(shown).unwrap().content.source().unwrap());
+        let displace = Filter::defaults("displace").unwrap();
+        let blur = Filter::GaussianBlur { radius: 2.0 };
+        // Displace takes a map, and only it.
+        assert_eq!(
+            Edit::apply_filter(&doc, id, displace),
+            Err(EditError::InvalidAdjustment)
+        );
+        assert_eq!(
+            Edit::apply_filter_with_map(&doc, id, blur, Some(Arc::clone(&map))),
+            Err(EditError::InvalidAdjustment)
+        );
+        for (filter, map) in [
+            (blur, None),
+            (displace, Some(Arc::clone(&map))),
+            (Filter::Median { radius: 1.0 }, None),
+        ] {
+            Edit::apply_filter_with_map(&doc, id, filter, map)
+                .unwrap()
+                .apply(&mut doc)
+                .unwrap();
+        }
+        let layer = doc.layer(id).unwrap();
+        assert_eq!(layer.content.stack().unwrap().entries().len(), 3);
+        assert!(
+            layer.sources().any(|s| Arc::ptr_eq(s, &map)),
+            "the layer keeps its map"
+        );
+        // Deleting the map's source from the bin: its layer goes, the Displace entry too, the
+        // layer displaced stays with its other entries; one undo entry.
+        let undo = Edit::delete_source(&doc, map.id())
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert!(doc.layer(shown).is_none());
+        let entries = doc.layer(id).unwrap().content.stack().unwrap();
+        assert_eq!(entries.entries().len(), 2);
+        assert!(
+            !doc.layer(id)
+                .unwrap()
+                .sources()
+                .any(|s| Arc::ptr_eq(s, &map))
+        );
+        undo.apply(&mut doc).unwrap();
+        assert!(doc.layer(shown).is_some());
+        assert_eq!(
+            doc.layer(id)
+                .unwrap()
+                .content
+                .stack()
+                .unwrap()
+                .entries()
+                .len(),
+            3
         );
     }
 

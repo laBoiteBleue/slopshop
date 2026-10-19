@@ -381,6 +381,9 @@ pub struct FilterStep {
     /// The layer's pixels → document when it was applied (see [`Effect::to_document`]).
     pub to_document: Projective,
     pub space: BlendSpace,
+    /// The displacement map a Displace reads (ADR 0040: a source kept by the document, read
+    /// only); `None` for every other filter.
+    pub map: Option<Arc<crate::source::Source>>,
 }
 
 impl FilterStep {
@@ -388,6 +391,7 @@ impl FilterStep {
         self.filter.is_valid()
             && self.to_document.is_finite()
             && self.to_document.inverse().is_some()
+            && self.filter.takes_map() == self.map.is_some()
     }
 
     /// This filter then `next` as one, when that is exact: two Gaussian Blurs are one of the
@@ -1083,6 +1087,15 @@ fn filtered(
                 .encode_premultiplied(&[c.r, c.g, c.b, c.a].map(f64::from))
         })
     });
+    // Displace's map, read as perceptual values (the levels Photoshop reads), and its size.
+    let map = step.map.as_ref().map(|m| {
+        let image = m.image().as_ref();
+        let size = image.size();
+        (
+            PremulPixels::new(image, BlendSpace::Perceptual),
+            [f64::from(size.width), f64::from(size.height)],
+        )
+    });
     let mut tiles: Vec<(TileCoord, Option<Arc<[u8]>>)> =
         grid_coords(size).map(|coord| (coord, None)).collect();
     parallel_for_each(&mut tiles, |(coord, out)| {
@@ -1163,7 +1176,15 @@ fn filtered(
                             (q[1] - frame.origin[1]) / frame.factor - 0.5,
                         )
                     };
-                    blurs[0] = if filter.samples() {
+                    blurs[0] = if let Some((map, map_size)) = &map {
+                        // Displace: read as far as the map says there, over 128 levels of gray
+                        // where it is transparent (nothing moves).
+                        let m = filter.map_point(p, area, *map_size);
+                        let v = bilinear(map, m[0], m[1]);
+                        let gray = 128.0 / 255.0 * (1.0 - v[3]);
+                        let value = [v[0] + gray, v[1] + gray];
+                        read(filter.displaced(p, area, value))
+                    } else if filter.samples() {
                         match filter.source(p, area, frame.layer) {
                             Some(q) => read(q),
                             // Nothing there: transparency, or Tiles' fill.
@@ -5435,6 +5456,7 @@ mod tests {
             selection,
             to_document: Affine::IDENTITY.into(),
             space: BlendSpace::Perceptual,
+            map: None,
         }
     }
 
@@ -6763,6 +6785,95 @@ mod tests {
             .unwrap();
         assert_eq!(pixel(&bent, 10, 0), pixel(&original, 10, 0));
         assert_ne!(pixel(&bent, 10, H / 2), pixel(&original, 10, H / 2));
+    }
+
+    /// A source of `w` × `h` pixels of `format`, each `pixel`.
+    fn map_source(format: PixelFormat, w: u32, h: u32, pixel: &[u8]) -> Arc<crate::source::Source> {
+        let bytes = pixel.repeat((w * h) as usize);
+        let image = RasterImage::from_pixels(Size::new(w, h), format, &bytes).unwrap();
+        crate::source::Source::new(Arc::new(image), "map")
+    }
+
+    fn displaced(
+        original: &Arc<RasterImage>,
+        filter: Filter,
+        map: Arc<crate::source::Source>,
+    ) -> Arc<RasterImage> {
+        LayerStack::new(Arc::clone(original))
+            .with_filter(
+                FilterStep {
+                    filter,
+                    map: Some(map),
+                    ..blur(1.0, None)
+                },
+                None,
+            )
+            .unwrap()
+            .evaluate()
+            .unwrap()
+    }
+
+    #[test]
+    fn displace_moves_the_layer_by_its_maps_red_and_green_or_its_gray() {
+        let original = gradient(true);
+        // Red 148: 20 levels above 128, 20 pixels at 100 %; green 118, 10 pixels the other way.
+        let map = map_source(PixelFormat::RGBA8_SRGB, 3, 3, &[148, 118, 0, 255]);
+        let filter = Filter::Displace {
+            scale: [100.0, 100.0],
+            tile: false,
+            wrap: false,
+        };
+        let moved = displaced(&original, filter, Arc::clone(&map));
+        for (x, y) in [(0u32, 0u32), (100, 5), (279, 200), (299, 259)] {
+            let from = ((x + 20).min(W - 1), y.saturating_sub(10));
+            assert_eq!(
+                pixel(&moved, x, y),
+                pixel(&original, from.0, from.1),
+                "({x}, {y})"
+            );
+        }
+        // A gray map moves both ways alike; wrapped around the layer.
+        let gray = PixelFormat {
+            layout: ChannelLayout::Gray,
+            ..PixelFormat::RGBA8_SRGB
+        };
+        let wrapped = displaced(
+            &original,
+            Filter::Displace {
+                scale: [100.0, 50.0],
+                tile: true,
+                wrap: true,
+            },
+            map_source(gray, 5, 7, &[148]),
+        );
+        for (x, y) in [(0, 0), (290, 255), (150, 3)] {
+            let from = ((x + 20) % W, (y + 10) % H);
+            assert_eq!(
+                pixel(&wrapped, x, y),
+                pixel(&original, from.0, from.1),
+                "({x}, {y})"
+            );
+        }
+        // A transparent map moves nothing.
+        let clear = displaced(
+            &original,
+            filter,
+            map_source(PixelFormat::RGBA8_SRGB, 2, 2, &[255, 0, 0, 0]),
+        );
+        assert_eq!(difference(&clear, &original), 0);
+        // A step without its map, or a map on another filter, is not one.
+        let step = FilterStep {
+            filter,
+            ..blur(1.0, None)
+        };
+        assert!(!step.is_valid());
+        assert!(
+            !FilterStep {
+                map: Some(map),
+                ..blur(1.0, None)
+            }
+            .is_valid()
+        );
     }
 
     #[test]
