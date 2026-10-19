@@ -22,6 +22,7 @@
   import StyleEffectFields from "./StyleEffectFields.svelte";
   import ContourPicker from "./ContourPicker.svelte";
   import GradientEditor from "./GradientEditor.svelte";
+  import { GRADIENT_SHAPES } from "./gradientFill";
   import SourceThumbnail from "./SourceThumbnail.svelte";
   import { t } from "./i18n/index.svelte";
   import { movable } from "./dialogDrag";
@@ -547,8 +548,9 @@
           <label class="field">
             <span>{t("style.gradientShape")}</span>
             <select bind:value={draft.gradientOverlay.shape}>
-              <option value="linear">{t("options.gradient.linear")}</option>
-              <option value="radial">{t("options.gradient.radial")}</option>
+              {#each GRADIENT_SHAPES as shape (shape)}
+                <option value={shape}>{t(`gradient.shape.${shape}`)}</option>
+              {/each}
             </select>
           </label>
           <label class="check">

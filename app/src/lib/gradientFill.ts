@@ -8,7 +8,10 @@
 
 import type { Stop } from "./gradient";
 
-export type GradientShape = "linear" | "radial";
+/** Photoshop's five gradient styles, in its order (core's `GradientShape`). */
+export const GRADIENT_SHAPES = ["linear", "radial", "angle", "reflected", "diamond"] as const;
+
+export type GradientShape = (typeof GRADIENT_SHAPES)[number];
 
 /** A gradient fill as the engine has it (`LayerView.gradientFill`). */
 export type GradientFill = {
@@ -31,9 +34,9 @@ function reach({ width, height }: Size, radians: number): number {
   return (Math.abs(Math.cos(radians)) * width + Math.abs(Math.sin(radians)) * height) / 2;
 }
 
-/** The gradient's center: a linear one's middle, a radial one's start. */
+/** The gradient's center: a linear one's middle, the others' start. */
 export function fillCenter(fill: GradientFill): [number, number] {
-  if (fill.shape === "radial") return fill.from;
+  if (fill.shape !== "linear") return fill.from;
   return [(fill.from[0] + fill.to[0]) / 2, (fill.from[1] + fill.to[1]) / 2];
 }
 
@@ -53,7 +56,7 @@ export function fillEnds(
   const [dx, dy] = [Math.cos(radians) * r, -Math.sin(radians) * r];
   const [cx, cy] = center;
   const to: [number, number] = [cx + dx, cy + dy];
-  return { from: shape === "radial" ? [cx, cy] : [cx - dx, cy - dy], to };
+  return { from: shape === "linear" ? [cx - dx, cy - dy] : [cx, cy], to };
 }
 
 /** The angle and the scale of `fill` in a document of `size` (`fillEnds`' inverse). */
@@ -61,7 +64,7 @@ export function fillPlacement(size: Size, fill: GradientFill): FillPlacement {
   const [dx, dy] = [fill.to[0] - fill.from[0], fill.to[1] - fill.from[1]];
   const radians = Math.atan2(-dy, dx);
   const length = Math.hypot(dx, dy);
-  const r = fill.shape === "radial" ? length : length / 2;
+  const r = fill.shape === "linear" ? length / 2 : length;
   return { angle: radians / RADIANS, scale: r / Math.max(reach(size, radians), 1e-9) };
 }
 
@@ -98,7 +101,8 @@ export function newGradientFill(size: Size, stops: Stop[]): GradientFill {
 
 /**
  * A CSS background drawing `fill` roughly, for a thumbnail: its colors and opacities along its
- * angle (linear) or from the middle (radial), at its scale.
+ * angle (linear, reflected on both sides of the middle), around the middle from its angle
+ * (angle) or out from the middle (radial; diamond, drawn as radial), at its scale.
  */
 export function cssFill(size: Size, fill: GradientFill): string {
   const { angle, scale } = fillPlacement(size, fill);
@@ -107,11 +111,23 @@ export function cssFill(size: Size, fill: GradientFill): string {
     const alpha = a0 + ((a1 - a0) * location) / 4096;
     return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)}) ${at.toFixed(2)}%`;
   };
-  if (fill.shape === "radial") {
+  // CSS angles go clockwise from the top.
+  const cssAngle = (90 - angle).toFixed(2);
+  if (fill.shape === "radial" || fill.shape === "diamond") {
     const parts = fill.stops.map((s) => color(s, (s[0] / 4096) * scale * 100));
     return `radial-gradient(circle closest-side, ${parts.join(", ")})`;
   }
+  if (fill.shape === "angle") {
+    // CSS sweeps clockwise; Photoshop's angle gradient, counterclockwise.
+    const parts = [...fill.stops].reverse().map((s) => color(s, (1 - s[0] / 4096) * 100));
+    return `conic-gradient(from ${cssAngle}deg, ${parts.join(", ")})`;
+  }
+  if (fill.shape === "reflected") {
+    const at = (s: Stop) => (s[0] / 4096) * scale * 50;
+    const behind = [...fill.stops].reverse().map((s) => color(s, 50 - at(s)));
+    const ahead = fill.stops.map((s) => color(s, 50 + at(s)));
+    return `linear-gradient(${cssAngle}deg, ${[...behind, ...ahead].join(", ")})`;
+  }
   const parts = fill.stops.map((s) => color(s, 50 + (s[0] / 4096 - 0.5) * scale * 100));
-  // CSS angles go clockwise from the top.
-  return `linear-gradient(${(90 - angle).toFixed(2)}deg, ${parts.join(", ")})`;
+  return `linear-gradient(${cssAngle}deg, ${parts.join(", ")})`;
 }

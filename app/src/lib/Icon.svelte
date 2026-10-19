@@ -101,6 +101,11 @@
     gradientLinear: "M4 4h16v16H4Z M4 12h16 M9 4v16 M15 4v16",
     gradientRadial:
       "M4 4h16v16H4Z M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0 M12 12m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0",
+    // Rays around the middle: the sweep.
+    gradientAngle: "M4 4h16v16H4Z M12 12h8 M12 12l5.5-5.5 M12 12V4 M12 12L6.5 6.5 M12 12H4",
+    // Bands mirrored about the middle line.
+    gradientReflected: "M4 4h16v16H4Z M12 4v16 M8.5 7v10 M15.5 7v10",
+    gradientDiamond: "M4 4h16v16H4Z M12 6l6 6-6 6-6-6Z M12 9.5l2.5 2.5-2.5 2.5-2.5-2.5Z",
     bucket:
       "M3.5 11L11 3.5l7.5 7.5L11 18.5Z M3.5 11h15 M20 14.5s1.5 2 1.5 3a1.5 1.5 0 0 1-3 0c0-1 1.5-3 1.5-3Z",
     // The eraser with a turning arrow: what was painted comes back off.

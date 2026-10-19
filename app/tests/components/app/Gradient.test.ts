@@ -48,7 +48,13 @@ test("the options bar's gradient, shape and Reverse are sent; in Quick Mask, its
     screen.getByRole("combobox", { name: "Gradient" }),
     "Foreground to Transparent",
   );
-  await user.click(screen.getByRole("button", { name: "Radial Gradient" }));
+  const diamond = screen.getByRole("button", { name: "Diamond Gradient" });
+  await user.click(diamond);
+  expect(diamond).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Linear Gradient" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
   await user.click(screen.getByRole("checkbox", { name: "Reverse" }));
   const svg = document.querySelector("svg.gradient-tool") as SVGSVGElement;
   await user.pointer([
@@ -60,6 +66,6 @@ test("the options bar's gradient, shape and Reverse are sent; in Quick Mask, its
   expect(sent("paint_gradient")[0]).toMatchObject({
     target: "quickMask",
     layerId: 0,
-    gradient: { alpha: [0, 1], shape: "radial" },
+    gradient: { alpha: [0, 1], shape: "diamond" },
   });
 });

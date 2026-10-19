@@ -117,6 +117,16 @@ test("the Gradient's preset, shape, Reverse and opacity", async () => {
   await user.click(radial);
   await user.click(check("Reverse"));
   expect(gradient).toEqual({ preset: "blackToWhite", shape: "radial", reverse: true, opacity: 1 });
+  // Photoshop's five style buttons.
+  for (const [name, shape] of [
+    ["Angle Gradient", "angle"],
+    ["Reflected Gradient", "reflected"],
+    ["Diamond Gradient", "diamond"],
+    ["Linear Gradient", "linear"],
+  ]) {
+    await user.click(screen.getByRole("button", { name }));
+    expect(gradient.shape).toBe(shape);
+  }
 });
 
 test("the Paint Bucket's opacity and region settings", async () => {

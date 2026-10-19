@@ -6,7 +6,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { GradientFill } from "./gradientFill";
+import type { GradientFill, GradientShape } from "./gradientFill";
 import type { Homography } from "./homography";
 import type { Shape, ShapeGeometry } from "./shapes";
 
@@ -367,7 +367,7 @@ export type StyleGradientOverlay = {
   /** As Gradient Map's: `[location 0–4096, r, g, b]`, sRGB-encoded 0–255. */
   stops: number[][];
   reverse: boolean;
-  shape: "linear" | "radial";
+  shape: GradientShape;
   /** Degrees, counterclockwise from the right: at 90 the start is at the bottom. */
   angle: number;
   /** Percent of the box the gradient spans, 10 to 150. */
@@ -2071,7 +2071,7 @@ export const engine = {
     gradient: {
       stops: [number, number, number, number][];
       alpha: [number, number];
-      shape: "linear" | "radial";
+      shape: GradientShape;
       from: [number, number];
       to: [number, number];
     },
