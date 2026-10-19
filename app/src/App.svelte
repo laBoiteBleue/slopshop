@@ -268,7 +268,7 @@
     type ShapeOptions,
   } from "./lib/shapes";
   import { toolGradient, type ToolGradient } from "./lib/gradient";
-  import { newGradientFill } from "./lib/gradientFill";
+  import { newGradientFill, type GradientShape } from "./lib/gradientFill";
   import EyedropperOverlay from "./lib/EyedropperOverlay.svelte";
   import type { LoupeSource } from "./lib/eyedropper";
   import QuickSelectionTool from "./lib/QuickSelectionTool.svelte";
@@ -1211,7 +1211,7 @@
   /** The Gradient tool's options: which gradient, its shape, reversed, its opacity. */
   let gradientOptions = $state<{
     preset: ToolGradient;
-    shape: "linear" | "radial";
+    shape: GradientShape;
     reverse: boolean;
     opacity: number;
   }>({ preset: "foregroundToBackground", shape: "linear", reverse: false, opacity: 1 });

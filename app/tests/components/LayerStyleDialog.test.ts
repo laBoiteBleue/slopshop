@@ -203,8 +203,17 @@ test("Gradient Overlay: reverse, its style, align, angle and scale sent as they 
   const settings = screen.getByRole("region", { name: "Gradient Overlay" });
   await user.click(within(settings).getByRole("checkbox", { name: "Reverse" }));
   expect(last(onchange).gradientOverlay?.reverse).toBe(true);
-  await user.selectOptions(within(settings).getByRole("combobox", { name: "Style" }), "radial");
+  const style = within(settings).getByRole("combobox", { name: "Style" });
+  // Photoshop's five styles.
+  expect(
+    within(style)
+      .getAllByRole("option")
+      .map((o) => o.textContent),
+  ).toEqual(["Linear", "Radial", "Angle", "Reflected", "Diamond"]);
+  await user.selectOptions(style, "radial");
   expect(last(onchange).gradientOverlay?.shape).toBe("radial");
+  await user.selectOptions(style, "Diamond");
+  expect(last(onchange).gradientOverlay?.shape).toBe("diamond");
   await user.click(within(settings).getByRole("checkbox", { name: "Align with Layer" }));
   expect(last(onchange).gradientOverlay?.align).toBe(false);
   // Angle and Scale, the page's last two fields.

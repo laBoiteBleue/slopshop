@@ -262,6 +262,16 @@ test("a gradient fill shows its gradient; Reverse, its style, angle and scale se
   await user.selectOptions(screen.getByRole("combobox", { name: "Style" }), "radial");
   expect(last().shape).toBe("radial");
   expect(last().from).toEqual([200, 150]);
+  // Angle, Reflected and Diamond start at the center too.
+  for (const [label, shape] of [
+    ["Angle", "angle"],
+    ["Reflected", "reflected"],
+    ["Diamond", "diamond"],
+  ]) {
+    await user.selectOptions(screen.getByRole("combobox", { name: "Style" }), label);
+    expect(last().shape).toBe(shape);
+    expect(last().from).toEqual([200, 150]);
+  }
 
   // Nothing typed: nothing sent.
   const calls = onedit.mock.calls.length;

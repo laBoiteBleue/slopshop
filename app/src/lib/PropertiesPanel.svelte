@@ -22,6 +22,7 @@
   import LayerThumbnail from "./LayerThumbnail.svelte";
   import { layerToDocument } from "./pathEdit";
   import {
+    GRADIENT_SHAPES,
     fillPlacement,
     placed,
     reversed,
@@ -262,8 +263,9 @@
           onedit(documentId, fillRequest(placed(size, fill, { shape })));
         }}
       >
-        <option value="linear">{t("options.gradient.linear")}</option>
-        <option value="radial">{t("options.gradient.radial")}</option>
+        {#each GRADIENT_SHAPES as shape (shape)}
+          <option value={shape}>{t(`gradient.shape.${shape}`)}</option>
+        {/each}
       </select>
     </div>
     <div class="row">

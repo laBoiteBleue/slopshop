@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  GRADIENT_SHAPES,
   cssFill,
   fillCenter,
   fillEnds,
@@ -40,7 +41,7 @@ describe("a gradient fill's place", () => {
   });
 
   test("the angle and the scale are read back from the ends", () => {
-    for (const shape of ["linear", "radial"] as const) {
+    for (const shape of GRADIENT_SHAPES) {
       for (const angle of [-135, -30, 0, 45, 90, 170]) {
         const ends = fillEnds(SIZE, [120, 80], shape, { angle, scale: 1.7 });
         const placement = fillPlacement(SIZE, { stops: STOPS, alpha: [1, 1], shape, ...ends });
@@ -65,6 +66,15 @@ describe("a gradient fill's place", () => {
     const larger = placed(SIZE, fill, { scale: 0.5 });
     close(larger.from, [0, 60]);
     close(larger.to, [200, 60]);
+  });
+
+  test("angle, reflected and diamond gradients start at the center, as radial ones", () => {
+    for (const shape of ["angle", "reflected", "diamond"] as const) {
+      const ends = fillEnds(SIZE, [200, 150], shape, { angle: 0, scale: 0.5 });
+      close(ends.from, [200, 150]);
+      close(ends.to, [300, 150]);
+      expect(fillCenter({ stops: STOPS, alpha: [1, 1], shape, ...ends })).toEqual([200, 150]);
+    }
   });
 
   test("a scale of 0 still goes somewhere", () => {
@@ -96,5 +106,19 @@ test("the thumbnail's CSS follows the angle, the scale and the opacities", () =>
   expect(cssFill(SIZE, radial)).toBe(
     "radial-gradient(circle closest-side, rgba(0, 0, 0, 1.000) 0.00%, " +
       "rgba(255, 0, 0, 0.756) 12.21%, rgba(255, 255, 255, 0.000) 50.00%)",
+  );
+  // Angle: a conic sweep, clockwise in CSS, so the stops the other way round.
+  const angle = placed(SIZE, fill, { shape: "angle" });
+  expect(cssFill(SIZE, angle)).toBe(
+    "conic-gradient(from 0.00deg, rgba(255, 255, 255, 0.000) 0.00%, " +
+      "rgba(255, 0, 0, 0.756) 75.59%, rgba(0, 0, 0, 1.000) 100.00%)",
+  );
+  // Reflected: the stops mirrored about the middle.
+  const reflected = placed(SIZE, fill, { shape: "reflected", scale: 1 });
+  expect(cssFill(SIZE, reflected)).toBe(
+    "linear-gradient(0.00deg, rgba(255, 255, 255, 0.000) 0.00%, " +
+      "rgba(255, 0, 0, 0.756) 37.79%, rgba(0, 0, 0, 1.000) 50.00%, " +
+      "rgba(0, 0, 0, 1.000) 50.00%, rgba(255, 0, 0, 0.756) 62.21%, " +
+      "rgba(255, 255, 255, 0.000) 100.00%)",
   );
 });

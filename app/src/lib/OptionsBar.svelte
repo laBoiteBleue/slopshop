@@ -8,6 +8,7 @@
   import { MAX_BRUSH, MAX_FEATHER } from "./selection";
   import { isSelectionTool, toolInfo, type ToolId } from "./tools";
   import { keepFocus } from "./platform";
+  import { GRADIENT_SHAPES, type GradientShape } from "./gradientFill";
   import SliderField from "./SliderField.svelte";
   import BrushPicker from "./BrushPicker.svelte";
   import PatternThumbnail from "./PatternThumbnail.svelte";
@@ -186,7 +187,7 @@
     /** Gradient: which gradient, its shape, reversed or not, and its opacity. */
     gradient?: {
       preset: ToolGradient;
-      shape: "linear" | "radial";
+      shape: GradientShape;
       reverse: boolean;
       opacity: number;
     };
@@ -264,6 +265,15 @@
 
   /** Photoshop's Sample Sizes: a pixel, or the average of a square around it. */
   const SAMPLE_SIZES = [1, 3, 5, 11, 31, 51, 101];
+
+  /** The Gradient tool's five style buttons, as Photoshop's. */
+  const GRADIENT_ICONS: Record<GradientShape, IconName> = {
+    linear: "gradientLinear",
+    radial: "gradientRadial",
+    angle: "gradientAngle",
+    reflected: "gradientReflected",
+    diamond: "gradientDiamond",
+  };
 
   const MODES: { mode: SelectionMode; icon: IconName; label: MessageKey }[] = [
     { mode: "replace", icon: "selectionReplace", label: "options.mode.replace" },
@@ -393,17 +403,17 @@
       </option>
       <option value="blackToWhite">{t("options.gradient.blackToWhite")}</option>
     </select>
-    {#each [{ shape: "linear", icon: "gradientLinear" }, { shape: "radial", icon: "gradientRadial" }] as const as entry (entry.shape)}
+    {#each GRADIENT_SHAPES as shape (shape)}
       <button
         class="icon-btn"
-        class:on={gradient.shape === entry.shape}
-        aria-pressed={gradient.shape === entry.shape}
+        class:on={gradient.shape === shape}
+        aria-pressed={gradient.shape === shape}
         onmousedown={keepFocus}
-        title={t(`options.gradient.${entry.shape}`)}
-        aria-label={t(`options.gradient.${entry.shape}`)}
-        onclick={() => (gradient.shape = entry.shape)}
+        title={t(`options.gradient.${shape}`)}
+        aria-label={t(`options.gradient.${shape}`)}
+        onclick={() => (gradient.shape = shape)}
       >
-        <Icon name={entry.icon} />
+        <Icon name={GRADIENT_ICONS[shape]} />
       </button>
     {/each}
     <span class="divider"></span>
