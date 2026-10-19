@@ -2,12 +2,32 @@ import { fireEvent, screen, within } from "@testing-library/svelte";
 import { expect, test, vi } from "vitest";
 import type { LayerView } from "../../../src/lib/engine";
 import { withEffect, withEffectsVisible } from "../../../src/lib/layerStyle";
+import { forgetContourPresets } from "../../../src/lib/styleContours";
 import { documentView, layer, layerNames, open, respond, row, sent } from "./harness";
 
 // Layer > Layer Style's commands on styles (Copy, Paste, Clear, Hide or Show All Effects, Scale
 // Effects), also on the right-click menu of a layer's fx mark.
 
 respond("paste_layer_style", (_args, doc) => ({ ...doc, revision: doc.revision + 1 }));
+
+const CONE: [number, number, boolean][] = [
+  [0, 0, false],
+  [128, 255, true],
+  [255, 0, false],
+];
+respond("contour_presets", () => [
+  {
+    id: "linear",
+    contour: {
+      points: [
+        [0, 0, false],
+        [255, 255, false],
+      ],
+      samples: [0, 1],
+    },
+  },
+  { id: "cone", contour: { points: CONE, samples: [0, 1, 0] } },
+]);
 
 const shadow = withEffect(null, "dropShadow", true);
 
@@ -196,4 +216,31 @@ test("in Layer Style, a shadow's angle on the global light moves the document's 
       replace: false,
     }),
   );
+});
+
+test("in Layer Style, a shadow's contour picked from the engine's presets is sent live", async () => {
+  // Asked once by the app (the dialogs of the tests before asked already).
+  forgetContourPresets();
+  const user = open(documentView(1, "cat.jpg", [styled(1, "Cat")]));
+  await vi.waitFor(() => expect(layerNames()).toEqual(["Cat"]));
+  await user.click(await styleItem(user, "Drop Shadow…"));
+  const dialog = await screen.findByRole("dialog", { name: "Layer Style" });
+  const settings = within(dialog).getByRole("region", { name: "Drop Shadow" });
+  await user.click(within(settings).getByRole("button", { name: "Contour" }));
+  await user.click(await within(settings).findByRole("option", { name: "Cone" }));
+  await vi.waitFor(() =>
+    expect(sent("perform_live").at(-1)).toEqual({
+      documentId: 1,
+      edit: expect.objectContaining({
+        kind: "setLayerStyle",
+        style: expect.objectContaining({
+          dropShadow: expect.objectContaining({
+            contour: expect.objectContaining({ points: CONE }),
+          }),
+        }),
+      }),
+      replace: expect.any(Boolean),
+    }),
+  );
+  expect(sent("contour_presets")).toHaveLength(1);
 });

@@ -65,6 +65,8 @@ export function defaultEffect<E extends DefaultEffectId>(id: E): NonNullable<Lay
     distance: 5,
     spread: 0,
     size: 5,
+    // Linear (its contour absent).
+    antiAliased: false,
   } as const;
   // Pale yellow, sRGB #ffffbe.
   const glow = {
@@ -74,6 +76,8 @@ export function defaultEffect<E extends DefaultEffectId>(id: E): NonNullable<Lay
     opacity: 0.75,
     spread: 0,
     size: 5,
+    antiAliased: false,
+    range: 50,
   } as const;
   const effects = {
     dropShadow: { ...shadow, color: [0, 0, 0] },
@@ -97,6 +101,11 @@ export function defaultEffect<E extends DefaultEffectId>(id: E): NonNullable<Lay
       shadowColor: [0, 0, 0],
       shadowMode: "multiply",
       shadowOpacity: 0.75,
+      // Linear contours (absent); its Contour element off, over 50 %.
+      glossAntiAliased: false,
+      contourEnabled: false,
+      contourAntiAliased: false,
+      contourRange: 50,
     },
     satin: {
       enabled: true,
@@ -107,6 +116,8 @@ export function defaultEffect<E extends DefaultEffectId>(id: E): NonNullable<Lay
       distance: 11,
       size: 14,
       invert: true,
+      // Gaussian (its contour absent), anti-aliased.
+      antiAliased: true,
     },
     // Black to white from bottom to top, aligned with the layer.
     gradientOverlay: {

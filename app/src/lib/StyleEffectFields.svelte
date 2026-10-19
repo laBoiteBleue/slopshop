@@ -1,12 +1,14 @@
 <script lang="ts">
   // The settings of a shadow (Drop Shadow, Inner Shadow) or a glow (Outer Glow, Inner Glow) in
   // the Layer Style dialog (ADR 0032): blend mode, color, opacity, then for a shadow its angle
-  // and distance, then Spread (Choke inside) and Size; every number with a slider. They edit the
-  // effect in place. A shadow may use the document's global light (its angle then follows it).
+  // and distance, then Spread (Choke inside) and Size; every number with a slider; then its
+  // Quality: Contour, Anti-aliased and, for a glow, Range. They edit the effect in place. A
+  // shadow may use the document's global light (its angle then follows it).
   import { BLEND_MODE_GROUPS, type StyleGlow, type StyleShadow } from "./engine";
   import type { GlobalLight } from "./layerStyle";
   import { srgbToHex } from "./color";
   import SliderField from "./SliderField.svelte";
+  import ContourPicker from "./ContourPicker.svelte";
   import { t } from "./i18n/index.svelte";
 
   let {
@@ -86,6 +88,29 @@
   unit="%"
 />
 <SliderField label={t("style.size")} bind:value={effect.size} min={0} max={250} unit="px" />
+<ContourPicker
+  contour={effect.contour}
+  absent="linear"
+  label={t("style.contour")}
+  onpick={(contour) => (effect.contour = contour)}
+/>
+<label class="check">
+  <input
+    type="checkbox"
+    checked={effect.antiAliased ?? false}
+    onchange={(e) => (effect.antiAliased = e.currentTarget.checked)}
+  />
+  {t("style.antiAliased")}
+</label>
+{#if !("angle" in effect)}
+  <SliderField
+    label={t("style.range")}
+    bind:value={() => (effect as StyleGlow).range ?? 50, (v) => ((effect as StyleGlow).range = v)}
+    min={1}
+    max={100}
+    unit="%"
+  />
+{/if}
 
 <style>
   .field {

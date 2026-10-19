@@ -2243,8 +2243,10 @@
     if (!doc || layer.kind === "adjustment") return;
     let style = layer.style ?? null;
     const light = doc.globalLight ?? DEFAULT_LIGHT;
-    if (page !== "blending" && !style?.[page]?.enabled) {
-      style = litStyle(withEffect(style, page, true), light);
+    // Bevel & Emboss's Contour is shown with the bevel on.
+    const effect = page === "bevelContour" ? "bevel" : page;
+    if (effect !== "blending" && !style?.[effect]?.enabled) {
+      style = litStyle(withEffect(style, effect, true), light);
       live(doc.id, styleEdit(layer.id, style));
     }
     styleDialog = {

@@ -3,7 +3,8 @@
   // Options and the effects on the left (a checkbox turns an effect on or off, a click shows
   // its settings), the selected one's settings in the middle, OK and Cancel on the right. The
   // canvas shows every change at once (the app sends each as a live edit); OK keeps them as one
-  // undo entry, Cancel takes them back. Enter applies, Esc cancels.
+  // undo entry, Cancel takes them back. Enter applies, Esc cancels. Bevel & Emboss has its
+  // Contour element under it in the list, with its own checkbox and page.
   import { onMount, untrack } from "svelte";
   import { BLEND_MODE_GROUPS, type LayerStyle } from "./engine";
   import { srgbToHex } from "./color";
@@ -19,13 +20,14 @@
   } from "./layerStyle";
   import SliderField from "./SliderField.svelte";
   import StyleEffectFields from "./StyleEffectFields.svelte";
+  import ContourPicker from "./ContourPicker.svelte";
   import GradientEditor from "./GradientEditor.svelte";
   import SourceThumbnail from "./SourceThumbnail.svelte";
   import { t } from "./i18n/index.svelte";
   import { movable } from "./dialogDrag";
 
-  /** What the left list selects: Blending Options or an effect. */
-  export type StylePage = "blending" | EffectId;
+  /** What the left list selects: Blending Options, an effect or Bevel & Emboss's Contour. */
+  export type StylePage = "blending" | EffectId | "bevelContour";
 
   let {
     documentId,
@@ -126,6 +128,19 @@
     if (enabled) onpage(id);
   }
 
+  /**
+   * Bevel & Emboss's Contour checkbox: on, the bevel is turned on too (added at its defaults
+   * if it was not there), as in Photoshop; off, the bevel stays.
+   */
+  function toggleBevelContour(enabled: boolean) {
+    if (enabled && !draft.bevel?.enabled) {
+      draft.bevel = litStyle(withEffect(draft, "bevel", true), light).bevel;
+    }
+    if (!draft.bevel) return;
+    draft.bevel.contourEnabled = enabled;
+    if (enabled) onpage("bevelContour");
+  }
+
   function submit(e: SubmitEvent) {
     e.preventDefault();
     onok();
@@ -197,6 +212,25 @@
           />
           <span class="label">{t(effect.label)}</span>
         </li>
+        {#if effect.id === "bevel"}
+          <li
+            role="option"
+            class="sub"
+            aria-selected={page === "bevelContour"}
+            class:current={page === "bevelContour"}
+            onclick={() => onpage("bevelContour")}
+            onkeydown={() => {}}
+          >
+            <input
+              type="checkbox"
+              aria-label={t("style.bevelContour")}
+              checked={draft.bevel?.contourEnabled ?? false}
+              onclick={(e) => e.stopPropagation()}
+              onchange={(e) => toggleBevelContour((e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="label">{t("style.bevelContour")}</span>
+          </li>
+        {/if}
       {/each}
     </ul>
 
@@ -339,6 +373,20 @@
             />
             {t("style.useGlobalLight")}
           </label>
+          <ContourPicker
+            contour={draft.bevel.glossContour}
+            absent="linear"
+            label={t("style.glossContour")}
+            onpick={(contour) => (draft.bevel!.glossContour = contour)}
+          />
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={draft.bevel.glossAntiAliased ?? false}
+              onchange={(e) => (draft.bevel!.glossAntiAliased = e.currentTarget.checked)}
+            />
+            {t("style.antiAliased")}
+          </label>
           {@render modes(
             draft.bevel.highlightMode,
             (m) => (draft.bevel!.highlightMode = m as never),
@@ -372,6 +420,35 @@
             max={100}
             unit="%"
             factor={100}
+          />
+        {:else}
+          <p class="empty">{t("style.off")}</p>
+        {/if}
+      {:else if page === "bevelContour"}
+        <h3>{t("style.bevelContour")}</h3>
+        {#if draft.bevel?.contourEnabled}
+          <ContourPicker
+            contour={draft.bevel.contour}
+            absent="linear"
+            label={t("style.contour")}
+            onpick={(contour) => (draft.bevel!.contour = contour)}
+          />
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={draft.bevel.contourAntiAliased ?? false}
+              onchange={(e) => (draft.bevel!.contourAntiAliased = e.currentTarget.checked)}
+            />
+            {t("style.antiAliased")}
+          </label>
+          <SliderField
+            label={t("style.range")}
+            bind:value={
+              () => draft.bevel?.contourRange ?? 50, (v) => (draft.bevel!.contourRange = v)
+            }
+            min={1}
+            max={100}
+            unit="%"
           />
         {:else}
           <p class="empty">{t("style.off")}</p>
@@ -417,6 +494,20 @@
             max={250}
             unit="px"
           />
+          <ContourPicker
+            contour={draft.satin.contour}
+            absent="gaussian"
+            label={t("style.contour")}
+            onpick={(contour) => (draft.satin!.contour = contour)}
+          />
+          <label class="check">
+            <input
+              type="checkbox"
+              checked={draft.satin.antiAliased ?? true}
+              onchange={(e) => (draft.satin!.antiAliased = e.currentTarget.checked)}
+            />
+            {t("style.antiAliased")}
+          </label>
           <label class="check">
             <input type="checkbox" bind:checked={draft.satin.invert} />
             {t("style.invert")}
@@ -622,6 +713,11 @@
     height: 24px;
     padding: 0 6px;
     cursor: default;
+  }
+
+  /* Bevel & Emboss's elements, under it. */
+  .pages li.sub {
+    padding-left: 22px;
   }
 
   .pages li.current {
