@@ -190,6 +190,21 @@ pub enum Edit {
         id: SavedSelectionId,
         selection: crate::selection::Selection,
     },
+    /// A path of the Paths panel (ADR 0041) at `index` among the document's paths: a new Work
+    /// Path, New Path, Duplicate Path. Its id comes from [`Document::allocate_path_id`] and is
+    /// not in use; a second Work Path is refused. Never refused by locks: paths are no layer's.
+    InsertPath {
+        index: usize,
+        path: crate::paths::DocumentPath,
+    },
+    RemovePath {
+        id: crate::paths::PathId,
+    },
+    /// The path with `path`'s id becomes `path`: drawn in, renamed, saved (no longer the Work
+    /// Path), transformed with the canvas.
+    SetPath {
+        path: crate::paths::DocumentPath,
+    },
     /// Layer > Layer Style > Global Light (ADR 0032): the document's light, every effect using
     /// it lit by it. Never refused by locks: a setting of the document.
     SetGlobalLight {
@@ -292,6 +307,10 @@ pub enum EditError {
     UnknownSavedSelection(SavedSelectionId),
     /// A saved selection's id not handed out by this document, or already in use.
     InvalidSavedSelectionId(SavedSelectionId),
+    UnknownPath(crate::paths::PathId),
+    /// A path whose id was not allocated or is in use, that is not a valid path, or a second
+    /// Work Path.
+    InvalidPath(crate::paths::PathId),
     /// Too many guides, or one at a position that is not finite or out of range.
     InvalidGuides,
     /// The layer shows no source (ADR 0040): a layer made empty, or not a pixel layer.
@@ -360,6 +379,8 @@ impl fmt::Display for EditError {
                 write!(f, "{id} was not allocated by this document or is in use")
             }
             EditError::InvalidGuides => write!(f, "invalid guides"),
+            EditError::UnknownPath(id) => write!(f, "unknown {id}"),
+            EditError::InvalidPath(id) => write!(f, "{id} is not a valid new path"),
             EditError::NoSource(id) => write!(f, "layer {id} shows no source"),
             EditError::NotVector(id) => write!(f, "layer {id} is not a vector layer"),
             EditError::NotText(id) => write!(f, "layer {id} is not a text layer"),
@@ -514,6 +535,44 @@ impl Edit {
                 let saved = saved_selection_mut(doc, id)?;
                 let selection = std::mem::replace(&mut saved.selection, selection);
                 Edit::SetSavedSelection { id, selection }
+            }
+            Edit::InsertPath { index, path } => {
+                let id = path.id;
+                let allocated = id.get() != 0 && id.get() < doc.next_path_id();
+                let second_work = path.work && doc.work_path().is_some();
+                if !allocated || doc.path(id).is_some() || !path.is_valid() || second_work {
+                    return Err(EditError::InvalidPath(id));
+                }
+                let len = doc.paths().len();
+                if index > len {
+                    return Err(EditError::IndexOutOfRange { index, len });
+                }
+                doc.paths_mut().insert(index, path);
+                Edit::RemovePath { id }
+            }
+            Edit::RemovePath { id } => {
+                let list = doc.paths_mut();
+                let index = list
+                    .iter()
+                    .position(|p| p.id == id)
+                    .ok_or(EditError::UnknownPath(id))?;
+                let path = list.remove(index);
+                Edit::InsertPath { index, path }
+            }
+            Edit::SetPath { path } => {
+                let id = path.id;
+                let other_work = doc.work_path().is_some_and(|w| w.id != id);
+                if !path.is_valid() || (path.work && other_work) {
+                    return Err(EditError::InvalidPath(id));
+                }
+                let slot = doc
+                    .paths_mut()
+                    .iter_mut()
+                    .find(|p| p.id == id)
+                    .ok_or(EditError::UnknownPath(id))?;
+                Edit::SetPath {
+                    path: std::mem::replace(slot, path),
+                }
             }
             Edit::SetGlobalLight { light } => {
                 if !light.is_valid() {
@@ -1785,6 +1844,19 @@ impl Edit {
                 guides: reframed_guides(doc.guides(), by),
             });
         }
+        // The Paths panel's paths too, as Photoshop's (ADR 0041): every point mapped.
+        for path in doc.paths() {
+            let geometry = path
+                .geometry
+                .transformed(by)
+                .ok_or(EditError::InvalidTransform)?;
+            edits.push(Edit::SetPath {
+                path: crate::paths::DocumentPath {
+                    geometry,
+                    ..path.clone()
+                },
+            });
+        }
         for layer in doc.layers() {
             let transform = layer.transform.then(by.into()).snapped();
             validate_transform(layer, transform)?;
@@ -3048,6 +3120,138 @@ mod tests {
         assert!(restored(3, 4).is_ok());
         assert!(restored(0, 4).is_err());
         assert!(restored(4, 4).is_err());
+    }
+
+    fn triangle_path(id: crate::paths::PathId, work: bool) -> crate::paths::DocumentPath {
+        use crate::shape::{FillRule, Geometry, Segment, Subpath};
+        crate::paths::DocumentPath {
+            id,
+            name: if work { String::new() } else { "Path 1".into() },
+            geometry: Geometry::Path {
+                subpaths: vec![Subpath {
+                    start: [10.0, 10.0],
+                    segments: vec![Segment::Line([50.0, 10.0]), Segment::Line([10.0, 40.0])],
+                    closed: true,
+                }],
+                rule: FillRule::NonZero,
+            },
+            work,
+        }
+    }
+
+    #[test]
+    fn paths_are_added_changed_and_removed_undoably() {
+        let mut doc = Document::new(Size::new(100, 80));
+        let work = doc.allocate_path_id();
+        let path = triangle_path(work, true);
+        let undo_insert = Edit::InsertPath {
+            index: 0,
+            path: path.clone(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.work_path(), Some(&path));
+        // Its id is in use; ids are those handed out; one Work Path at most.
+        let again = Edit::InsertPath {
+            index: 0,
+            path: path.clone(),
+        };
+        assert_eq!(again.apply(&mut doc), Err(EditError::InvalidPath(work)));
+        let forged = crate::paths::PathId::from_raw(99);
+        let unallocated = Edit::InsertPath {
+            index: 0,
+            path: triangle_path(forged, false),
+        };
+        assert_eq!(
+            unallocated.apply(&mut doc),
+            Err(EditError::InvalidPath(forged))
+        );
+        let second = doc.allocate_path_id();
+        let second_work = Edit::InsertPath {
+            index: 1,
+            path: triangle_path(second, true),
+        };
+        assert_eq!(
+            second_work.apply(&mut doc),
+            Err(EditError::InvalidPath(second))
+        );
+        // Saved Path: renamed, no longer the Work Path; then undone exactly.
+        let saved = crate::paths::DocumentPath {
+            name: "Path 1".into(),
+            work: false,
+            ..path.clone()
+        };
+        let undo_save = Edit::SetPath {
+            path: saved.clone(),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(doc.path(work), Some(&saved));
+        assert_eq!(doc.work_path(), None);
+        // A live shape is a layer's, not a document path.
+        let mut live = saved.clone();
+        live.geometry = crate::shape::Geometry::Ellipse {
+            center: [5.0, 5.0],
+            radii: [5.0, 5.0],
+        };
+        assert_eq!(
+            Edit::SetPath { path: live }.apply(&mut doc),
+            Err(EditError::InvalidPath(work))
+        );
+        // A new Work Path beside the saved one.
+        Edit::InsertPath {
+            index: 1,
+            path: triangle_path(second, true),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        // The saved one cannot become a second Work Path.
+        assert_eq!(
+            Edit::SetPath { path: path.clone() }.apply(&mut doc),
+            Err(EditError::InvalidPath(work))
+        );
+        Edit::RemovePath { id: second }.apply(&mut doc).unwrap();
+        undo_save.apply(&mut doc).unwrap();
+        assert_eq!(doc.path(work), Some(&path));
+        let undo_remove = Edit::RemovePath { id: work }.apply(&mut doc).unwrap();
+        assert!(doc.paths().is_empty());
+        assert_eq!(
+            Edit::RemovePath { id: work }.apply(&mut doc),
+            Err(EditError::UnknownPath(work))
+        );
+        undo_remove.apply(&mut doc).unwrap();
+        assert_eq!(doc.paths(), std::slice::from_ref(&path));
+        undo_insert.apply(&mut doc).unwrap();
+        assert!(doc.paths().is_empty());
+    }
+
+    #[test]
+    fn paths_follow_crops_and_image_size() {
+        use crate::shape::{Geometry, Segment};
+        let mut doc = Document::new(Size::new(100, 80));
+        let id = doc.allocate_path_id();
+        Edit::InsertPath {
+            index: 0,
+            path: triangle_path(id, false),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let start = |doc: &Document| match &doc.path(id).unwrap().geometry {
+            Geometry::Path { subpaths, .. } => (subpaths[0].start, subpaths[0].segments[0]),
+            _ => unreachable!("document paths are paths"),
+        };
+        let undo = Edit::crop(&doc, [5, 5, 50, 50])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(start(&doc), ([5.0, 5.0], Segment::Line([45.0, 5.0])));
+        undo.apply(&mut doc).unwrap();
+        assert_eq!(start(&doc), ([10.0, 10.0], Segment::Line([50.0, 10.0])));
+        Edit::reframe_image(&doc, Size::new(200, 160), Affine::scale(2.0, 2.0))
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        assert_eq!(start(&doc), ([20.0, 20.0], Segment::Line([100.0, 20.0])));
     }
 
     #[test]
