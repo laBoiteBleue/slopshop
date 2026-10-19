@@ -109,8 +109,13 @@ pub(crate) const NODE_VERSION_WARP: u32 = 18;
 /// Version of the nodes, of any type, with a vector mask (schema 0.40, ADR 0041):
 /// `params.vector_mask` (see `slop::shape`). Written only for those, so that older readers
 /// refuse them instead of showing them unmasked. It reads every parameter of the versions
-/// before it. The newest node version this code reads.
+/// before it.
 pub(crate) const NODE_VERSION_VECTOR_MASK: u32 = 19;
+/// Version of the raster nodes warped by Perspective Warp's planes (schema 0.41, ADR 0044):
+/// `params.warp` of kind `planes` (see `warp_json`). Written only for those, so that older
+/// readers refuse them. It reads every parameter of the versions before it. The newest node
+/// version this code reads.
+pub(crate) const NODE_VERSION_PERSPECTIVE_WARP: u32 = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Manifest {

@@ -31,7 +31,7 @@ use super::manifest::{
     NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
     NODE_VERSION_PATTERN, NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE,
     NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR,
-    NODE_VERSION_VECTOR_MASK, NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
+    NODE_VERSION_VECTOR_MASK, NODE_VERSION_PERSPECTIVE_WARP, NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
     SCHEMA_MINOR_SOURCES,
 };
 use super::write::{image_key, parallel_map};
@@ -472,7 +472,8 @@ pub(super) fn read_node(
         node.version == NODE_VERSION_PATTERN_OVERLAY || node.version == NODE_VERSION_VECTOR_MASK;
     let known_raster = (1..=NODE_VERSION_BEVEL).contains(&node.version)
         || overlaid
-        || node.version == NODE_VERSION_WARP;
+        || node.version == NODE_VERSION_WARP
+        || node.version == NODE_VERSION_PERSPECTIVE_WARP;
     // Fills and groups skip the versions of paint and stacks: styled, they are version 8 or 9.
     let known_fill = known_version
         || (NODE_VERSION_STYLED..=NODE_VERSION_GLOWS).contains(&node.version)
@@ -648,12 +649,14 @@ fn node_locks(node: &NodeDto) -> Result<slopshop_core::LayerLocks, FileError> {
     Ok(locks)
 }
 
-/// A raster node's warp (version 18, ADR 0044): `{ kind: "grid", frame: [x0, y0, x1, y1],
-/// columns, rows, points: [x, y, …], preset?: { style, bend, vertical } }`.
+/// A raster node's warp (ADR 0044): a grid (version 18), `{ kind: "grid", frame: [x0, y0, x1,
+/// y1], columns, rows, points: [x, y, …], preset?: { style, bend, vertical } }`, or planes
+/// (version 19), `{ kind: "planes", frame, layout: [x, y, …], warped: [x, y, …], planes:
+/// [[a, b, c, d], …] }`.
 fn node_warp(
     node: &NodeDto,
 ) -> Result<Option<std::sync::Arc<slopshop_core::warp::Warp>>, FileError> {
-    use slopshop_core::warp::{Warp, WarpPreset, WarpStyle};
+    use slopshop_core::warp::{Grid, Planes, Warp, WarpPreset, WarpStyle};
     let value = match node.params.get("warp") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Object(value))
@@ -664,13 +667,6 @@ fn node_warp(
         Some(_) => return Err(corrupt("a warp needs a raster node of version 18")),
     };
     let invalid = || corrupt("invalid warp");
-    if value.get("kind").and_then(Value::as_str) != Some("grid") {
-        // A kind this version does not know comes from a newer SlopShop.
-        return Err(FileError::UnknownNodeType(format!(
-            "{}@{} warp",
-            node.kind, node.version
-        )));
-    }
     let numbers = |key: &str| -> Option<Vec<f64>> {
         value
             .get(key)?
@@ -679,43 +675,80 @@ fn node_warp(
             .map(Value::as_f64)
             .collect()
     };
+    let points = |key: &str| -> Result<Vec<(f64, f64)>, FileError> {
+        let flat = numbers(key).ok_or_else(invalid)?;
+        if flat.len() % 2 != 0 {
+            return Err(invalid());
+        }
+        Ok(flat
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&[x, y]| (x, y))
+            .collect())
+    };
     let count =
         |key: &str| -> Option<u32> { value.get(key)?.as_u64().and_then(|v| u32::try_from(v).ok()) };
+    let kind = value.get("kind").and_then(Value::as_str);
+    let known = match kind {
+        Some("grid") => true,
+        Some("planes") => node.version >= NODE_VERSION_PERSPECTIVE_WARP,
+        _ => false,
+    };
+    if !known {
+        // A kind this version does not know comes from a newer SlopShop.
+        return Err(FileError::UnknownNodeType(format!(
+            "{}@{} warp",
+            node.kind, node.version
+        )));
+    }
     let frame: [f64; 4] = numbers("frame")
         .and_then(|f| f.try_into().ok())
         .ok_or_else(invalid)?;
-    let (columns, rows) = (
-        count("columns").ok_or_else(invalid)?,
-        count("rows").ok_or_else(invalid)?,
-    );
-    let flat = numbers("points").ok_or_else(invalid)?;
-    if flat.len() % 2 != 0 {
-        return Err(invalid());
-    }
-    let points = flat
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|&[x, y]| (x, y))
-        .collect();
-    let preset = match value.get("preset") {
-        None | Some(Value::Null) => None,
-        Some(Value::Object(p)) => {
-            let style = p.get("style").and_then(Value::as_str).ok_or_else(invalid)?;
-            let bend = p.get("bend").and_then(Value::as_f64).ok_or_else(invalid)?;
-            // A style this version does not know (a newer SlopShop's): the grid is drawn all
-            // the same, as edited point by point.
-            WarpStyle::from_id(style).map(|style| WarpPreset {
-                style,
-                bend,
-                vertical: p.get("vertical").and_then(Value::as_bool).unwrap_or(false),
+    let warp: Warp = if kind == Some("planes") {
+        let planes = value
+            .get("planes")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?
+            .iter()
+            .map(|plane| {
+                let corners: Vec<u32> = plane
+                    .as_array()?
+                    .iter()
+                    .map(|k| k.as_u64().and_then(|k| u32::try_from(k).ok()))
+                    .collect::<Option<_>>()?;
+                corners.try_into().ok()
             })
-        }
-        Some(_) => return Err(invalid()),
+            .collect::<Option<Vec<[u32; 4]>>>()
+            .ok_or_else(invalid)?;
+        Planes::new(frame, points("layout")?, points("warped")?, planes)
+            .map_err(|_| invalid())?
+            .into()
+    } else {
+        let (columns, rows) = (
+            count("columns").ok_or_else(invalid)?,
+            count("rows").ok_or_else(invalid)?,
+        );
+        let preset = match value.get("preset") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(p)) => {
+                let style = p.get("style").and_then(Value::as_str).ok_or_else(invalid)?;
+                let bend = p.get("bend").and_then(Value::as_f64).ok_or_else(invalid)?;
+                // A style this version does not know (a newer SlopShop's): the grid is drawn
+                // all the same, as edited point by point.
+                WarpStyle::from_id(style).map(|style| WarpPreset {
+                    style,
+                    bend,
+                    vertical: p.get("vertical").and_then(Value::as_bool).unwrap_or(false),
+                })
+            }
+            Some(_) => return Err(invalid()),
+        };
+        Grid::new(frame, columns, rows, points("points")?, preset)
+            .map_err(|_| invalid())?
+            .into()
     };
-    Warp::new(frame, columns, rows, points, preset)
-        .map(|w| Some(std::sync::Arc::new(w)))
-        .map_err(|_| invalid())
+    Ok(Some(std::sync::Arc::new(warp)))
 }
 
 /// A node's transform (version 5; the identity before): finite and invertible (ADR 0018).
@@ -1411,11 +1444,13 @@ mod warp_tests {
     #[test]
     fn a_warp_style_this_version_does_not_know_reads_as_none() {
         let warp = node_warp(&node("shellLower")).unwrap().unwrap();
+        let warp = warp.grid().unwrap();
         let preset = warp.preset().unwrap();
         assert_eq!(preset.style, slopshop_core::warp::WarpStyle::ShellLower);
         assert_eq!((preset.bend, preset.vertical), (0.25, true));
         // A newer SlopShop's style: the grid all the same, without its style.
         let warp = node_warp(&node("spiral")).unwrap().unwrap();
+        let warp = warp.grid().unwrap();
         assert_eq!(warp.preset(), None);
         assert_eq!(warp.points().len(), 16);
     }
