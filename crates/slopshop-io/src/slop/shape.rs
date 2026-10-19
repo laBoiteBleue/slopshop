@@ -51,6 +51,10 @@
 //! ```
 //!
 //! `inverted`: the path hides what it encloses (Reveal All); `feather` in pixels (0 to 250).
+//!
+//! The Paths panel's paths (schema 0.41) are the document's `paths`, each
+//! `{ "id": 1, "name": "Path 1", "path": { "path": { … } } }` (a `path` geometry, in document
+//! pixels), the Work Path with `"work": true` and no name; `next_path_id` is their counter.
 
 use serde_json::{Value, json};
 use slopshop_core::color::LinearRgba;
@@ -58,6 +62,16 @@ use slopshop_core::shape::{
     CharStyle, FillRule, Geometry, Paint, Segment, Shape, ShapeStroke, StrokeAlign, StrokeCap,
     StrokeJoin, Subpath, Text, TextAlign, TextBaseline, TextCase, TextSpan, VectorMask,
 };
+
+/// A document path's geometry (schema 0.41) as the manifest writes it: a shape's geometry.
+pub(super) fn path_to_json(geometry: &Geometry) -> Value {
+    self::geometry(geometry)
+}
+
+/// A document path's geometry read back; `None` when it is not a valid path.
+pub(super) fn path_from_json(value: &Value) -> Option<Geometry> {
+    geometry_of(value).filter(|g| matches!(g, Geometry::Path { .. }))
+}
 
 /// A vector mask as the manifest writes it.
 pub(super) fn vector_mask_to_json(mask: &VectorMask) -> Value {

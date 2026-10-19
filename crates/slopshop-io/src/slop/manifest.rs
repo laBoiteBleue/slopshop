@@ -185,6 +185,13 @@ pub(crate) struct DocumentDto {
     /// Absent: none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shapes: Vec<ShapeDto>,
+    /// The Paths panel's paths (schema 0.41, ADR 0041): saved paths and the Work Path, in the
+    /// panel's order. Absent: none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<PathDto>,
+    /// The paths' id counter (schema 0.41). Absent: one above the largest id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_path_id: Option<u64>,
     /// Layer > Layer Style > Global Light (schema 0.37): `[angle, altitude]`, degrees. Absent:
     /// Photoshop's, 120 and 30.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +226,18 @@ pub(crate) struct ShapeDto {
     /// of `shape` (which keeps them all in the text's own color, for older readers).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paints: Vec<Value>,
+}
+
+/// A path of the Paths panel (schema 0.41, ADR 0041): `path` is a shape's `path` geometry (see
+/// `slop::shape`) in document pixels; `work` marks the Work Path, whose `name` is absent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PathDto {
+    pub id: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub work: bool,
+    pub path: Value,
 }
 
 /// A guide (schema 0.22): `axis` is `vertical` (at a distance from the left edge) or

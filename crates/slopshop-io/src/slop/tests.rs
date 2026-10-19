@@ -243,6 +243,8 @@ fn assert_same(a: &Document, b: &Document) {
         assert_eq!((s.id, &s.name), (t.id, &t.name));
         assert_same_image(s.selection.image(), t.selection.image(), &s.name);
     }
+    assert_eq!(a.paths(), b.paths());
+    assert_eq!(a.next_path_id(), b.next_path_id());
 }
 
 /// Same size, format and tile bytes at every level.
@@ -1274,6 +1276,66 @@ fn saved_selections_round_trip_with_their_names_order_and_ids() {
     SlopFile::create(&path, &plain).unwrap();
     let (loaded, _) = SlopFile::open(&path).unwrap();
     assert!(loaded.saved_selections().is_empty());
+    fs::remove_file(&path).ok();
+}
+
+#[test]
+fn paths_round_trip_with_their_names_order_ids_and_the_work_path() {
+    use slopshop_core::paths::{DocumentPath, PathId};
+    use slopshop_core::shape::{FillRule, Geometry, Segment, Subpath};
+    let mut doc = sample_document();
+    let curve = Geometry::Path {
+        subpaths: vec![Subpath {
+            start: [1.5, 2.0],
+            segments: vec![
+                Segment::Line([6.0, 2.0]),
+                Segment::Cubic([7.0, 3.0], [6.5, 5.0], [1.5, 2.0]),
+            ],
+            closed: true,
+        }],
+        rule: FillRule::EvenOdd,
+    };
+    // Saved, a Work Path, one removed: ids keep their gaps, the counter goes on.
+    for (name, work) in [("Outline", false), ("Gone", false), ("", true)] {
+        let id = doc.allocate_path_id();
+        let index = doc.paths().len();
+        let path = DocumentPath {
+            id,
+            name: name.into(),
+            geometry: curve.clone(),
+            work,
+        };
+        Edit::InsertPath { index, path }.apply(&mut doc).unwrap();
+    }
+    Edit::RemovePath {
+        id: PathId::from_raw(2),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let empty = doc.allocate_path_id();
+    Edit::InsertPath {
+        index: 0,
+        path: DocumentPath::empty(empty, "Path 1"),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("paths.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let names: Vec<(&str, bool)> = loaded
+        .paths()
+        .iter()
+        .map(|p| (p.name.as_str(), p.work))
+        .collect();
+    assert_eq!(names, [("Path 1", false), ("Outline", false), ("", true)]);
+    assert_eq!(loaded.next_path_id(), 5);
+    // A document without any writes none, and reads back none.
+    let plain = sample_document();
+    SlopFile::create(&path, &plain).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert!(loaded.paths().is_empty());
+    assert_eq!(loaded.next_path_id(), 1);
     fs::remove_file(&path).ok();
 }
 
