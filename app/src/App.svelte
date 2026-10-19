@@ -1548,19 +1548,26 @@
    * another tool or document): one undo entry; an empty text removes its layer, a text just
    * placed leaving no entry.
    */
-  function commitText() {
+  function commitText(): Promise<void> {
     const current = typing;
-    if (!current) return;
+    if (!current) return Promise.resolve();
     typing = null;
-    if (current.text.content !== "") {
-      void endGesture(current.documentId);
-    } else if (current.created) {
-      void cancelGesture(current.documentId);
-    } else {
-      void live(current.documentId, { kind: "removeLayer", id: current.layerId }).then(() =>
-        endGesture(current.documentId),
-      );
-    }
+    if (current.text.content !== "") return endGesture(current.documentId);
+    if (current.created) return cancelGesture(current.documentId);
+    return live(current.documentId, { kind: "removeLayer", id: current.layerId }).then(() =>
+      endGesture(current.documentId),
+    );
+  }
+
+  /**
+   * Type > Convert to Shape: the text layers selected become shapes of their glyph outlines
+   * (the text typed committed first).
+   */
+  async function convertToShape() {
+    await commitText();
+    const doc = active;
+    const ids = (layersPanel?.selectedLayers() ?? []).filter((l) => l.text).map((l) => l.id);
+    if (doc && ids.length > 0) await edit(doc.id, { kind: "convertToShape", ids });
   }
 
   // Another tool or document commits the text typed.
@@ -6359,6 +6366,24 @@
               ),
             ],
           },
+        ],
+      },
+      {
+        label: t("menu.type"),
+        items: [
+          cmd(
+            t("menu.type.convertToShape"),
+            () => void convertToShape(),
+            undefined,
+            !(layersPanel?.selectedLayers() ?? []).some((l) => l.text),
+          ),
+          separator,
+          cmd(
+            t("menu.type.pasteLoremIpsum"),
+            () => typeTool?.edit("loremIpsum"),
+            undefined,
+            typing === null || typing.documentId !== doc?.id,
+          ),
         ],
       },
       {

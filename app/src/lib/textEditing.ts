@@ -10,8 +10,20 @@ export type Point = [number, number];
 /** What the engine says of a text: one caret per place, and its lines. */
 export type TextLayout = { carets: readonly Caret[]; lines: readonly TextLineView[] };
 
-/** The editing commands the Edit menu routes to the text being typed. */
-export type TextCommand = "cut" | "copy" | "paste" | "selectAll";
+/** The editing commands the Edit and Type menus route to the text being typed. */
+export type TextCommand = "cut" | "copy" | "paste" | "selectAll" | "loremIpsum";
+
+/**
+ * What Type > Paste Lorem Ipsum types: placeholder text, the same in every language (it is
+ * content, not interface text), as Photoshop's.
+ */
+export const LOREM_IPSUM =
+  "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt " +
+  "ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation " +
+  "ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in " +
+  "reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur " +
+  "sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id " +
+  "est laborum.";
 
 /** A selection's highlight on one line: four corners, clockwise from the top left. */
 export type Quad = [Point, Point, Point, Point];

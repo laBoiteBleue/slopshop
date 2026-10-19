@@ -17,6 +17,7 @@
     clickSelection,
     countClick,
     lineBoundary,
+    LOREM_IPSUM,
     moveByLine,
     selectionQuads,
     type Clicks,
@@ -277,6 +278,9 @@
         if (command === "cut") replaceSelection("");
         break;
       }
+      case "loremIpsum":
+        replaceSelection(LOREM_IPSUM);
+        break;
       case "paste": {
         const key = editing.key;
         void onpaste().then((text) => {
