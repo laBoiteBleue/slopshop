@@ -1407,6 +1407,11 @@ pub enum EditRequest {
     MakeUnique {
         ids: Vec<u64>,
     },
+    /// The text layers among `ids` become vector layers of their glyph outlines (Type > Convert
+    /// to Shape, ADR 0041), their linked copies too.
+    ConvertToShape {
+        ids: Vec<u64>,
+    },
     /// Layer > Layer Style > Scale Effects: the styles of `ids` with every size scaled by
     /// `scale` percent (1–1000), those without one skipped. One undo entry; live, the whole
     /// gesture (sent with `replace`).
@@ -1752,6 +1757,7 @@ impl EditRequest {
             Self::MoveLayers { .. } => HistoryLabel::new("arrange"),
             Self::DeletePaint { .. } => HistoryLabel::new("deletePaint"),
             Self::MakeUnique { .. } => HistoryLabel::new("makeUnique"),
+            Self::ConvertToShape { .. } => HistoryLabel::new("convertToShape"),
             Self::ScaleLayerStyle { .. } => HistoryLabel::new("scaleEffects"),
             Self::SetAllEffectsVisible { visible: false } => HistoryLabel::new("hideAllEffects"),
             Self::SetAllEffectsVisible { visible: true } => HistoryLabel::new("showAllEffects"),
@@ -2193,6 +2199,10 @@ impl EditRequest {
             EditRequest::MakeUnique { ids } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::make_unique(session.document(), &ids).map_err(|e| e.to_string())?
+            }
+            EditRequest::ConvertToShape { ids } => {
+                let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
+                Edit::convert_to_shape(session.document(), &ids).map_err(|e| e.to_string())?
             }
             EditRequest::ScaleLayerStyle { ids, scale } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();

@@ -556,3 +556,57 @@ test("outside typing, the Character settings style the whole text layer, one und
   await user.click(character.getByRole("button", { name: "Text color" }));
   expect(await screen.findByRole("dialog")).toBeInTheDocument();
 });
+
+// The Type menu (Photoshop's): Convert to Shape, Paste Lorem Ipsum.
+
+test("Type > Paste Lorem Ipsum types placeholder text at the caret, only while typing", async () => {
+  const { user } = await editText("Hi ");
+  await user.click(screen.getByRole("menuitem", { name: "Type" }));
+  await user.click(screen.getByRole("menuitem", { name: "Paste Lorem Ipsum" }));
+  await waitFor(() =>
+    expect(lastContent()).toMatch(/^Hi Lorem ipsum dolor sit amet, .*laborum\.$/),
+  );
+  expect(sent("end_gesture")).toHaveLength(0);
+  // Committed: nothing to paste into.
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("menuitem", { name: "Type" }));
+  expect(screen.getByRole("menuitem", { name: "Paste Lorem Ipsum" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+});
+
+test("Type > Convert to Shape converts the text layers selected, after committing the typing", async () => {
+  hit = null;
+  const user = open(documentView(1, "cat.jpg", [layer(1, "Cat"), textLayer(2, "Title")]));
+  await waitFor(() => expect(row("Cat")).toBeInTheDocument());
+  // A pixel layer: nothing to convert.
+  await user.click(row("Cat"));
+  await user.click(screen.getByRole("menuitem", { name: "Type" }));
+  expect(screen.getByRole("menuitem", { name: "Convert to Shape" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await user.keyboard("{Escape}");
+  await user.click(row("Title"));
+  await user.keyboard("[ControlLeft>]");
+  await user.click(row("Cat"));
+  await user.keyboard("[/ControlLeft]");
+  await user.click(screen.getByRole("menuitem", { name: "Type" }));
+  await user.click(screen.getByRole("menuitem", { name: "Convert to Shape" }));
+  await waitFor(() =>
+    expect(sent("perform").at(-1)).toEqual({
+      documentId: 1,
+      edit: { kind: "convertToShape", ids: [2] },
+    }),
+  );
+});
+
+test("Convert to Shape while a text is typed commits it first", async () => {
+  const { user } = await editText("Hi");
+  await user.click(screen.getByRole("menuitem", { name: "Type" }));
+  await user.click(screen.getByRole("menuitem", { name: "Convert to Shape" }));
+  await waitFor(() => expect(sent("perform")).toHaveLength(1));
+  expect(sent("end_gesture")).toHaveLength(1);
+  expect(sent("perform")[0].edit).toEqual({ kind: "convertToShape", ids: [2] });
+});

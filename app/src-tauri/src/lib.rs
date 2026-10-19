@@ -5360,6 +5360,43 @@ mod tests {
     }
 
     #[test]
+    fn a_text_converted_to_a_shape_is_a_vector_layer_of_its_outlines() {
+        let mut s = blank_session();
+        let json = format!(
+            r#"{{"kind":"addText","text":{{"content":"Hi","family":"{}","weight":400,"italic":false,"size":20,"color":[1,0,0,1],"align":"left","position":[20,30]}}}}"#,
+            slopshop_text::DEFAULT_FAMILY
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let id = view.layers[1].id;
+        let background = view.layers[0].id;
+        let json = format!(r#"{{"kind":"convertToShape","ids":[{id},{background}]}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            request.history_label().map(|l| l.kind),
+            Some("convertToShape")
+        );
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let layer = &view.layers[1];
+        assert!(layer.text.is_none());
+        // A path, edited as a shape, in the text's color.
+        let shape = serde_json::to_value(layer.shape.as_ref().unwrap()).unwrap();
+        assert_eq!(shape["geometry"]["kind"], "path");
+        for (a, b) in layer.swatch.iter().zip([1.0, 0.0, 0.0, 1.0]) {
+            assert!((a - b).abs() < 1e-5, "{:?}", layer.swatch);
+        }
+        assert_eq!(layer.name, "Hi");
+        // No text layer left: refused.
+        let json = format!(r#"{{"kind":"convertToShape","ids":[{id}]}}"#);
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
     fn a_shape_is_added_as_a_vector_layer_shown_and_changed() {
         let mut s = blank_session();
         let shape = r#"{"geometry":{"kind":"rectangle","rect":[10.0,20.0,110.0,70.0],"radii":[4.0,4.0,4.0,4.0]},"fill":[1.0,0.0,0.0,1.0],"stroke":null}"#;

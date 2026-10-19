@@ -813,6 +813,8 @@ export type EditRequest =
   | { kind: "deletePaint"; ids: number[] }
   /** Layer > Make Unique: each of `ids` sharing its source gets one of its own (ADR 0040). */
   | { kind: "makeUnique"; ids: number[] }
+  /** Type > Convert to Shape: the text layers among `ids` become shapes of their outlines. */
+  | { kind: "convertToShape"; ids: number[] }
   /** Layer > Layer Style > Scale Effects: every size of the styles of `ids` by `scale` %. */
   | { kind: "scaleLayerStyle"; ids: number[]; scale: number }
   /** Layer > Layer Style > Hide All Effects (`visible` false) or Show All Effects. */
