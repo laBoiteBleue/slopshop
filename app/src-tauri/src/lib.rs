@@ -4623,7 +4623,7 @@ mod tests {
             .into_edit(&mut s);
         assert!(edit.is_err());
         let unknown = serde_json::from_str::<EditRequest>(
-            r#"{"kind":"addAdjustmentLayer","name":"x","adjustment":"colorLookup","parent":null,"index":0}"#,
+            r#"{"kind":"addAdjustmentLayer","name":"x","adjustment":"hdrToning","parent":null,"index":0}"#,
         )
         .unwrap()
         .into_edit(&mut s);
