@@ -501,7 +501,7 @@ test("a box too small for its lines shows a plus in its bottom right handle", as
 // Character settings (spans): the characters selected while typed, else the whole text.
 
 test("the Character settings style the characters selected while typed, else the whole text", async () => {
-  const { user } = await editText("Hello");
+  const { user, field } = await editText("Hello");
   const character = within(await screen.findByRole("region", { name: "Character" }));
   // All selected: Bold on them, live in the typing's undo entry.
   await user.keyboard("{Control>}a{/Control}");
@@ -523,22 +523,85 @@ test("the Character settings style the characters selected while typed, else the
   await waitFor(() =>
     expect(liveEdits().at(-1)).toMatchObject({ kind: "setText", text: { align: "center" } }),
   );
-  // A caret, nothing selected: the whole text.
+  // A caret, nothing selected: the style waits for the next characters typed there
+  // (Photoshop's pending style), shown meanwhile.
   await click(user, place(5));
+  const sent0 = liveEdits().length;
   const size = character.getByRole("spinbutton", { name: "Font size" });
   await user.clear(size);
   await user.type(size, "20");
   await user.tab();
+  await waitFor(() => expect(size).toHaveValue(20));
+  expect(liveEdits()).toHaveLength(sent0);
+  // Back in the text, its caret where it was, a character typed is set so.
+  field.focus();
+  await user.keyboard("!");
+  await waitFor(() =>
+    expect(liveEdits().at(-1)).toMatchObject({
+      kind: "setText",
+      id: 2,
+      text: { content: "Hello!" },
+      typed: { range: [5, 6], style: { size: 20 } },
+    }),
+  );
+  // The next one takes the style of the one before it (the engine's): nothing pending.
+  await user.keyboard("?");
+  await waitFor(() => expect(lastContent()).toBe("Hello!?"));
+  expect(liveEdits().at(-1)).not.toHaveProperty("typed");
+  expect(sent("perform")).toHaveLength(0);
+  expect(sent("end_gesture")).toHaveLength(0);
+});
+
+test("a style chosen at a caret is forgotten when the caret moves", async () => {
+  const { user } = await editText("Hello");
+  const character = within(await screen.findByRole("region", { name: "Character" }));
+  await user.click(character.getByRole("button", { name: "Underline" }));
+  expect(character.getByRole("button", { name: "Underline" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await user.keyboard("{ArrowLeft}");
+  await waitFor(() =>
+    expect(character.getByRole("button", { name: "Underline" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    ),
+  );
+  await user.keyboard("!");
+  await waitFor(() => expect(lastContent()).toBe("Hell!o"));
+  expect(liveEdits().at(-1)).not.toHaveProperty("typed");
+});
+
+test("the style buttons set the characters selected; Standard Ligatures turns off", async () => {
+  const { user } = await editText("Hello");
+  const character = within(await screen.findByRole("region", { name: "Character" }));
+  await user.keyboard("{Control>}a{/Control}");
+  await user.click(character.getByRole("button", { name: "Small Caps" }));
   await waitFor(() =>
     expect(liveEdits().at(-1)).toEqual({
       kind: "styleText",
       id: 2,
-      range: null,
-      style: { size: 20 },
+      range: [0, 5],
+      style: { case: "smallCaps" },
     }),
   );
-  expect(sent("perform")).toHaveLength(0);
-  expect(sent("end_gesture")).toHaveLength(0);
+  await waitFor(() =>
+    expect(character.getByRole("button", { name: "Small Caps" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    ),
+  );
+  // All Caps replaces it.
+  await user.click(character.getByRole("button", { name: "All Caps" }));
+  await waitFor(() =>
+    expect(liveEdits().at(-1)).toMatchObject({ style: { case: "allCaps" }, range: [0, 5] }),
+  );
+  await user.click(character.getByRole("button", { name: "Standard Ligatures" }));
+  await waitFor(() =>
+    expect(liveEdits().at(-1)).toMatchObject({ style: { ligatures: false }, range: [0, 5] }),
+  );
+  // Still typing: the buttons keep the focus in the text.
+  expect(screen.getByRole("textbox", { name: "Horizontal Type Tool" })).toHaveFocus();
 });
 
 test("outside typing, the Character settings style the whole text layer, one undo entry each", async () => {

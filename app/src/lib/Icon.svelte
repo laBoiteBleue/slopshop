@@ -94,6 +94,16 @@
     textLeft: "M4 6h16 M4 10h10 M4 14h16 M4 18h10",
     textCenter: "M4 6h16 M7 10h10 M4 14h16 M7 18h10",
     textRight: "M4 6h16 M10 10h10 M4 14h16 M10 18h10",
+    // The Character panel's styles (Photoshop's row of T buttons), and Standard Ligatures (fi).
+    fauxBold: "M5 5h14v3.5H5Z M10.25 8.5h3.5V19h-3.5Z",
+    fauxItalic: "M8 5h12 M14 5l-4 14",
+    allCaps: "M3 6h8 M7 6v12 M13 6h8 M17 6v12",
+    smallCaps: "M3 6h9 M7.5 6v12 M14 11h7 M17.5 11v7",
+    superscript: "M3 9h10 M8 9v11 M15 4h6 M18 4v6",
+    subscript: "M3 4h10 M8 4v11 M15 14h6 M18 14v6",
+    underline: "M6 4h12 M12 4v12 M5 20h14",
+    strikethrough: "M6 5h12 M12 5v15 M5 12h14",
+    ligatures: "M7 20V9a4 4 0 0 1 4-4h2a3 3 0 0 1 3 3v12 M4 11h12",
     stamp: "M9 3h6v5l-1 3h4l2 3v2H4v-2l2-3h4l-1-3Z M4 20h16",
     // The stamp over a row of tiles: the pattern it paints.
     patternStamp:

@@ -657,6 +657,26 @@ export type SavedSelectionView = { id: number; name: string };
 /** A shape to select, in document pixels. */
 export type TextAlign = "left" | "center" | "right";
 
+/** Photoshop's All Caps and Small Caps. */
+export type TextCase = "normal" | "allCaps" | "smallCaps";
+
+/** Photoshop's Superscript and Subscript. */
+export type TextBaseline = "normal" | "superscript" | "subscript";
+
+/**
+ * The character styles of Photoshop's row of buttons, and Standard Ligatures: absent, the
+ * defaults (off, normal; Standard Ligatures on).
+ */
+export type CharToggles = {
+  fauxBold?: boolean;
+  fauxItalic?: boolean;
+  case?: TextCase;
+  baseline?: TextBaseline;
+  underline?: boolean;
+  strikethrough?: boolean;
+  ligatures?: boolean;
+};
+
 /**
  * A text layer's text (ADR 0041): sizes in pixels (the options bar shows points), the color
  * sRGB-encoded RGBA in [0, 1], the anchor (first baseline at the alignment point) in the
@@ -680,7 +700,7 @@ export type TextDto = {
   frame?: [number, number] | null;
   /** Characters set otherwise, sorted and apart (UTF-16 units of `content`). */
   spans?: SpanDto[];
-};
+} & CharToggles;
 
 /**
  * What characters set otherwise than their text (absent: the text's): sizes and leading in
@@ -695,7 +715,7 @@ export type CharStyleDto = {
   color?: [number, number, number, number];
   tracking?: number;
   leading?: number | null;
-};
+} & CharToggles;
 
 /** Characters `start` to `end` (UTF-16 units) set in `style`. */
 export type SpanDto = { start: number; end: number; style: CharStyleDto };
@@ -799,7 +819,16 @@ export type EditRequest =
    * A text layer's text, on every linked copy: its content and settings; its spans are the
    * layer's, following the content's change (`text.spans` is not taken).
    */
-  | { kind: "setText"; id: number; text: TextDto }
+  /**
+   * `typed`: the characters just typed (UTF-16 units of the new content) in a style chosen at
+   * the caret before (Photoshop's pending style).
+   */
+  | {
+      kind: "setText";
+      id: number;
+      text: TextDto;
+      typed?: { range: [number, number]; style: CharStyleDto };
+    }
   /**
    * Characters of a text layer set otherwise (the Character settings): those of `range`
    * (UTF-16 units), or with none the whole text (its own settings change, its spans stop

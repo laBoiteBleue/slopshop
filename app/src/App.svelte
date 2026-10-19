@@ -257,7 +257,15 @@
     styleChange,
     type TypeOptions,
   } from "./lib/typeText";
-  import { charSettings, isEmptyStyle, styleAt, withOwnStyle } from "./lib/textStyle";
+  import {
+    charSettings,
+    isEmptyStyle,
+    pendingAt,
+    styleAt,
+    typedRange,
+    withOwnStyle,
+    type PendingStyle,
+  } from "./lib/textStyle";
   import {
     changedShape,
     defaultShapeOptions,
@@ -1311,6 +1319,8 @@
     start?: number;
     /** The characters selected (UTF-16 units). */
     selection: [number, number];
+    /** A style chosen at the caret, for the next characters typed there (Photoshop's). */
+    pending: PendingStyle | null;
   } | null>(null);
   let typeTool = $state<ReturnType<typeof TypeTool> | null>(null);
   /** A text is typed in the document shown. */
@@ -1344,10 +1354,17 @@
       .catch(() => (typeStyles = []));
   });
 
-  /** The active text layer as it is typed: its text and the characters selected. */
+  /**
+   * The active text layer as it is typed: its text, the characters selected, and the style
+   * chosen at the caret for the next characters typed.
+   */
   const typedText = $derived(
     typing && typing.documentId === active?.id && typing.layerId === activeLayer?.id
-      ? { text: typing.text, selection: typing.selection }
+      ? {
+          text: typing.text,
+          selection: typing.selection,
+          pending: pendingAt(typing.pending, typing.selection),
+        }
       : null,
   );
 
@@ -1365,7 +1382,7 @@
     const ppi = active.resolution;
     const foreground = colors.foreground;
     untrack(() => {
-      if (text) typeOptions = optionsOf(text, ppi, styledRange(typed));
+      if (text) typeOptions = optionsOf(text, ppi, typed?.selection, typed?.pending);
       else typeOptions = { ...typeOptions, color: foreground };
     });
   });
@@ -1394,7 +1411,7 @@
       const typed = typedText;
       const text = typed?.text ?? activeText;
       if (!text) return;
-      const shown = optionsOf(text, active.resolution, styledRange(typed));
+      const shown = optionsOf(text, active.resolution, typed?.selection, typed?.pending);
       const change = styleChange(shown, options, active.resolution, defaultFamily());
       if (!isEmptyStyle(change)) styleText(change);
       if (options.align !== text.align) alignText(options.align);
@@ -1403,7 +1420,9 @@
 
   /**
    * A style on the characters selected while the active text layer is typed (live, in the
-   * typing's undo entry), else on the whole text (one undo entry).
+   * typing's undo entry); at its caret, a style for the next characters typed there
+   * (Photoshop's pending style; in an empty text, its own); else on the whole text (one undo
+   * entry).
    */
   function styleText(change: CharStyleDto) {
     const doc = active;
@@ -1415,6 +1434,11 @@
       return;
     }
     const range = styledRange(typedText) ?? null;
+    if (!range && typed.text.content !== "") {
+      const before = pendingAt(typed.pending, typed.selection) ?? {};
+      typed.pending = { at: typed.selection[0], style: { ...before, ...change } };
+      return;
+    }
     // The text's own settings change at once, so that what is typed next keeps them.
     if (!range) typed.text = withOwnStyle(typed.text, change);
     const request: EditRequest = { kind: "styleText", id: layer.id, range, style: change };
@@ -1440,8 +1464,10 @@
   function pickTextColor() {
     const text = typedText?.text ?? activeText;
     if (!text) return;
-    const range = styledRange(typedText);
-    const shown = range ? styleAt(text, range[0], range[1]).settings : charSettings(text);
+    const typed = typedText;
+    const shown = typed
+      ? styleAt(text, typed.selection[0], typed.selection[1], typed.pending).settings
+      : charSettings(text);
     pickColor = {
       title: t("options.type.color"),
       color: srgbToHex(shown.color),
@@ -1467,11 +1493,25 @@
     }
   }
 
-  /** What is typed, sent live (the whole text: a newer one replaces one still waiting). */
-  async function sendTyped(documentId: number, layerId: number, text: TextDto) {
+  /**
+   * What is typed, sent live (the whole text: a newer one replaces one still waiting); with
+   * the characters just typed in a pending style (`typed`), in order, never replaced.
+   */
+  async function sendTyped(
+    documentId: number,
+    layerId: number,
+    text: TextDto,
+    typed?: { range: [number, number]; style: CharStyleDto },
+  ) {
     // The spans are the engine's (setText keeps them).
     const { spans: _, ...settings } = text;
-    await live(documentId, { kind: "setText", id: layerId, text: settings });
+    if (typed) {
+      commitTransform();
+      const request: EditRequest = { kind: "setText", id: layerId, text: settings, typed };
+      await sync(engine.performLiveInOrder(documentId, request));
+    } else {
+      await live(documentId, { kind: "setText", id: layerId, text: settings });
+    }
     syncSpans(documentId, layerId);
     await refreshCarets(documentId, layerId);
   }
@@ -1504,6 +1544,7 @@
         box: layout?.frame ? { corners: layout.frame, overflow: layout.overflow } : null,
         start,
         selection: [start, start],
+        pending: null,
       };
       return;
     }
@@ -1526,6 +1567,7 @@
       layout: NO_LAYOUT,
       box: null,
       selection: [0, 0],
+      pending: null,
     };
     await refreshCarets(doc.id, added.id);
   }
@@ -1537,10 +1579,18 @@
     void sendTyped(typing.documentId, typing.layerId, typing.text);
   }
 
+  /**
+   * The text typed changed (the selection is still the one it replaced): sent live, the
+   * characters typed in the pending style, if one was chosen at the caret.
+   */
   function typeText(content: string) {
     if (!typing) return;
+    const style = pendingAt(typing.pending, typing.selection);
+    const range = style ? typedRange(typing.text.content, content, typing.selection) : null;
+    typing.pending = null;
     typing.text = { ...typing.text, content };
-    void sendTyped(typing.documentId, typing.layerId, typing.text);
+    const typed = style && range ? { range, style } : undefined;
+    void sendTyped(typing.documentId, typing.layerId, typing.text, typed);
   }
 
   /**
@@ -7164,7 +7214,10 @@
                     oninput={typeText}
                     oncommit={commitText}
                     onselect={(start, end) => {
-                      if (typing) typing.selection = [start, end];
+                      if (!typing) return;
+                      typing.selection = [start, end];
+                      // The caret moved: the style chosen there is forgotten.
+                      if (!pendingAt(typing.pending, [start, end])) typing.pending = null;
                     }}
                     oncopy={(text) => void engine.copyText(text).catch((e) => showError(String(e)))}
                     onpaste={() => engine.pasteText().catch(() => null)}

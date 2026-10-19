@@ -333,10 +333,12 @@
     }
   }
 
+  // The text first, then the selection: the app reads the selection the text replaced (a
+  // style chosen at the caret goes to what is typed there).
   function input() {
     if (!field) return;
-    track();
     oninput(field.value);
+    track();
   }
 
   const toView = (x: number, y: number) => mapping.toViewport(x, y);
