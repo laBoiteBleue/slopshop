@@ -73,6 +73,18 @@ ignore = [
     # encoding: decodes the character sets of DICOM text attributes ← dicom-encoding ←
     # dicom-object (DICOM import). Runtime code, but on text only: pixels never go through it.
     { id = "RUSTSEC-2021-0153", reason = "DICOM text decoding via dicom-rs; no vulnerability" },
+    # zbus_names, zvariant, zvariant_derive: folded into zbus upstream, no zbus release without
+    # them yet ← tauri-plugin-opener and tauri-plugin-single-instance (D-Bus on Linux).
+    { id = "RUSTSEC-2026-0370", reason = "zvariant via zbus (Tauri plugins); no vulnerability" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names via zbus (Tauri plugins); no vulnerability" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via zbus; build-time macro" },
+    # Vulnerabilities of zip's extraction to disk (SUID bits, symlinks out of the destination).
+    # Only zip 4 is concerned, through tauri-plugin-updater (^4 even in its latest release): it
+    # unpacks our own update archives after checking their minisign signature, so the archive
+    # is never attacker-controlled. Our own zip (slopshop-io) is 9.x. Remove when it moves on.
+    { id = "RUSTSEC-2026-0367", reason = "zip 4 via tauri-plugin-updater, signed archives only" },
+    { id = "RUSTSEC-2026-0368", reason = "zip 4 via tauri-plugin-updater, signed archives only" },
+    { id = "RUSTSEC-2026-0369", reason = "zip 4 via tauri-plugin-updater, signed archives only" },
 ]
 
 [sources]
