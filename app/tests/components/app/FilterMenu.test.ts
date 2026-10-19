@@ -258,12 +258,15 @@ test("Other > Maximum and Minimum, Noise > Median, Blur > Box Blur: a radius eac
   await user.hover(screen.getByText("Other", { selector: ".label" }));
   expect(screen.getByRole("menuitem", { name: "Minimum…" })).toBeInTheDocument();
   await user.click(screen.getByRole("menuitem", { name: "Maximum…" }));
-  await screen.findByRole("dialog", { name: "Maximum" });
+  const dialog = await screen.findByRole("dialog", { name: "Maximum" });
   await user.clear(radius());
   await user.type(radius(), "4");
+  // Preserve: Squareness at first, Roundness the disk around.
+  expect(within(dialog).getByRole("radio", { name: "Squareness" })).toBeChecked();
+  await user.click(within(dialog).getByRole("radio", { name: "Roundness" }));
   await user.click(screen.getByRole("button", { name: "OK" }));
   await vi.waitFor(() =>
-    expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "maximum", values: [4] }),
+    expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "maximum", values: [4, 1] }),
   );
 });
 
@@ -753,4 +756,128 @@ test("Pixelate > Mezzotint: Fine Dots at first, its ten types", async () => {
   const values = (applied() as { values: number[] }).values;
   expect(values[0]).toBe(9);
   expect(Number.isInteger(values[1])).toBe(true);
+});
+
+/** Filter > `submenu` > `name`, on a pixel layer. */
+async function filterItem(submenu: string, name: string) {
+  localStorage.clear();
+  const user = open(documentView(1, "photo.jpg", [layer(1, "Photo")]));
+  await screen.findByText("Photo", { selector: "li .name" });
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText(submenu, { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name }));
+  return user;
+}
+
+test("Other > Custom: its 5 x 5 weights in a grid, Scale and Offset", async () => {
+  const user = await filterItem("Other", "Custom…");
+  const dialog = await screen.findByRole("dialog", { name: "Custom" });
+  // Photoshop's sharpening kernel at first.
+  const cell = (row: number, column: number) =>
+    within(dialog).getByRole("spinbutton", { name: `Row ${row}, column ${column}` });
+  expect(cell(3, 3)).toHaveValue(5);
+  expect(cell(2, 3)).toHaveValue(-1);
+  expect(cell(1, 1)).toHaveValue(0);
+  await user.clear(cell(3, 3));
+  await user.type(cell(3, 3), "9");
+  await user.clear(cell(1, 5));
+  await user.type(cell(1, 5), "-2");
+  const scale = within(dialog).getByRole("spinbutton", { name: "Scale" });
+  await user.clear(scale);
+  await user.type(scale, "3");
+  const offset = within(dialog).getByRole("spinbutton", { name: "Offset" });
+  await user.clear(offset);
+  await user.type(offset, "10");
+  // A weight beyond 999: OK grayed.
+  await user.clear(cell(5, 5));
+  await user.type(cell(5, 5), "1000");
+  expect(within(dialog).getByRole("button", { name: "OK" })).toBeDisabled();
+  await user.clear(cell(5, 5));
+  await user.type(cell(5, 5), "0");
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  const weights = [
+    ...[0, 0, 0, 0, -2],
+    ...[0, 0, -1, 0, 0],
+    ...[0, -1, 9, -1, 0],
+    ...[0, 0, -1, 0, 0],
+    ...[0, 0, 0, 0, 0],
+  ];
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "custom",
+      values: [...weights, 3, 10],
+    }),
+  );
+});
+
+test("Other > HSB/HSL: RGB to HSB at first, HSL to RGB sent", async () => {
+  const user = await filterItem("Other", "HSB/HSL…");
+  const dialog = await screen.findByRole("dialog", { name: "HSB/HSL" });
+  const input = within(dialog).getByRole("group", { name: "Input Mode" });
+  const order = within(dialog).getByRole("group", { name: "Row Order" });
+  expect(within(input).getByRole("radio", { name: "RGB" })).toBeChecked();
+  expect(within(order).getByRole("radio", { name: "HSB" })).toBeChecked();
+  await user.click(within(input).getByRole("radio", { name: "HSL" }));
+  await user.click(within(order).getByRole("radio", { name: "RGB" }));
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({ kind: "applyFilter", id: 1, filter: "hsbHsl", values: [2, 0] }),
+  );
+});
+
+test("Noise > Despeckle applies at once; Reduce Noise: its four settings", async () => {
+  const user = await filterItem("Noise", "Despeckle");
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "despeckle",
+      values: [],
+    }),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+  await user.hover(screen.getByText("Noise", { selector: ".label" }));
+  await user.click(screen.getByRole("menuitem", { name: "Reduce Noise…" }));
+  const dialog = await screen.findByRole("dialog", { name: "Reduce Noise" });
+  const field = (name: string) => within(dialog).getByRole("spinbutton", { name });
+  expect(field("Strength")).toHaveValue(6);
+  expect(field("Preserve Details")).toHaveValue(60);
+  await user.clear(field("Strength"));
+  await user.type(field("Strength"), "9");
+  await user.clear(field("Reduce Color Noise"));
+  await user.type(field("Reduce Color Noise"), "80");
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "reduceNoise",
+      values: [9, 60, 80, 25],
+    }),
+  );
+});
+
+test("Sharpen > Smart Sharpen: Lens Blur at first, Motion Blur with its angle", async () => {
+  const user = await filterItem("Sharpen", "Smart Sharpen…");
+  const dialog = await screen.findByRole("dialog", { name: "Smart Sharpen" });
+  expect(within(dialog).getByRole("radio", { name: "Lens Blur" })).toBeChecked();
+  const field = (name: string) => within(dialog).getByRole("spinbutton", { name });
+  expect(field("Amount")).toHaveValue(200);
+  await user.clear(field("Radius"));
+  await user.type(field("Radius"), "2.5");
+  await user.click(within(dialog).getByRole("radio", { name: "Motion Blur" }));
+  await user.clear(field("Angle"));
+  await user.type(field("Angle"), "45");
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "smartSharpen",
+      values: [200, 2.5, 10, 2, 45],
+    }),
+  );
 });

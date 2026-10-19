@@ -14,6 +14,8 @@
   import type { FilterId } from "./engine";
   import {
     FILTERS,
+    KERNEL_SIDE,
+    MAX_WEIGHT,
     centerAt,
     newSeed,
     nudgedCenter,
@@ -192,6 +194,30 @@
               </div>
             </div>
           {/if}
+        {:else if param.kind === "weight"}
+          {#if param.cell === 0}
+            <!-- Custom's weights: the grid of the pixels around, row by row. -->
+            <fieldset>
+              <legend>{t("filter.custom.weights")}</legend>
+              <div class="kernel">
+                {#each Array.from({ length: KERNEL_SIDE * KERNEL_SIDE }, (_, n) => n) as n (n)}
+                  <!-- svelte-ignore a11y_autofocus -->
+                  <input
+                    type="number"
+                    min={-MAX_WEIGHT}
+                    max={MAX_WEIGHT}
+                    step="1"
+                    aria-label={t("filter.custom.weight", {
+                      row: Math.floor(n / KERNEL_SIDE) + 1,
+                      column: (n % KERNEL_SIDE) + 1,
+                    })}
+                    autofocus={n === (KERNEL_SIDE * KERNEL_SIDE - 1) / 2}
+                    bind:value={current[i + n]}
+                  />
+                {/each}
+              </div>
+            </fieldset>
+          {/if}
         {:else if param.kind === "number"}
           {#if param.group && headed.has(i)}
             <div class="group">{t(param.group)}</div>
@@ -316,6 +342,19 @@
     padding: 4px 8px 6px;
     border: 1px solid var(--border-dark);
     border-radius: 3px;
+  }
+
+  /* Custom's 5 × 5 weights. */
+  .kernel {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 3px;
+  }
+
+  .kernel input {
+    width: 100%;
+    min-width: 0;
+    text-align: center;
   }
 
   .buttons {
