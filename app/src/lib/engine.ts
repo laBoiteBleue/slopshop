@@ -24,9 +24,12 @@ export type StackEntryView = {
   steps: AdjustmentView[];
   /** A filter entry's filter. */
   filter: FilterId | null;
-  /** A filter entry's steps with their settings, bottom to top. */
-  filterSteps: { id: FilterId; values: number[] }[];
+  /** A filter entry's steps with their settings (Displace's map too), bottom to top. */
+  filterSteps: { id: FilterId; values: number[]; map?: MapView | null }[];
 };
+
+/** A displacement map (Displace's, ADR 0040): a source kept by the document, its id and name. */
+export type MapView = { id: number; name: string };
 
 /** Liquify's tools (`Tool` in crates/slopshop-core/src/liquify.rs). */
 export type LiquifyToolId =
@@ -106,6 +109,7 @@ export type FilterId =
   | "wave"
   | "zigZag"
   | "shear"
+  | "displace"
   | "polarCoordinates"
   | "radialBlur"
   | "surfaceBlur"
@@ -869,7 +873,8 @@ export type EditRequest =
       filters?: { filter: FilterId; values: number[] }[];
     }
   /** Filter > … (ADR 0034): a filter on layer `id` (the active one), within the selection. */
-  | { kind: "applyFilter"; id: number; filter: FilterId; values: number[] }
+  /** Displace's `map`: a source of the document or loaded for it (`loadDisplacementMap`). */
+  | { kind: "applyFilter"; id: number; filter: FilterId; values: number[]; map?: number }
   /** Image > Adjustments (ADR 0029): the adjustment applied to the visible raster layers of
    * `ids`, within the selection (`values` and `curves` as `setAdjustment`). */
   | {
@@ -1982,6 +1987,9 @@ export const engine = {
         index,
       }),
     ),
+  /** An image file opened as a displacement map for a document (Displace's): its id, name. */
+  loadDisplacementMap: (documentId: number, path: string) =>
+    serial(() => invoke<MapView>("load_displacement_map", { documentId, path })),
   /** A library pattern loaded for a document (a Pattern Overlay's): its source's id. */
   loadPattern: (documentId: number, pattern: string, sourceName: string) =>
     serial(() => invoke<number>("load_pattern", { documentId, pattern, sourceName })),

@@ -3,12 +3,22 @@
 // Image > Adjustments > Shadows/Highlights is one too (it reads neighbours), on every pixel
 // layer shown as the other adjustments are.
 
-import type { EditRequest, FilterId, LayerView, StackEntryView } from "./engine";
+import type {
+  DocumentView,
+  EditRequest,
+  FilterId,
+  LayerView,
+  MapView,
+  StackEntryView,
+} from "./engine";
 import type { MessageKey } from "./i18n/en";
 import { STRAIGHT, shearPoints, shearValues, validShearPoints } from "./shearCurve";
 
-/** A filter's settings as edits send them (`Filter::params` order in the engine). */
-export type FilterSettings = { filter: FilterId; values: number[] };
+/**
+ * A filter's settings as edits send them (`Filter::params` order in the engine), and the
+ * displacement map Displace reads (a source of the document, `FilterSpec.map`).
+ */
+export type FilterSettings = { filter: FilterId; values: number[]; map?: MapView };
 
 /** A number setting of a filter's dialog: a field, its unit, a slider below. */
 export type NumberParam = {
@@ -203,9 +213,15 @@ const shadowsParam = (
 
 /**
  * A filter's settings (the engine's `Filter::params` order), Photoshop's ranges and defaults;
- * `more`: its dialog has Show More Options, the settings marked `more` shown with it only.
+ * `more`: its dialog has Show More Options, the settings marked `more` shown with it only;
+ * `map`: it reads a displacement map besides (Displace), chosen in its dialog.
  */
-export type FilterSpec = { params: FilterParam[]; defaults: number[]; more?: boolean };
+export type FilterSpec = {
+  params: FilterParam[];
+  defaults: number[];
+  more?: boolean;
+  map?: boolean;
+};
 
 /** Each filter's settings (the engine's `Filter::params` order), Photoshop's ranges and defaults. */
 export const FILTERS: Record<FilterId, FilterSpec> = {
@@ -778,6 +794,27 @@ export const FILTERS: Record<FilterId, FilterSpec> = {
     ],
     defaults: [10, 5, 2],
   },
+  // Photoshop's: 10 % each way, Stretch to Fit, Repeat Edge Pixels; the map besides.
+  displace: {
+    params: [
+      whole("horizontal", "filter.displace.horizontal", [-999, 999], "filter.percent"),
+      whole("vertical", "filter.displace.vertical", [-999, 999], "filter.percent"),
+      {
+        kind: "choice",
+        key: "mapMode",
+        label: "filter.displace.map",
+        options: ["filter.displace.stretch", "filter.displace.tile"],
+      },
+      {
+        kind: "choice",
+        key: "edge",
+        label: "filter.offset.edge",
+        options: ["filter.offset.wrap", "filter.offset.repeat"],
+      },
+    ],
+    defaults: [10, 10, 0, 1],
+    map: true,
+  },
   // Undefined Areas, then the curve's points (Photoshop's Default: the straight line).
   shear: {
     params: [
@@ -976,6 +1013,7 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
   {
     label: "menu.filter.distort",
     filters: [
+      "displace",
       "pinch",
       "polarCoordinates",
       "ripple",
@@ -1115,7 +1153,31 @@ export function filterable(
 
 /** Filter > …: `settings` applied to layer `id`, an entry on top of its stack. */
 export function applyFilterEdit(id: number, settings: FilterSettings): EditRequest {
-  return { kind: "applyFilter", id, filter: settings.filter, values: settings.values };
+  const { filter, values, map } = settings;
+  return map
+    ? { kind: "applyFilter", id, filter, values, map: map.id }
+    : { kind: "applyFilter", id, filter, values };
+}
+
+/** Whether `filter` reads a displacement map (Displace): its dialog asks for one. */
+export function takesMap(filter: FilterId): boolean {
+  return FILTERS[filter].map === true;
+}
+
+/**
+ * The maps Displace may read in document `doc`: the images of its Sources panel, then those
+ * opened from files for it (`loaded`), then `current` when it is neither; each once.
+ */
+export function mapChoices(
+  doc: Pick<DocumentView, "sources"> | null,
+  loaded: MapView[],
+  current: MapView | null = null,
+): MapView[] {
+  const bin = (doc?.sources ?? [])
+    .filter((s) => (s.kind ?? "image") === "image")
+    .map((s) => ({ id: s.id, name: s.name }));
+  const all = [...bin, ...loaded, ...(current ? [current] : [])];
+  return all.filter((m, i) => all.findIndex((o) => o.id === m.id) === i);
 }
 
 /**
@@ -1129,7 +1191,11 @@ export function applyFiltersEdit(ids: number[], settings: FilterSettings): EditR
 
 /** The settings of each step of a filter entry, bottom to top. */
 export function filterSteps(entry: StackEntryView): FilterSettings[] {
-  return entry.filterSteps.map((step) => ({ filter: step.id, values: [...step.values] }));
+  return entry.filterSteps.map((step) =>
+    step.map
+      ? { filter: step.id, values: [...step.values], map: step.map }
+      : { filter: step.id, values: [...step.values] },
+  );
 }
 
 /** The edit that sets filter entry `index` of layer `id`'s stack: its steps, its eye. */
@@ -1139,5 +1205,7 @@ export function filterEntryEdit(
   settings: FilterSettings[],
   hidden: boolean,
 ): EditRequest {
-  return { kind: "setStackEntry", id, index, hidden, filters: settings };
+  // A Displace's map stays the entry's: only the settings are sent.
+  const filters = settings.map(({ filter, values }) => ({ filter, values }));
+  return { kind: "setStackEntry", id, index, hidden, filters };
 }

@@ -3,7 +3,11 @@
 import { fireEvent, screen, within } from "@testing-library/svelte";
 import { expect, test, vi } from "vitest";
 import type { LayerView } from "../../../src/lib/engine";
-import { documentView, layer, open, row, sent } from "./harness";
+import { documentView, layer, open, respond, row, sent } from "./harness";
+
+// Displace's Choose a File…: a file picked, opened as a map.
+respond("plugin:dialog|open", () => "C:/maps/ripples.psd");
+respond("load_displacement_map", (args) => ({ id: 77, name: `map of ${String(args.path)}` }));
 
 async function blurDialog(layers: LayerView[] = [layer(1, "Photo")]) {
   const user = open(documentView(1, "photo.jpg", layers));
@@ -382,6 +386,58 @@ test("Distort > Shear: the curve's points after Undefined Areas, Default straigh
       values: [1, 0, 0, 100, 0],
     }),
   );
+});
+
+test("Distort > Displace: a map of the Sources panel or a file, its scales and modes", async () => {
+  const doc = {
+    ...documentView(1, "photo.jpg", [layer(1, "Photo")]),
+    sources: [
+      { id: 5, kind: "image" as const, name: "clouds.png", width: 9, height: 9, layers: [1] },
+    ],
+  };
+  const user = open(doc);
+  await screen.findByText("Photo", { selector: "li .name" });
+  const displace = async () => {
+    await user.click(screen.getByRole("menuitem", { name: "Filter" }));
+    await user.hover(screen.getByText("Distort", { selector: ".label" }));
+    await user.click(screen.getByRole("menuitem", { name: "Displace…" }));
+    return screen.findByRole("dialog", { name: "Displace" });
+  };
+  let dialog = await displace();
+  expect(within(dialog).getByRole("radio", { name: "Stretch to Fit" })).toBeChecked();
+  expect(within(dialog).getByRole("radio", { name: "Repeat Edge Pixels" })).toBeChecked();
+  // Nothing shown nor applied without a map.
+  expect(within(dialog).getByRole("button", { name: "OK" })).toBeDisabled();
+  expect(sent("perform_live")).toEqual([]);
+  await user.selectOptions(within(dialog).getByRole("combobox", { name: "Map" }), "5");
+  const horizontal = within(dialog).getByRole("spinbutton", { name: "Horizontal Scale" });
+  await user.clear(horizontal);
+  await user.type(horizontal, "-50");
+  await user.click(within(dialog).getByRole("radio", { name: "Tile" }));
+  expect(sent("perform_live").at(-1)?.edit).toMatchObject({ filter: "displace", map: 5 });
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() =>
+    expect(applied()).toEqual({
+      kind: "applyFilter",
+      id: 1,
+      filter: "displace",
+      values: [-50, 10, 1, 1],
+      map: 5,
+    }),
+  );
+  // Again: the map chosen last at first; another opened from a file.
+  dialog = await displace();
+  expect(within(dialog).getByRole("combobox", { name: "Map" })).toHaveValue("5");
+  await user.click(within(dialog).getByRole("button", { name: "Choose a File…" }));
+  await vi.waitFor(() =>
+    expect(sent("load_displacement_map")).toEqual([{ documentId: 1, path: "C:/maps/ripples.psd" }]),
+  );
+  await vi.waitFor(() =>
+    expect(within(dialog).getByRole("combobox", { name: "Map" })).toHaveValue("77"),
+  );
+  expect(within(dialog).getByRole("option", { name: "map of C:/maps/ripples.psd" })).toBeTruthy();
+  await user.click(within(dialog).getByRole("button", { name: "OK" }));
+  await vi.waitFor(() => expect(applied()).toMatchObject({ filter: "displace", map: 77 }));
 });
 
 test("Distort > ZigZag and Spherize's modes", async () => {

@@ -165,3 +165,38 @@ test("Wave: its settings under Photoshop's headings, Randomize draws other waves
   await user.click(screen.getByRole("button", { name: "OK" }));
   expect(onok).toHaveBeenCalledWith([5, 10, 120, 5, 35, 100, 100, 2, 0, 2 ** 23]);
 });
+
+test("Displace waits for a map, chosen in the list or from a file", async () => {
+  const maps = [
+    { id: 5, name: "clouds.png" },
+    { id: 6, name: "" },
+  ];
+  const onchoosemap = vi.fn(async () => ({ id: 9, name: "ripples.psd" }));
+  const { onlive, onok, user } = open([10, 10, 0, 1], {
+    filter: "displace",
+    maps,
+    onchoosemap,
+  });
+  const map = screen.getByRole("combobox", { name: "Map" });
+  expect(screen.getByRole("option", { name: "Untitled image" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "OK" })).toBeDisabled();
+  expect(onlive).not.toHaveBeenCalled();
+  await user.selectOptions(map, "5");
+  expect(onlive).toHaveBeenLastCalledWith([10, 10, 0, 1], maps[0]);
+  await user.click(screen.getByRole("button", { name: "Choose a File…" }));
+  expect(onchoosemap).toHaveBeenCalled();
+  expect(map).toHaveValue("9");
+  expect(onlive).toHaveBeenLastCalledWith([10, 10, 0, 1], { id: 9, name: "ripples.psd" });
+  await user.click(screen.getByRole("button", { name: "OK" }));
+  expect(onok).toHaveBeenCalledWith([10, 10, 0, 1], { id: 9, name: "ripples.psd" });
+});
+
+test("a Displace entry edited again keeps its map, shown", async () => {
+  const kept = { id: 3, name: "waves.png" };
+  const { onlive } = open([20, 30, 1, 0], { filter: "displace", map: kept, mapFixed: true });
+  expect(screen.getByRole("combobox", { name: "Map" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "Map" })).toHaveValue("3");
+  expect(screen.queryByRole("button", { name: "Choose a File…" })).toBeNull();
+  expect(onlive).toHaveBeenLastCalledWith([20, 30, 1, 0], kept);
+  expect(screen.getByRole("button", { name: "OK" })).toBeEnabled();
+});
