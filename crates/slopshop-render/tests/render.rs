@@ -987,7 +987,7 @@ fn quick_mask_tints_what_its_mask_leaves_out() {
 
 #[test]
 fn a_warp_that_is_an_affine_map_shows_as_that_transform() {
-    use slopshop_core::warp::Warp;
+    use slopshop_core::warp::Grid;
     use std::sync::Arc;
     let size = Size::new(240, 200);
     let affine = slopshop_core::Affine::scale(0.6, 0.45)
@@ -1007,16 +1007,16 @@ fn a_warp_that_is_an_affine_map_shows_as_that_transform() {
         let mut s = raster_session(size, pattern);
         let id = s.document().layers()[0].id;
         let frame = [0.0, 0.0, 240.0, 200.0];
-        let plain = Warp::identity(frame, 3, 3).unwrap();
+        let plain = Grid::identity(frame, 3, 3).unwrap();
         let points = plain
             .points()
             .iter()
             .map(|&(x, y)| affine.apply(x, y))
             .collect();
-        let warp = Warp::new(frame, 3, 3, points, None).unwrap();
+        let warp = Grid::new(frame, 3, 3, points, None).unwrap();
         s.perform(Edit::SetLayerWarp {
             id,
-            warp: Some(Arc::new(warp)),
+            warp: Some(Arc::new(warp.into())),
         })
         .unwrap();
         s
