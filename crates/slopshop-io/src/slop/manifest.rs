@@ -105,7 +105,7 @@ pub(crate) const NODE_VERSION_PATTERN_OVERLAY: u32 = 17;
 /// Bézier patches (see `warp_json`). Written only for those, so that older readers refuse them
 /// instead of showing them unwarped.
 pub(crate) const NODE_VERSION_WARP: u32 = 18;
-/// Version of the nodes, of any type, with a vector mask (schema 0.38, ADR 0041):
+/// Version of the nodes, of any type, with a vector mask (schema 0.39, ADR 0041):
 /// `params.vector_mask` (see `slop::shape`). Written only for those, so that older readers
 /// refuse them instead of showing them unmasked. It reads every parameter of the versions
 /// before it. The newest node version this code reads.
