@@ -449,7 +449,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     `inflate`, `squeeze`, `twist`; the points are what is drawn either way (a style a reader does
     not know reads as none, the grid edited point by point). Another `kind` comes from a newer
     SlopShop and is refused. The layer's mask is warped with it. Only those nodes are written at v18.
-  - v19 (schema 0.39, [ADR 0041](adr/0041-vector-content.md)) is a node of any type with a
+  - v19 (schema 0.40, [ADR 0041](adr/0041-vector-content.md)) is a node of any type with a
     vector mask: `params.vector_mask` is `{"geometry", "inverted", "feather", "enabled"}`,
     `geometry` a path or a live shape in the layer's own space, written as a shape's (see
     `shapes`), `inverted` that the path hides what it encloses (Reveal All) rather than

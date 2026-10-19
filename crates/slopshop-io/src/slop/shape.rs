@@ -32,7 +32,7 @@
 //! alignment point) in the layer's own space; paragraph text (schema 0.38) has a `frame`, its
 //! box's size, and `position` is then the box's top left corner.
 //!
-//! A vector mask (schema 0.39, node version 19) is a node's `params.vector_mask`, its geometry
+//! A vector mask (schema 0.40, node version 19) is a node's `params.vector_mask`, its geometry
 //! written as a shape's, in the layer's own space:
 //!
 //! ```json

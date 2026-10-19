@@ -464,7 +464,7 @@ Raised on 2026-10-05, to schedule:
   - [x] Vector masks: Layer > Vector Mask (Reveal All, Hide All, Current Path, Disable,
         Delete), a path mask beside the pixel mask, anti-aliased and feathered, multiplied with
         it on the CPU and the GPU alike; its thumbnail in the Layers panel, targeted by a click,
-        the Pen drawing and editing in it, Ctrl+Enter, Feather in Properties; `.slop` 0.39
+        the Pen drawing and editing in it, Ctrl+Enter, Feather in Properties; `.slop` 0.40
   - [ ] Vector masks, next: PSD `vmsk` import and export (written as the pixel mask
         meanwhile), Layer > Rasterize > Vector Mask, Density, drawn at the scale they are seen
         (masks of scaled layers are resampled with them)
