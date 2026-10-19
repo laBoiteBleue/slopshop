@@ -196,11 +196,17 @@ test("Box Blur, Median, Maximum and Minimum: a whole radius, up to 2000 or 500 p
   expect(FILTERS.boxBlur.defaults).toEqual([10]);
   expect(validValues("boxBlur", [2000])).toBe(true);
   expect(validValues("boxBlur", [2001])).toBe(false);
-  for (const filter of ["median", "maximum", "minimum"] as const) {
-    expect(FILTERS[filter].defaults).toEqual([1]);
-    expect(validValues(filter, [1])).toBe(true);
-    expect(validValues(filter, [500])).toBe(true);
-    for (const values of [[0], [1.5], [501], [1, 1]]) {
+  expect(FILTERS.median.defaults).toEqual([1]);
+  expect(validValues("median", [500])).toBe(true);
+  for (const values of [[0], [1.5], [501], [1, 1]]) {
+    expect(validValues("median", values)).toBe(false);
+  }
+  // Maximum and Minimum: Preserve Squareness (0) or Roundness (1).
+  for (const filter of ["maximum", "minimum"] as const) {
+    expect(FILTERS[filter].defaults).toEqual([1, 0]);
+    expect(validValues(filter, [1, 0])).toBe(true);
+    expect(validValues(filter, [500, 1])).toBe(true);
+    for (const values of [[0, 0], [1.5, 0], [501, 0], [1], [1, 2]]) {
       expect(validValues(filter, values)).toBe(false);
     }
   }
@@ -559,4 +565,83 @@ test("Pixelate: Photoshop's order and settings; Facet and Fragment apply at once
   expect(FILTERS.mezzotint.defaults).toEqual([0, 0]);
   expect(validValues("mezzotint", [9, 0])).toBe(true);
   expect(validValues("mezzotint", [10, 0])).toBe(false);
+});
+
+test("Other: Photoshop's order; Custom's 5 x 5 weights, Scale and Offset; HSB/HSL's modes", () => {
+  expect(FILTER_MENU.find((m) => m.label === "menu.filter.other")?.filters).toEqual([
+    "custom",
+    "highPass",
+    "hsbHsl",
+    "maximum",
+    "minimum",
+    "offset",
+  ]);
+  // Custom: Photoshop's sharpening kernel, weights of -999 to 999, Scale 1 to 9999, Offset
+  // -9999 to 9999, whole numbers.
+  const custom = FILTERS.custom.defaults;
+  expect(custom).toHaveLength(27);
+  expect(custom.slice(10, 15)).toEqual([0, -1, 5, -1, 0]);
+  expect(custom.slice(25)).toEqual([1, 0]);
+  expect(FILTERS.custom.params.filter((p) => p.kind === "weight")).toHaveLength(25);
+  expect(hasSettings("custom")).toBe(true);
+  const with_ = (i: number, v: number) => custom.map((d, n) => (n === i ? v : d));
+  for (const [i, v] of [
+    [0, -999],
+    [24, 999],
+    [25, 9999],
+    [26, -9999],
+  ]) {
+    expect(validValues("custom", with_(i, v))).toBe(true);
+  }
+  for (const [i, v] of [
+    [0, 1000],
+    [3, 0.5],
+    [25, 0],
+    [26, 10000],
+  ]) {
+    expect(validValues("custom", with_(i, v))).toBe(false);
+  }
+  // HSB/HSL: RGB in, HSB out at first; RGB, HSB or HSL each way.
+  expect(FILTERS.hsbHsl.defaults).toEqual([0, 1]);
+  expect(validValues("hsbHsl", [2, 2])).toBe(true);
+  expect(validValues("hsbHsl", [3, 0])).toBe(false);
+});
+
+test("Noise and Sharpen: Photoshop's order; Despeckle at once, Reduce Noise, Smart Sharpen", () => {
+  expect(FILTER_MENU.find((m) => m.label === "menu.filter.noise")?.filters).toEqual([
+    "addNoise",
+    "despeckle",
+    "dustAndScratches",
+    "median",
+    "reduceNoise",
+  ]);
+  expect(FILTER_MENU.find((m) => m.label === "menu.filter.sharpen")?.filters).toEqual([
+    "smartSharpen",
+    "unsharpMask",
+    "clarityTexture",
+  ]);
+  expect(hasSettings("despeckle")).toBe(false);
+  // Reduce Noise: Strength 0 to 10, three percents.
+  expect(FILTERS.reduceNoise.defaults).toEqual([6, 60, 45, 25]);
+  expect(validValues("reduceNoise", [0, 0, 0, 0])).toBe(true);
+  expect(validValues("reduceNoise", [10, 100, 100, 100])).toBe(true);
+  for (const values of [
+    [11, 60, 45, 25],
+    [5.5, 60, 45, 25],
+    [6, 101, 45, 25],
+  ]) {
+    expect(validValues("reduceNoise", values)).toBe(false);
+  }
+  // Smart Sharpen: Amount 1 to 500 %, Radius 0.1 to 64, Reduce Noise, Lens Blur at first.
+  expect(FILTERS.smartSharpen.defaults).toEqual([200, 1, 10, 1, 0]);
+  expect(validValues("smartSharpen", [1, 0.1, 0, 0, -180])).toBe(true);
+  expect(validValues("smartSharpen", [500, 64, 100, 2, 180])).toBe(true);
+  for (const values of [
+    [0, 1, 10, 1, 0],
+    [200, 65, 10, 1, 0],
+    [200, 1, 10, 3, 0],
+    [200, 1, 10, 1, 181],
+  ]) {
+    expect(validValues("smartSharpen", values)).toBe(false);
+  }
 });

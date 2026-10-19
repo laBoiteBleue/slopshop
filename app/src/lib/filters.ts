@@ -33,8 +33,10 @@ export type NumberParam = {
  * 1); a seed, drawn anew each time the filter is applied (`withNewSeeds`), not shown or, with
  * `randomize`, a button drawing another (Wave's Randomize); a coordinate of a center in
  * percent of the frame (0 to 100), picked in a square: the `x` one shows the square for itself
- * and the `y` one that follows it; or the foreground or background color, not shown, taken
- * each time the filter is applied (`withColors`) and kept by its entry (Clouds').
+ * and the `y` one that follows it; the foreground or background color, not shown, taken each
+ * time the filter is applied (`withColors`) and kept by its entry (Clouds'); or one of Custom's
+ * 5 × 5 weights (a whole number from -999 to 999), the first (`cell` 0) showing the grid of all
+ * of them, row by row.
  */
 export type FilterParam =
   | NumberParam
@@ -42,7 +44,12 @@ export type FilterParam =
   | { kind: "check"; key: string; label: MessageKey }
   | { kind: "seed"; key: string; randomize?: MessageKey }
   | { kind: "center"; key: string; label: MessageKey; axis: "x" | "y" }
-  | { kind: "color"; key: string; color: "foreground" | "background" };
+  | { kind: "color"; key: string; color: "foreground" | "background" }
+  | { kind: "weight"; key: string; cell: number };
+
+/** Custom's weights: whole numbers from -999 to 999 (Photoshop's), 5 × 5 of them. */
+export const MAX_WEIGHT = 999;
+export const KERNEL_SIDE = 5;
 
 /** The seeds a filter takes: whole numbers below 2^24 (the engine's `NOISE_SEEDS`). */
 export const SEEDS = 2 ** 24;
@@ -107,6 +114,14 @@ const squareRadius = (label: MessageKey, max: number, min = 1): NumberParam => (
   decimals: 0,
   scale: "log",
 });
+
+/** Maximum's and Minimum's Preserve: Squareness or Roundness (the square or the disk around). */
+const preserve: FilterParam = {
+  kind: "choice",
+  key: "preserve",
+  label: "filter.preserve",
+  options: ["filter.preserve.squareness", "filter.preserve.roundness"],
+};
 
 /** An amount from -100 to 100 %, Photoshop's (Pinch, Spherize): below 0, the other way. */
 const percent = (label: MessageKey): NumberParam => ({
@@ -299,10 +314,102 @@ export const FILTERS: Record<FilterId, FilterSpec> = {
     defaults: [0, 0],
   },
   highPass: { params: [radius("filter.highPass.radius")], defaults: [10] },
+  custom: {
+    params: [
+      ...Array.from({ length: KERNEL_SIDE * KERNEL_SIDE }, (_, cell): FilterParam => ({
+        kind: "weight",
+        key: `weight${cell}`,
+        cell,
+      })),
+      {
+        kind: "number",
+        key: "scale",
+        label: "filter.custom.scale",
+        min: 1,
+        max: 9999,
+        decimals: 0,
+        scale: "log",
+      },
+      {
+        kind: "number",
+        key: "offset",
+        label: "filter.custom.offset",
+        min: -9999,
+        max: 9999,
+        decimals: 0,
+        scale: "linear",
+      },
+    ],
+    // Photoshop's: a sharpening kernel, the center 5 and its four neighbours -1.
+    defaults: [
+      ...[0, 0, 0, 0, 0],
+      ...[0, 0, -1, 0, 0],
+      ...[0, -1, 5, -1, 0],
+      ...[0, 0, -1, 0, 0],
+      ...[0, 0, 0, 0, 0],
+      1,
+      0,
+    ],
+  },
+  hsbHsl: {
+    params: [
+      {
+        kind: "choice",
+        key: "input",
+        label: "filter.hsbHsl.input",
+        options: ["filter.hsbHsl.rgb", "filter.hsbHsl.hsb", "filter.hsbHsl.hsl"],
+      },
+      {
+        kind: "choice",
+        key: "order",
+        label: "filter.hsbHsl.order",
+        options: ["filter.hsbHsl.rgb", "filter.hsbHsl.hsb", "filter.hsbHsl.hsl"],
+      },
+    ],
+    defaults: [0, 1],
+  },
+  despeckle: { params: [], defaults: [] },
+  reduceNoise: {
+    params: [
+      whole("strength", "filter.reduceNoise.strength", [0, 10]),
+      whole("preserve", "filter.reduceNoise.preserve", [0, 100], "filter.percent"),
+      whole("color", "filter.reduceNoise.color", [0, 100], "filter.percent"),
+      whole("sharpen", "filter.reduceNoise.sharpen", [0, 100], "filter.percent"),
+    ],
+    defaults: [6, 60, 45, 25],
+  },
+  smartSharpen: {
+    params: [
+      whole("amount", "filter.smartSharpen.amount", [1, 500], "filter.percent"),
+      {
+        kind: "number",
+        key: "radius",
+        label: "filter.smartSharpen.radius",
+        unit: "filter.pixels",
+        min: 0.1,
+        max: 64,
+        decimals: 1,
+        scale: "log",
+      },
+      whole("noise", "filter.smartSharpen.noise", [0, 100], "filter.percent"),
+      {
+        kind: "choice",
+        key: "remove",
+        label: "filter.smartSharpen.remove",
+        options: [
+          "filter.smartSharpen.gaussianBlur",
+          "filter.smartSharpen.lensBlur",
+          "filter.smartSharpen.motionBlur",
+        ],
+      },
+      whole("angle", "filter.smartSharpen.angle", [-180, 180], "filter.degrees"),
+    ],
+    defaults: [200, 1, 10, 1, 0],
+  },
   boxBlur: { params: [squareRadius("filter.boxBlur.radius", 2000)], defaults: [10] },
   median: { params: [squareRadius("filter.median.radius", 500)], defaults: [1] },
-  maximum: { params: [squareRadius("filter.maximum.radius", 500)], defaults: [1] },
-  minimum: { params: [squareRadius("filter.minimum.radius", 500)], defaults: [1] },
+  maximum: { params: [squareRadius("filter.maximum.radius", 500), preserve], defaults: [1, 0] },
+  minimum: { params: [squareRadius("filter.minimum.radius", 500), preserve], defaults: [1, 0] },
   findEdges: { params: [], defaults: [] },
   solarize: { params: [], defaults: [] },
   emboss: {
@@ -854,7 +961,10 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
     label: "menu.filter.distort",
     filters: ["pinch", "polarCoordinates", "ripple", "spherize", "twirl", "wave", "zigZag"],
   },
-  { label: "menu.filter.noise", filters: ["addNoise", "dustAndScratches", "median"] },
+  {
+    label: "menu.filter.noise",
+    filters: ["addNoise", "despeckle", "dustAndScratches", "median", "reduceNoise"],
+  },
   {
     label: "menu.filter.pixelate",
     filters: [
@@ -868,7 +978,7 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
     ],
   },
   { label: "menu.filter.render", filters: ["clouds", "differenceClouds", "fibers"] },
-  { label: "menu.filter.sharpen", filters: ["unsharpMask", "clarityTexture"] },
+  { label: "menu.filter.sharpen", filters: ["smartSharpen", "unsharpMask", "clarityTexture"] },
   {
     label: "menu.filter.stylize",
     filters: [
@@ -882,7 +992,10 @@ export const FILTER_MENU: { label: MessageKey; filters: FilterId[] }[] = [
       "wind",
     ],
   },
-  { label: "menu.filter.other", filters: ["highPass", "maximum", "minimum", "offset"] },
+  {
+    label: "menu.filter.other",
+    filters: ["custom", "highPass", "hsbHsl", "maximum", "minimum", "offset"],
+  },
 ];
 
 /** Whether `values` are settings `filter` accepts. */
@@ -911,6 +1024,8 @@ function validValue(param: FilterParam, v: number): boolean {
       return Number.isFinite(v) && v >= 0 && v <= 100;
     case "color":
       return Number.isInteger(v) && v >= 0 && v < PACKED_COLORS;
+    case "weight":
+      return Number.isInteger(v) && Math.abs(v) <= MAX_WEIGHT;
   }
 }
 
