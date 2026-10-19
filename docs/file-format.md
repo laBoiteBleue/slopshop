@@ -491,8 +491,11 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     `{"filter", "values", "selection", "transform", "space"}`: `filter` its identifier
     (`gaussianBlur`), `values` its parameters (Gaussian Blur: the radius, the standard deviation
     in the layer's pixels, 0.1 to 1000; a color a filter keeps, as Clouds' foreground and
-    background, is one value, the sRGB-encoded `0xRRGGBB` as a whole number), the others as an
-    effect step's. A filter reads around
+    background, is one value, the sRGB-encoded `0xRRGGBB` as a whole number; Shear's are as
+    many as its curve takes: Undefined Areas, 0 Wrap Around or 1 Repeat Edge Pixels, then each
+    point's row, in percent of the frame's height from its top, and offset, in percent of half
+    its width (-100 to 100, to the right), 2 to 16 points, the first row 0, the last 100, rows
+    strictly increasing), the others as an effect step's. A filter reads around
     each pixel: the result of the entries below it is filtered whole (the layer's edges
     repeating outward, in premultiplied values of `space`), mixed with what it was by the
     selection's coverage, and rounded to the original's format. Older readers refuse such an
