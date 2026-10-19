@@ -174,3 +174,45 @@ warped by the same grid, both grown by a tile each way so that the layer is opaq
 warp's edges and only the mask's own edges fade, as on screen. The composite's alpha is the new
 mask (`RasterImage::alpha_mask`); the mask keeps whether it is enabled and replaces the layer's
 alpha. Tested against the display: the same pixels before and after.
+
+## Implementation of Perspective Warp, part 1 (2026-10-19)
+
+Status: accepted (2026-10-19, under the maintainer's delegation; to review).
+
+- **Model**: `Warp` is an enum: `Grid` (Warp's Bézier grid, unchanged) or `Planes` (Perspective
+  Warp's). Planes are corners where they were laid out and where they were moved (content
+  pixels), each plane four indices into them, over the same `frame` as a grid (the layer's
+  visible pixels when first warped). Planes listing the same two corners are joined along that
+  edge: moving a corner moves every plane it belongs to. A layer has one warp: Warp refuses a
+  layer warped by planes and Perspective Warp a layer warped by a grid, each with a message
+  saying what edits it or that Rasterize bakes it first (Photoshop would warp the warped
+  pixels; a kept warp cannot hold both).
+- **Map**: each plane maps its quad as laid out to its quad as moved by a homography. Two
+  homographies that agree on an edge's two corners send the edge onto the same segment but
+  spread its points differently, which would tear the image along a joined edge. Each plane's
+  map is therefore its homography plus a correction along its joined edges (the mean of the
+  joined planes' images of each edge point minus its own, on the same segment: the edge stays
+  straight), blended inward as a Coons patch blends its edges, so that it vanishes at the
+  corners and on the free edges; inside a plane, away from joined edges, the map is the
+  homography. The content outside the planes follows them (in Photoshop the whole layer
+  moves): each plane extended beyond its edges by its map's first order there (never through a
+  horizon line, whatever the perspective), the planes weighted by the inverse fourth power of
+  their distance, so that each leads near it.
+- **Mesh**: a regular grid over the frame (64 cells along its longer side, grown by the
+  resampling filter's reach for the edges' antialiasing) for the content outside, then each
+  plane cut into 16 × 16 cells on top, exact along the planes' edges (the last triangle listed
+  wins where they overlap, as for folds). The CPU compositor and the GPU renderer draw the same
+  `PlacedMesh` as for a grid: nothing changed in the renderers. Tested against each other.
+- **Editing**: Edit > Perspective Warp, on pixel layers, in the options bar Layout and Warp.
+  Layout mode shows the layer unwarped: a drag draws a plane (a rectangle, its corners snapped
+  to other planes' corners within 10 CSS pixels so that they share an edge); dragging a corner
+  fits it to the image (its moved position follows by as much), and dropping it by another
+  plane's corner joins them; a click selects a plane, Delete or Backspace removes it. Warp
+  mode moves the corners, the layer warped live. A drag that would fold a plane (not convex)
+  stays where it was. Enter or a double-click applies the planes' warp in either mode (one undo
+  entry), Esc or undo cancels. A layer warped by planes opens in Warp mode, editable again.
+  Removing every plane takes the warp away.
+- **`.slop`**: node version 19 (schema 0.39), `params.warp` of kind `planes`.
+- **Left for part 2**: Shift+click on an edge to straighten it (and keep it straight in later
+  warps), the automatic Straighten buttons (horizontal, vertical, both), dragging an edge or a
+  whole plane, and other layer kinds.

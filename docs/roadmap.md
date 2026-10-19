@@ -540,7 +540,7 @@ Raised on 2026-10-05, to schedule:
 
 ## Open to contributors: advanced transforms
 
-Warp exists in part (below); none of the others has a menu entry until it works (Edit >
+Warp and Perspective Warp exist in part (below); Puppet Warp has no menu entry until it works (Edit >
 Transform lists only what is implemented). Each must stay non-destructive and editable: parameters kept on the layer,
 pixels never resampled into it (as [ADR 0017](adr/0017-non-destructive-transforms.md) does for
 affine transforms), rendered identically on the CPU and the GPU. Discuss the model in an ADR
@@ -555,9 +555,15 @@ first.
       removing a split, several points moved at once.
 - [ ] **Puppet Warp**: a mesh over the layer's content with pins, fixed or moved, for organic
       deformations; pins and mesh kept, editable again.
-- [ ] **Perspective Warp**: quadrilateral planes drawn on the image, connected, then moved
-      together; planes and their positions kept, editable again. Distinct from the simple
-      perspective of Free Transform below.
+- [ ] **Perspective Warp** (Edit > Perspective Warp, [ADR 0044](adr/0044-mesh-warps.md)):
+      quadrilateral planes drawn on the image, connected, then moved together; planes and their
+      positions kept, editable again. Distinct from the simple perspective of Free Transform
+      below. Done: pixel layers, Layout mode (planes drawn as rectangles, snapped and joined at
+      their corners, fitted, deleted) and Warp mode (corners moved, the layer warped live, each
+      plane a homography, joined planes kept joined, the content outside the planes following),
+      Enter and Esc, editable again, `.slop` 0.39, Rasterize. Open: Shift+click to straighten
+      an edge (and keep it straight), the automatic Straighten buttons (horizontal, vertical,
+      both), other layer kinds.
 - [x] **Free Transform: distort and perspective** (corner handles moved freely, Ctrl and
       Alt+Shift+Ctrl as in Photoshop): a projective transform per pixel layer
       ([ADR 0038](adr/0038-projective-transforms.md)).
