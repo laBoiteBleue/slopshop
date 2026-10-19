@@ -17,6 +17,7 @@ export type PanelInfo = {
 export const PANELS = [
   { id: "properties", icon: "sliders", title: "properties.title" },
   { id: "selections", icon: "marquee", title: "selections.title" },
+  { id: "paths", icon: "paths", title: "paths.title" },
   { id: "sources", icon: "sources", title: "sources.title" },
   { id: "history", icon: "history", title: "history.title" },
   { id: "histogram", icon: "histogram", title: "histogram.title" },

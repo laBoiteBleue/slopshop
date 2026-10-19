@@ -2,6 +2,7 @@
   // A vector mask's thumbnail in the Layers panel (ADR 0041), as Photoshop draws it: the canvas
   // gray where the mask hides the layer, white where it shows it, the path's outline between.
   import type { LayerView, Matrix } from "./engine";
+  import PathThumbnail from "./PathThumbnail.svelte";
   import { maskOutline } from "./vectorMask";
 
   let {
@@ -20,56 +21,7 @@
   } = $props();
 
   const outline = $derived(maskOutline(mask, matrix));
-  const rule = $derived(mask.geometry.kind === "path" && mask.geometry.rule === "evenodd");
-  const fitted = $derived.by(() => {
-    const scale = size / Math.max(document.width, document.height, 1);
-    return { width: document.width * scale, height: document.height * scale };
-  });
+  const evenOdd = $derived(mask.geometry.kind === "path" && mask.geometry.rule === "evenodd");
 </script>
 
-<span class="box" style:width="{size}px" style:height="{size}px">
-  <svg
-    class:inverted={mask.inverted}
-    width={fitted.width}
-    height={fitted.height}
-    viewBox="0 0 {document.width} {document.height}"
-    preserveAspectRatio="none"
-    aria-hidden="true"
-  >
-    <rect class="hidden" width={document.width} height={document.height} />
-    {#if outline}
-      <path class="shown" d={outline} fill-rule={rule ? "evenodd" : "nonzero"} />
-    {/if}
-  </svg>
-</span>
-
-<style>
-  .box {
-    display: grid;
-    place-items: center;
-    flex: none;
-  }
-
-  svg {
-    outline: 1px solid var(--border-strong);
-  }
-
-  .hidden {
-    fill: #808080;
-  }
-
-  .shown {
-    fill: #ffffff;
-    stroke: #303030;
-    stroke-width: 1px;
-    vector-effect: non-scaling-stroke;
-  }
-
-  .inverted .hidden {
-    fill: #ffffff;
-  }
-
-  .inverted .shown {
-    fill: #808080;
-  }
-</style>
+<PathThumbnail {outline} {evenOdd} inverted={mask.inverted} {document} {size} />

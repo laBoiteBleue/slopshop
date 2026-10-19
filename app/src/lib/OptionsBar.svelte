@@ -35,6 +35,7 @@
   } from "./typeText";
   import type { FontsView } from "./engine";
   import { styleName } from "./fontStyleName";
+  import type { PenMode } from "./paths";
 
   let {
     tool,
@@ -123,6 +124,7 @@
     onalign,
     ondistribute,
     shape = $bindable(defaultShapeOptions("#000000")),
+    penMode = $bindable("shape"),
     onpickcolor,
     type = $bindable(defaultTypeOptions("#000000")),
     fonts = null,
@@ -143,6 +145,8 @@
     ondistribute?: (distribute: DistributeId) => void;
     /** Shape tools (ADR 0041): the fill and stroke of the next shape, and its geometry's. */
     shape?: ShapeOptions;
+    /** The Pen: shape layers or paths (the Paths panel's), as Photoshop's mode. */
+    penMode?: PenMode;
     /** Shape tools: a swatch was clicked; the color picker sets `shape.fill` or `shape.stroke`. */
     onpickcolor?: (which: "fill" | "stroke") => void;
     /** Type tool (ADR 0041): the next text's settings, or the active text layer's. */
@@ -503,9 +507,15 @@
         })}
       </span>
     {/if}
+  {:else if tool === "pen" && penMode === "path"}
+    {@render penModes()}
   {:else if shapeKindOf(tool) || tool === "pen"}
     <!-- The Pen's paths are filled and stroked as the shape tools' shapes. -->
     {@const kind = shapeKindOf(tool)}
+    {#if tool === "pen"}
+      {@render penModes()}
+      <span class="divider"></span>
+    {/if}
     {#if kind !== "line"}
       <label class="option">
         <input type="checkbox" bind:checked={shape.filled} />
@@ -825,6 +835,14 @@
     {/if}
   {/if}
 </div>
+
+{#snippet penModes()}
+  <!-- Photoshop's Pick Tool Mode: a shape layer, or a path of the Paths panel. -->
+  <select aria-label={t("options.pen.mode")} title={t("options.pen.mode")} bind:value={penMode}>
+    <option value="shape">{t("options.pen.mode.shape")}</option>
+    <option value="path">{t("options.pen.mode.path")}</option>
+  </select>
+{/snippet}
 
 <style>
   .options {

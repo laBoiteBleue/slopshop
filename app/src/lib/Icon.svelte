@@ -89,6 +89,15 @@
     shapeLine: "M4 20L20 4",
     // A pen nib: its point at the bottom left, its slit and breather hole.
     pen: "M4 20l3.5-10L14 6.5l3.5 3.5L14 16.5Z M4 20l6-6 M11.5 12.5h0.01 M14 6.5l2-2 3.5 3.5-2 2",
+    // The Paths panel (ADR 0041): a curve between two anchors (the panel), a circle filled
+    // (Fill Path), drawn twice (Stroke Path), a dashed square with a curve in it (Make Work
+    // Path from Selection), a frame with a circle (Add a Mask).
+    paths: "M5 18C5 9 19 15 19 6 M3.5 16.5h3v3h-3Z M17.5 4.5h3v3h-3Z",
+    pathFill: "M12 4a8 8 0 1 0 0 16a8 8 0 1 0 0-16Z M6 8.5h12 M4.5 12h15 M6 15.5h12",
+    pathStroke: "M12 4a8 8 0 1 0 0 16a8 8 0 1 0 0-16Z M12 7.5a4.5 4.5 0 1 0 0 9a4.5 4.5 0 1 0 0-9Z",
+    pathFromSelection:
+      "M4 4h3 M10 4h4 M17 4h3v3 M20 10v4 M20 17v3h-3 M14 20h-4 M7 20H4v-3 M4 14v-4 M4 7V4 M8 16C8 10 16 14 16 8",
+    pathMask: "M4 5h16v14H4Z M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7Z",
     // A capital T, as Photoshop's Type tool.
     type: "M5 7V4h14v3M12 4v16M9 20h6",
     textLeft: "M4 6h16 M4 10h10 M4 14h16 M4 18h10",

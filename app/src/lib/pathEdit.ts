@@ -25,6 +25,8 @@ export type EditablePath = {
   matrix: Matrix | null;
   /** The layer's vector mask (ADR 0041) rather than its shape. Absent: its shape. */
   vectorMask?: boolean;
+  /** A path of the document (the Paths panel's) rather than a layer's: `layerId` unused. */
+  pathId?: number;
 };
 
 /** What the Pen edits of `layer` (a vector layer among `layers`), null for other layers. */
