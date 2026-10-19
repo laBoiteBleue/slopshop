@@ -300,6 +300,101 @@ pub enum OffsetEdge {
     Wrap,
 }
 
+/// Shear's points at most (as many as a Curves curve's).
+pub const SHEAR_POINTS: usize = crate::curve::CURVE_POINTS;
+
+/// Shear's curve (Photoshop's): how far each row of the frame moves sideways, a smooth curve
+/// (a natural cubic spline, as Curves') through 2 to [`SHEAR_POINTS`] points `[row, offset]`:
+/// `row` in percent of the frame's height from its top (the first point at 0, the last at 100,
+/// strictly increasing), `offset` in percent of half the frame's width (-100 to 100, positive to
+/// the right: the edge of Photoshop's grid moves a row by half the frame).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShearCurve {
+    points: [[f32; 2]; SHEAR_POINTS],
+    len: u8,
+    /// The spline's second derivative at each point (of offsets and rows as fractions): the
+    /// points' function, kept so that each pixel only evaluates it.
+    second: [f32; SHEAR_POINTS],
+}
+
+impl ShearCurve {
+    /// The straight vertical line (Photoshop's Default): no row moves.
+    pub const STRAIGHT: ShearCurve = {
+        let mut points = [[0.0; 2]; SHEAR_POINTS];
+        points[1] = [100.0, 0.0];
+        ShearCurve {
+            points,
+            len: 2,
+            second: [0.0; SHEAR_POINTS],
+        }
+    };
+
+    /// The curve through `points`; `None` unless they are 2 to [`SHEAR_POINTS`], finite, rows
+    /// from 0 to 100 strictly increasing, offsets within -100 to 100.
+    pub fn new(points: &[[f32; 2]]) -> Option<ShearCurve> {
+        let n = points.len();
+        if !(2..=SHEAR_POINTS).contains(&n)
+            || points[0][0] != 0.0
+            || points[n - 1][0] != 100.0
+            || points
+                .iter()
+                .any(|&[row, x]| !row.is_finite() || !(-100.0..=100.0).contains(&x))
+            || points.windows(2).any(|w| w[0][0] >= w[1][0])
+        {
+            return None;
+        }
+        let spline = crate::curve::Spline::new(
+            points
+                .iter()
+                .map(|&[row, x]| (f64::from(row) / 100.0, f64::from(x) / 100.0))
+                .collect(),
+        );
+        let mut curve = ShearCurve {
+            points: [[0.0; 2]; SHEAR_POINTS],
+            len: n as u8,
+            second: [0.0; SHEAR_POINTS],
+        };
+        curve.points[..n].copy_from_slice(points);
+        for (s, &v) in curve.second.iter_mut().zip(spline.second()) {
+            *s = v as f32;
+        }
+        Some(curve)
+    }
+
+    pub fn points(&self) -> &[[f32; 2]] {
+        &self.points[..usize::from(self.len)]
+    }
+
+    /// The spline's second derivatives, a value per point (for the GPU, which evaluates the
+    /// same spline).
+    pub fn second(&self) -> &[f32] {
+        &self.second[..usize::from(self.len)]
+    }
+
+    /// Whether no row moves.
+    pub fn is_straight(&self) -> bool {
+        self.points().iter().all(|&[_, x]| x == 0.0)
+    }
+
+    /// How far the row at `t` (a fraction of the frame's height from its top, clamped to
+    /// `[0, 1]`) moves, in fractions of half the frame's width, within -1 to 1.
+    pub fn offset(&self, t: f64) -> f64 {
+        let p = self.points();
+        let at = |i: usize| (f64::from(p[i][0]) / 100.0, f64::from(p[i][1]) / 100.0);
+        let n = p.len();
+        let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+        let k = p
+            .partition_point(|q| f64::from(q[0]) / 100.0 <= t)
+            .clamp(1, n - 1);
+        let ((x0, y0), (x1, y1)) = (at(k - 1), at(k));
+        let h = x1 - x0;
+        let (a, b) = ((x1 - t) / h, (t - x0) / h);
+        let (s0, s1) = (f64::from(self.second[k - 1]), f64::from(self.second[k]));
+        let y = a * y0 + b * y1 + ((a * a * a - a) * s0 + (b * b * b - b) * s1) * h * h / 6.0;
+        y.clamp(-1.0, 1.0)
+    }
+}
+
 /// How Diffuse moves pixels (Photoshop's Mode).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffuseMode {
@@ -741,6 +836,10 @@ pub enum Filter {
         ridges: f32,
         style: ZigZagStyle,
     },
+    /// Photoshop's Shear: each row of the frame moved sideways as `curve` says; `wrap`: what
+    /// goes beyond the frame comes back on the other side (Wrap Around), else its edges repeat
+    /// (Repeat Edge Pixels).
+    Shear { curve: ShearCurve, wrap: bool },
     /// Photoshop's Radial Blur: each pixel the average of the layer along the arc through it
     /// around `center` (Spin, `amount` degrees) or along the line to it (`zoom`, see
     /// [`ZOOM_SPAN`]), centered on the pixel; `center` in percent of the frame (the selection's
@@ -872,7 +971,7 @@ pub enum Filter {
 impl Filter {
     /// Every filter's identifier, in menu order.
     /// Shadows/Highlights last: it is in Image > Adjustments, not in the Filter menu.
-    pub const IDS: [&'static str; 47] = [
+    pub const IDS: [&'static str; 48] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -911,6 +1010,7 @@ impl Filter {
         "ripple",
         "wave",
         "zigZag",
+        "shear",
         "clouds",
         "differenceClouds",
         "fibers",
@@ -959,6 +1059,7 @@ impl Filter {
             Self::Ripple { .. } => "ripple",
             Self::Wave { .. } => "wave",
             Self::ZigZag { .. } => "zigZag",
+            Self::Shear { .. } => "shear",
             Self::RadialBlur { .. } => "radialBlur",
             Self::SurfaceBlur { .. } => "surfaceBlur",
             Self::SmartBlur { .. } => "smartBlur",
@@ -1121,6 +1222,10 @@ impl Filter {
                     ZigZagStyle::PondRipples => 2.0,
                 },
             ],
+            // Variable: Undefined Areas, then each point's row and offset.
+            Self::Shear { curve, wrap } => std::iter::once(if wrap { 0.0 } else { 1.0 })
+                .chain(curve.points().iter().flatten().copied())
+                .collect(),
             Self::PolarCoordinates { to_polar } => vec![f32::from(u8::from(to_polar))],
             Self::RadialBlur {
                 amount,
@@ -1408,6 +1513,17 @@ impl Filter {
                     _ => return None,
                 },
             }),
+            ("shear", &[edge, ref points @ ..]) if points.len() % 2 == 0 => {
+                let points: Vec<[f32; 2]> = points.chunks(2).map(|p| [p[0], p[1]]).collect();
+                Some(Self::Shear {
+                    curve: ShearCurve::new(&points)?,
+                    wrap: match edge {
+                        0.0 => true,
+                        1.0 => false,
+                        _ => return None,
+                    },
+                })
+            }
             ("polarCoordinates", &[to_polar]) => match to_polar {
                 0.0 => Some(Self::PolarCoordinates { to_polar: false }),
                 1.0 => Some(Self::PolarCoordinates { to_polar: true }),
@@ -1679,6 +1795,10 @@ impl Filter {
                 ridges: 5.0,
                 style: ZigZagStyle::PondRipples,
             }),
+            "shear" => Some(Self::Shear {
+                curve: ShearCurve::STRAIGHT,
+                wrap: true,
+            }),
             "polarCoordinates" => Some(Self::PolarCoordinates { to_polar: true }),
             "radialBlur" => Some(Self::RadialBlur {
                 amount: 10.0,
@@ -1947,7 +2067,8 @@ impl Filter {
                     && ridges.fract() == 0.0
                     && (1.0..=MAX_ZIGZAG_RIDGES).contains(&ridges)
             }
-            Self::PolarCoordinates { .. } | Self::Average => true,
+            // The curve is valid when made.
+            Self::PolarCoordinates { .. } | Self::Average | Self::Shear { .. } => true,
             Self::Clouds { seed, .. } | Self::DifferenceClouds { seed, .. } => seed < NOISE_SEEDS,
             Self::Fibers {
                 variance,
@@ -2063,6 +2184,7 @@ impl Filter {
             | Self::Ripple { .. }
             | Self::Wave { .. }
             | Self::ZigZag { .. }
+            | Self::Shear { .. }
             | Self::PolarCoordinates { .. }
             | Self::RadialBlur { .. }
             | Self::SurfaceBlur { .. }
@@ -2245,6 +2367,7 @@ impl Filter {
             | Self::Ripple { .. }
             | Self::Wave { .. }
             | Self::ZigZag { .. }
+            | Self::Shear { .. }
             | Self::PolarCoordinates { .. }
             | Self::Clouds { .. }
             | Self::DifferenceClouds { .. }
@@ -2372,6 +2495,7 @@ impl Filter {
             | Self::Ripple { .. }
             | Self::Wave { .. }
             | Self::ZigZag { .. }
+            | Self::Shear { .. }
             | Self::PolarCoordinates { .. }
             | Self::Tiles { .. } => f64::INFINITY,
             Self::ClarityTexture { scale, .. } => {
@@ -2684,6 +2808,7 @@ impl Filter {
             | Self::Ripple { .. }
             | Self::Wave { .. }
             | Self::ZigZag { .. }
+            | Self::Shear { .. }
             | Self::PolarCoordinates { .. } => Plan {
                 factor: 1,
                 kernel: Kernel::Identity,
@@ -2708,6 +2833,7 @@ impl Filter {
                 | Self::Ripple { .. }
                 | Self::Wave { .. }
                 | Self::ZigZag { .. }
+                | Self::Shear { .. }
                 | Self::PolarCoordinates { .. }
                 | Self::Tiles { .. }
                 | Self::Crystallize { .. }
@@ -2971,6 +3097,22 @@ impl Filter {
                     }
                 }
             }
+            Self::Shear { curve, wrap } => {
+                if w <= 0.0 || h <= 0.0 {
+                    return Some(p);
+                }
+                // Read from as far back as the row moves.
+                let x = p[0] - curve.offset((p[1] - top) / h) * w / 2.0;
+                Some([
+                    if wrap {
+                        left + (x - left).rem_euclid(w)
+                    } else {
+                        // The frame's edge pixels (the selection's box's, not the layer's beyond).
+                        x.clamp(left + 0.5, (right - 0.5).max(left + 0.5))
+                    },
+                    p[1],
+                ])
+            }
             Self::Tiles {
                 tiles,
                 offset,
@@ -3081,6 +3223,7 @@ impl Filter {
                 | Self::Ripple { .. }
                 | Self::Wave { .. }
                 | Self::ZigZag { .. }
+                | Self::Shear { .. }
                 | Self::PolarCoordinates { .. }
                 | Self::RadialBlur { .. }
                 | Self::SurfaceBlur { .. }
@@ -3193,6 +3336,7 @@ impl Filter {
             | Self::Ripple { .. }
             | Self::Wave { .. }
             | Self::ZigZag { .. }
+            | Self::Shear { .. }
             | Self::PolarCoordinates { .. }
             | Self::RadialBlur { .. }
             | Self::SurfaceBlur { .. }
@@ -6447,6 +6591,95 @@ mod tests {
             assert!(f.is_valid() && f.samples() && f.scaled(4.0) == f, "{id}");
             assert_eq!(Filter::from_params(id, &f.params()), Some(f));
         }
+    }
+
+    #[test]
+    fn shear_curves_take_two_to_sixteen_points_from_top_to_bottom() {
+        assert_eq!(
+            ShearCurve::new(&[[0.0, 0.0], [100.0, 0.0]]),
+            Some(ShearCurve::STRAIGHT)
+        );
+        assert!(ShearCurve::STRAIGHT.is_straight());
+        for wrong in [
+            vec![[0.0, 0.0]],
+            vec![[0.0, 0.0], [90.0, 0.0]],
+            vec![[10.0, 0.0], [100.0, 0.0]],
+            vec![[0.0, 0.0], [50.0, 0.0], [50.0, 10.0], [100.0, 0.0]],
+            vec![[0.0, 0.0], [60.0, 0.0], [40.0, 0.0], [100.0, 0.0]],
+            vec![[0.0, 101.0], [100.0, 0.0]],
+            vec![[0.0, 0.0], [f32::NAN, 0.0], [100.0, 0.0]],
+            vec![[0.0, f32::INFINITY], [100.0, 0.0]],
+        ] {
+            assert!(ShearCurve::new(&wrong).is_none(), "{wrong:?}");
+        }
+        let many: Vec<[f32; 2]> = (0..=16).map(|i| [i as f32 * 6.25, 0.0]).collect();
+        assert!(ShearCurve::new(&many).is_none());
+        let sixteen: Vec<[f32; 2]> = (0..16).map(|i| [i as f32 * 100.0 / 15.0, 0.0]).collect();
+        assert!(ShearCurve::new(&sixteen).is_some());
+        // Two points: a straight slant, from one offset to the other.
+        let slant = ShearCurve::new(&[[0.0, -40.0], [100.0, 60.0]]).unwrap();
+        for (t, x) in [(0.0, -0.4), (0.5, 0.1), (1.0, 0.6), (0.25, -0.15)] {
+            assert!((slant.offset(t) - x).abs() < 1e-6, "{t}");
+        }
+        // Through its points, smoothly between them, flat beyond the frame.
+        let bend =
+            ShearCurve::new(&[[0.0, 0.0], [30.0, 50.0], [70.0, -20.0], [100.0, 0.0]]).unwrap();
+        assert!(!bend.is_straight());
+        for (t, x) in [(0.0, 0.0), (0.3, 0.5), (0.7, -0.2), (1.0, 0.0)] {
+            assert!((bend.offset(t) - x).abs() < 1e-6, "{t}");
+        }
+        assert!(bend.offset(0.15) > 0.0 && bend.offset(0.5) < 0.5 && bend.offset(0.5) > -0.2);
+        assert_eq!(bend.offset(-1.0), bend.offset(0.0));
+        assert_eq!(bend.offset(2.0), bend.offset(1.0));
+        // A spline overshooting the grid stays within it.
+        let steep =
+            ShearCurve::new(&[[0.0, 100.0], [10.0, -100.0], [20.0, 100.0], [100.0, 0.0]]).unwrap();
+        assert!((0..=100).all(|i| steep.offset(f64::from(i) / 100.0).abs() <= 1.0));
+    }
+
+    #[test]
+    fn shear_moves_each_row_and_keeps_its_points_in_its_values() {
+        let curve = ShearCurve::new(&[[0.0, 50.0], [50.0, 0.0], [100.0, -25.0]]).unwrap();
+        let shear = |wrap| Filter::Shear { curve, wrap };
+        // Undefined Areas then each point's row and offset, as many as it has.
+        assert_eq!(
+            shear(true).params(),
+            vec![0.0, 0.0, 50.0, 50.0, 0.0, 100.0, -25.0]
+        );
+        assert_eq!(
+            Filter::from_params("shear", &shear(false).params()),
+            Some(shear(false))
+        );
+        assert_eq!(
+            Filter::from_params("shear", &[0.0, 0.0, 0.0, 100.0, 0.0]),
+            Filter::defaults("shear")
+        );
+        for wrong in [
+            &[0.0, 0.0, 0.0, 100.0, 0.0, 50.0][..],
+            &[0.0, 0.0, 0.0][..],
+            &[2.0, 0.0, 0.0, 100.0, 0.0][..],
+            &[][..],
+        ] {
+            assert_eq!(Filter::from_params("shear", wrong), None, "{wrong:?}");
+        }
+        assert!(shear(true).samples() && shear(true).framed());
+        assert_eq!(
+            shear(true).scaled(4.0),
+            shear(true),
+            "in the layer's pixels"
+        );
+        // A frame 200 wide from x = 100: the top row moves by a quarter of it, to the right.
+        let frame = [100.0, 0.0, 300.0, 100.0];
+        let layer = [400.0, 100.0];
+        let read = |f: Filter, p| f.source(p, frame, layer).unwrap();
+        assert_eq!(read(shear(true), [200.0, 0.0]), [150.0, 0.0]);
+        assert_eq!(read(shear(true), [240.0, 50.0]), [240.0, 50.0]);
+        // Wrapped within the frame, or its edge's pixels repeated.
+        assert_eq!(read(shear(true), [120.0, 0.0]), [270.0, 0.0]);
+        assert_eq!(read(shear(false), [120.0, 0.0]), [100.5, 0.0]);
+        let bottom = read(shear(false), [290.0, 100.0]);
+        assert_eq!(bottom, [299.5, 100.0]);
+        assert_eq!(read(shear(true), [290.0, 100.0]), [115.0, 100.0]);
     }
 
     #[test]

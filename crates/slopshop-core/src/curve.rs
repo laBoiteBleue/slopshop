@@ -122,6 +122,11 @@ impl Spline {
         Spline { points, second }
     }
 
+    /// Its second derivative at each point.
+    pub(crate) fn second(&self) -> &[f64] {
+        &self.second
+    }
+
     /// Its value at `x`: flat outside its points, clamped to `[0, 1]`.
     pub(crate) fn value(&self, x: f64) -> f64 {
         let p = &self.points;
