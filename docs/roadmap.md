@@ -488,6 +488,14 @@ Raised on 2026-10-05, to schedule:
         Delete), a path mask beside the pixel mask, anti-aliased and feathered, multiplied with
         it on the CPU and the GPU alike; its thumbnail in the Layers panel, targeted by a click,
         the Pen drawing and editing in it, Ctrl+Enter, Feather in Properties; `.slop` 0.40
+  - [x] The Paths panel (Window > Paths, ADR 0041): the Work Path (the Pen's Path mode),
+        saved paths (Save, Duplicate, Delete, Rename, New Path), the active layer's shape path
+        and vector mask; Fill Path, Stroke Path (Brush or Eraser, Simulate Pressure), Load
+        Path as Selection (Ctrl+click), Make Work Path from Selection (Tolerance), Add a Mask;
+        a chosen path drawn into and edited with the Pen; `.slop` 0.41
+  - [ ] Paths, next: PSD path resources (1025, 2000–2997), the chosen path shown with any
+        tool, dragging rows (reorder, onto New Path or Delete), Stroke Path with the other
+        painting tools, a clipping path
   - [ ] Vector masks, next: PSD `vmsk` import and export (written as the pixel mask
         meanwhile), Layer > Rasterize > Vector Mask, Density, drawn at the scale they are seen
         (masks of scaled layers are resampled with them)

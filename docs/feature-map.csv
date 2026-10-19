@@ -564,7 +564,7 @@ Menu,Window > Navigator,,open,
 Menu,Window > Notes,,open,
 Menu,Window > Paragraph,,open,text layers are not started
 Menu,Window > Paragraph Styles,,open,text layers are not started
-Menu,Window > Paths,,open,
+Menu,Window > Paths,,done,"the Paths panel (ADR 0041): Work Path, saved paths, the active layer's shape path and vector mask; Save, Duplicate, Delete, Rename, New Path; Fill Path (Edit > Fill), Stroke Path (Brush or Eraser, Simulate Pressure), Load as Selection (Ctrl+click), Make Work Path from Selection (Tolerance), Add a Mask; PSD path resources later"
 Menu,Window > Patterns,,open,
 Menu,Window > Properties,,done,
 Menu,Window > Shapes,,open,
@@ -644,7 +644,7 @@ Tool,Tools panel > Blur > Smudge,,done,"as paint in the layer's stack, the origi
 Tool,Tools panel > Dodge/Burn > Dodge,,done,"as paint in the layer's stack, the original kept"
 Tool,Tools panel > Dodge/Burn > Burn,,done,"as paint in the layer's stack, the original kept"
 Tool,Tools panel > Dodge/Burn > Sponge,,open,Dodge and Burn exist; good next tone tool
-Tool,Tools panel > Pen > Pen,,done,"P: a vector layer whose geometry is a path (ADR 0041); click a corner, drag a smooth anchor (Alt frees the handle), Shift at 45° steps, Enter, Esc, Backspace; Ctrl+Enter makes a selection; a vector layer's anchors and handles are edited with the Pen (Ctrl and Alt, as Photoshop's)"
+Tool,Tools panel > Pen > Pen,,done,"P: a vector layer whose geometry is a path (ADR 0041); click a corner, drag a smooth anchor (Alt frees the handle), Shift at 45° steps, Enter, Esc, Backspace; Ctrl+Enter makes a selection; a vector layer's anchors and handles are edited with the Pen (Ctrl and Alt, as Photoshop's); Shape or Path mode (the Work Path, the path chosen in the Paths panel)"
 Tool,Tools panel > Pen > Freeform Pen,,open,the Pen exists (one simplified Pen: toolbar decision)
 Tool,Tools panel > Pen > Curvature Pen,,open,the Pen exists (one simplified Pen: toolbar decision)
 Tool,Tools panel > Pen > Add Anchor Point,,done,"a Pen gesture, as Photoshop's auto add: a click on the active vector layer's path (ADR 0041)"
@@ -749,7 +749,7 @@ Panel,Window > Navigator,,open,
 Panel,Window > Notes,,open,
 Panel,Window > Paragraph,,open,text layers are not started
 Panel,Window > Paragraph Styles,,open,text layers are not started
-Panel,Window > Paths,,open,
+Panel,Window > Paths,,done,"in the dock (ADR 0041); a chosen path is drawn into and edited with the Pen; shown on the canvas only with the Pen (Photoshop shows it with any tool); path operations and dragging rows are open"
 Panel,Window > Patterns,,open,
 Panel,Window > Properties,,done,
 Panel,Window > Shapes,,open,
