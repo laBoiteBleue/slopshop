@@ -117,3 +117,63 @@ test("typing does not ask the family's styles again", async () => {
   await waitFor(() => expect(props.stylesOf).toHaveBeenCalledTimes(2));
   expect(props.stylesOf).toHaveBeenLastCalledWith("Arial");
 });
+
+const button = (name: string) => screen.getByRole("button", { name });
+
+test("Photoshop's style buttons show what the characters are and toggle it", async () => {
+  const styled = text([
+    { start: 0, end: 5, style: { underline: true, baseline: "superscript" } },
+    { start: 6, end: 11, style: { fauxBold: true } },
+  ]);
+  const { props, user } = show(styled, [0, 5]);
+  const order = [
+    "Faux Bold",
+    "Faux Italic",
+    "All Caps",
+    "Small Caps",
+    "Superscript",
+    "Subscript",
+    "Underline",
+    "Strikethrough",
+  ];
+  for (const name of order) {
+    const on = name === "Underline" || name === "Superscript";
+    expect(button(name)).toHaveAttribute("aria-pressed", String(on));
+  }
+  expect(button("Standard Ligatures")).toHaveAttribute("aria-pressed", "true");
+  await user.click(button("Underline"));
+  expect(props.onstyle).toHaveBeenLastCalledWith({ underline: false });
+  // Subscript replaces Superscript; Faux Bold on.
+  await user.click(button("Subscript"));
+  expect(props.onstyle).toHaveBeenLastCalledWith({ baseline: "subscript" });
+  await user.click(button("Faux Bold"));
+  expect(props.onstyle).toHaveBeenLastCalledWith({ fauxBold: true });
+  await user.click(button("Standard Ligatures"));
+  expect(props.onstyle).toHaveBeenLastCalledWith({ ligatures: false });
+});
+
+test("a style button shows released over characters set apart, and sets them all", async () => {
+  const styled = text([{ start: 0, end: 5, style: { fauxBold: true } }]);
+  const { props, user } = show(styled, [3, 8]);
+  expect(button("Faux Bold")).toHaveAttribute("aria-pressed", "false");
+  await user.click(button("Faux Bold"));
+  expect(props.onstyle).toHaveBeenLastCalledWith({ fauxBold: true });
+});
+
+test("at a caret, the character before it with the style pending there", () => {
+  const styled = text([{ start: 0, end: 5, style: { fauxItalic: true } }]);
+  render(CharacterProperties, {
+    text: styled,
+    range: [5, 5],
+    pending: { strikethrough: true, size: 48 },
+    ppi: 144,
+    fonts: null,
+    stylesOf: vi.fn(async () => []),
+    onstyle: vi.fn(),
+    onalign: vi.fn(),
+    onpickcolor: vi.fn(),
+  });
+  expect(button("Faux Italic")).toHaveAttribute("aria-pressed", "true");
+  expect(button("Strikethrough")).toHaveAttribute("aria-pressed", "true");
+  expect(field("Font size")).toHaveValue(24);
+});

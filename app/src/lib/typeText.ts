@@ -100,10 +100,16 @@ export function withOptions(
 
 /**
  * The options a text layer shows in the options bar: the characters of `range` (UTF-16 units,
- * the first one's settings), else the text's own.
+ * the first one's settings; at a caret, the character before it with `pending` over it), else
+ * the text's own.
  */
-export function optionsOf(text: TextDto, ppi: number, range?: [number, number]): TypeOptions {
-  const s = range ? styleAt(text, range[0], range[1]).settings : charSettings(text);
+export function optionsOf(
+  text: TextDto,
+  ppi: number,
+  range?: [number, number],
+  pending: CharStyleDto | null = null,
+): TypeOptions {
+  const s = range ? styleAt(text, range[0], range[1], pending).settings : charSettings(text);
   return {
     family: s.family,
     weight: s.weight,

@@ -63,8 +63,15 @@
     onshapecolor?: (layer: LayerView, which: "fill" | "stroke") => void;
     /** A pattern fill layer's pattern was clicked: the app lets another be chosen (ADR 0042). */
     onpattern?: (layer: LayerView) => void;
-    /** The text layer shown is being typed: its text as typed, and the characters selected. */
-    typedText?: { text: TextDto; selection: [number, number] } | null;
+    /**
+     * The text layer shown is being typed: its text as typed, the characters selected (or its
+     * caret), and the style chosen at the caret for the next characters typed.
+     */
+    typedText?: {
+      text: TextDto;
+      selection: [number, number];
+      pending: CharStyleDto | null;
+    } | null;
     /** The document's resolution (type sizes in points). */
     ppi?: number;
     /** The fonts to choose from, once listed. */
@@ -218,7 +225,8 @@
   {@const typed = typedText}
   <CharacterProperties
     text={typed?.text ?? layer.text}
-    range={typed && typed.selection[0] !== typed.selection[1] ? typed.selection : null}
+    range={typed ? typed.selection : null}
+    pending={typed?.pending ?? null}
     {ppi}
     {fonts}
     {stylesOf}

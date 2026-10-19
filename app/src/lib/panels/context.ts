@@ -37,7 +37,11 @@ export type PanelContext = {
   /** Another library pattern chosen for a pattern fill layer (ADR 0042). */
   pickPattern(layer: LayerView): void;
   /** The active text layer being typed: its text as typed and the characters selected. */
-  readonly typedText: { text: TextDto; selection: [number, number] } | null;
+  readonly typedText: {
+    text: TextDto;
+    selection: [number, number];
+    pending: CharStyleDto | null;
+  } | null;
   /** The fonts to choose from, once listed (a text layer or the Type tool shown). */
   readonly fonts: FontsView | null;
   /** The styles a font family offers. */

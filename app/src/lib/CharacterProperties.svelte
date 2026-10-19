@@ -1,9 +1,11 @@
 <script lang="ts">
   // A text layer's Character settings in the Properties panel (ADR 0041, Photoshop's Character
   // and Paragraph panels in one section): font family and style, size and leading in points,
-  // tracking, color, and the paragraph's alignment. While the text is typed they show and set
-  // the characters selected, else (nothing selected, or not typed) the whole text. A setting
-  // the characters do not share shows empty (`textStyle.ts`).
+  // tracking, color, Photoshop's row of style buttons (Faux Bold to Strikethrough) and Standard
+  // Ligatures, and the paragraph's alignment. While the text is typed they show and set the
+  // characters selected; at a caret, the character before it with the style chosen there for
+  // the next characters typed (Photoshop's pending style); not typed, the whole text. A
+  // setting the characters do not share shows empty (`textStyle.ts`).
   import { untrack } from "svelte";
   import type { CharStyleDto, FontsView, TextAlign, TextDto } from "./engine";
   import { styleName } from "./fontStyleName";
@@ -11,7 +13,7 @@
   import { t } from "./i18n/index.svelte";
   import { keepFocus } from "./platform";
   import { srgbToHex } from "./color";
-  import { styleAt } from "./textStyle";
+  import { isPressed, STYLE_BUTTONS, styleAt, toggleStyle, type CharToggle } from "./textStyle";
   import {
     clampSizePt,
     MAX_SIZE_PT,
@@ -25,6 +27,7 @@
   let {
     text,
     range,
+    pending = null,
     ppi,
     fonts,
     stylesOf,
@@ -33,8 +36,13 @@
     onpickcolor,
   }: {
     text: TextDto;
-    /** The characters selected while the text is typed (UTF-16 units); null: the whole text. */
+    /**
+     * The characters selected while the text is typed, or its caret (UTF-16 units); null: the
+     * whole text (not typed).
+     */
     range: [number, number] | null;
+    /** The style chosen at the caret for the next characters typed. */
+    pending?: CharStyleDto | null;
     /** The document's resolution, through which points are pixels (ADR 0028). */
     ppi: number;
     fonts: FontsView | null;
@@ -47,7 +55,7 @@
   } = $props();
 
   const shown = $derived(
-    range ? styleAt(text, range[0], range[1]) : styleAt(text, 0, text.content.length),
+    range ? styleAt(text, range[0], range[1], pending) : styleAt(text, 0, text.content.length),
   );
   const settings = $derived(shown.settings);
   const mixed = $derived(new Set(shown.mixed));
@@ -97,6 +105,9 @@
     const value = typed(e);
     if (value !== null) onstyle({ tracking: Math.min(Math.max(Math.round(value), -1000), 1000) });
   }
+
+  /** A style button: pressed, or not, by the characters' settings. */
+  const pressed = (toggle: CharToggle) => isPressed(toggle, settings, shown.mixed);
 
   const ALIGNS = [
     { align: "left", icon: "textLeft" },
@@ -207,6 +218,36 @@
       onclick={onpickcolor}
     ></button>
   </div>
+  <div class="row buttons">
+    {#each STYLE_BUTTONS as toggle (toggle)}
+      <button
+        type="button"
+        class="icon-btn"
+        class:on={pressed(toggle)}
+        aria-pressed={pressed(toggle)}
+        title={t(`properties.character.${toggle}`)}
+        aria-label={t(`properties.character.${toggle}`)}
+        onmousedown={keepFocus}
+        onclick={() => onstyle(toggleStyle(toggle, pressed(toggle)))}
+      >
+        <Icon name={toggle} />
+      </button>
+    {/each}
+  </div>
+  <div class="row buttons">
+    <button
+      type="button"
+      class="icon-btn"
+      class:on={pressed("ligatures")}
+      aria-pressed={pressed("ligatures")}
+      title={t("properties.character.ligatures")}
+      aria-label={t("properties.character.ligatures")}
+      onmousedown={keepFocus}
+      onclick={() => onstyle(toggleStyle("ligatures", pressed("ligatures")))}
+    >
+      <Icon name="ligatures" />
+    </button>
+  </div>
   <div class="row">
     {#each ALIGNS as entry (entry.align)}
       <button
@@ -253,6 +294,12 @@
 
   .row input[type="number"] {
     width: 64px;
+  }
+
+  /* Photoshop's row of buttons, side by side. */
+  .row.buttons {
+    gap: 2px;
+    flex-wrap: wrap;
   }
 
   .wide {
