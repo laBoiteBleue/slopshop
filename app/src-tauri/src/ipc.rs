@@ -1282,10 +1282,14 @@ pub enum EditRequest {
         index: Option<usize>,
     },
     /// A text layer's text, on every linked copy; a layer still named after its text is named
-    /// after the new one.
+    /// after the new one. `typed`: the characters just typed, in a style chosen at the caret
+    /// before (Photoshop's pending style): `range` (UTF-16 code units of the new content) and
+    /// `style`, applied over what they take from their neighbors.
     SetText {
         id: u64,
         text: crate::text::TextDto,
+        #[serde(default)]
+        typed: Option<crate::text::TypedDto>,
     },
     /// Characters of a text layer set otherwise (the Character settings, ADR 0041): those of
     /// `range` (UTF-16 code units, start and end), or with none the whole text, which then
@@ -1993,10 +1997,17 @@ impl EditRequest {
                     },
                 }
             }
-            EditRequest::SetText { id, text } => {
+            EditRequest::SetText { id, text, typed } => {
                 let id = LayerId::from_raw(id);
                 // The layer's spans follow the content's change.
                 let text = crate::text::text_of(session.document(), id)?.retyped(text.text()?);
+                let text = match typed {
+                    Some(typed) => {
+                        let range = crate::text::byte_range(&text, Some(typed.range))?;
+                        text.styled(range, &typed.style.style()?)
+                    }
+                    None => text,
+                };
                 let (outlines, paints) = crate::text::lay_out(&text)?;
                 Edit::retext(session.document(), id, text, outlines, paints)
                     .map_err(|e| e.to_string())?

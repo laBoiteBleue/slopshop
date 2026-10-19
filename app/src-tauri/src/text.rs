@@ -6,7 +6,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use slopshop_core::document::{Document, LayerContent};
-use slopshop_core::shape::{CharStyle, Shape, Text, TextAlign, TextSpan};
+use slopshop_core::shape::{CharStyle, Shape, Text, TextAlign, TextBaseline, TextCase, TextSpan};
 use slopshop_core::{LayerId, LinearRgba};
 use slopshop_text::Fonts;
 use tauri::State;
@@ -28,6 +28,66 @@ pub enum TextAlignDto {
     Left,
     Center,
     Right,
+}
+
+/// All Caps and Small Caps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextCaseDto {
+    #[default]
+    Normal,
+    AllCaps,
+    SmallCaps,
+}
+
+/// Superscript and Subscript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextBaselineDto {
+    #[default]
+    Normal,
+    Superscript,
+    Subscript,
+}
+
+impl TextCaseDto {
+    fn case(self) -> TextCase {
+        match self {
+            Self::Normal => TextCase::Normal,
+            Self::AllCaps => TextCase::AllCaps,
+            Self::SmallCaps => TextCase::SmallCaps,
+        }
+    }
+
+    fn of(case: TextCase) -> Self {
+        match case {
+            TextCase::Normal => Self::Normal,
+            TextCase::AllCaps => Self::AllCaps,
+            TextCase::SmallCaps => Self::SmallCaps,
+        }
+    }
+}
+
+impl TextBaselineDto {
+    fn baseline(self) -> TextBaseline {
+        match self {
+            Self::Normal => TextBaseline::Normal,
+            Self::Superscript => TextBaseline::Superscript,
+            Self::Subscript => TextBaseline::Subscript,
+        }
+    }
+
+    fn of(baseline: TextBaseline) -> Self {
+        match baseline {
+            TextBaseline::Normal => Self::Normal,
+            TextBaseline::Superscript => Self::Superscript,
+            TextBaseline::Subscript => Self::Subscript,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A text as the UI sends and reads it: sizes in pixels (the UI shows points through the
@@ -54,6 +114,22 @@ pub struct TextDto {
     /// Paragraph text: its box's width and height; none: point text.
     #[serde(default)]
     pub frame: Option<[f64; 2]>,
+    /// The character styles of Photoshop's row of buttons, and Standard Ligatures (on when
+    /// absent).
+    #[serde(default)]
+    pub faux_bold: bool,
+    #[serde(default)]
+    pub faux_italic: bool,
+    #[serde(default)]
+    pub case: TextCaseDto,
+    #[serde(default)]
+    pub baseline: TextBaselineDto,
+    #[serde(default)]
+    pub underline: bool,
+    #[serde(default)]
+    pub strikethrough: bool,
+    #[serde(default = "yes")]
+    pub ligatures: bool,
     /// Characters set otherwise, in UTF-16 code units of `content`. Views give them; `setText`
     /// keeps the layer's own, following the content's change, and `styleText` changes them.
     #[serde(default)]
@@ -84,6 +160,20 @@ pub struct CharStyleDto {
         with = "present_or_null"
     )]
     pub leading: Option<Option<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faux_bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faux_italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case: Option<TextCaseDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<TextBaselineDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strikethrough: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ligatures: Option<bool>,
 }
 
 /// A field that is absent (`None`), null (`Some(None)`) or a value.
@@ -97,6 +187,13 @@ mod present_or_null {
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<f64>>, D::Error> {
         Option::<f64>::deserialize(d).map(Some)
     }
+}
+
+/// Characters just typed (`range`, UTF-16 code units of the new content), in `style`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TypedDto {
+    pub range: [usize; 2],
+    pub style: CharStyleDto,
 }
 
 /// Characters `start..end` (UTF-16 code units) set in `style`.
@@ -121,6 +218,13 @@ impl CharStyleDto {
                 .map(|[r, g, b, a]| LinearRgba::from_srgb_encoded_to_working(r, g, b, a)),
             tracking: self.tracking,
             leading: self.leading,
+            faux_bold: self.faux_bold,
+            faux_italic: self.faux_italic,
+            case: self.case.map(TextCaseDto::case),
+            baseline: self.baseline.map(TextBaselineDto::baseline),
+            underline: self.underline,
+            strikethrough: self.strikethrough,
+            ligatures: self.ligatures,
         };
         if style.is_valid() {
             Ok(style)
@@ -138,6 +242,13 @@ impl CharStyleDto {
             color: style.color.map(|c| c.working_to_srgb_encoded()),
             tracking: style.tracking,
             leading: style.leading,
+            faux_bold: style.faux_bold,
+            faux_italic: style.faux_italic,
+            case: style.case.map(TextCaseDto::of),
+            baseline: style.baseline.map(TextBaselineDto::of),
+            underline: style.underline,
+            strikethrough: style.strikethrough,
+            ligatures: style.ligatures,
         }
     }
 }
@@ -178,6 +289,13 @@ impl TextDto {
             color: LinearRgba::from_srgb_encoded_to_working(r, g, b, a),
             tracking: self.tracking,
             leading: self.leading,
+            faux_bold: self.faux_bold,
+            faux_italic: self.faux_italic,
+            case: self.case.case(),
+            baseline: self.baseline.baseline(),
+            underline: self.underline,
+            strikethrough: self.strikethrough,
+            ligatures: self.ligatures,
             align: match self.align {
                 TextAlignDto::Left => TextAlign::Left,
                 TextAlignDto::Center => TextAlign::Center,
@@ -215,6 +333,13 @@ impl TextDto {
             color: text.color.working_to_srgb_encoded(),
             tracking: text.tracking,
             leading: text.leading,
+            faux_bold: text.faux_bold,
+            faux_italic: text.faux_italic,
+            case: TextCaseDto::of(text.case),
+            baseline: TextBaselineDto::of(text.baseline),
+            underline: text.underline,
+            strikethrough: text.strikethrough,
+            ligatures: text.ligatures,
             align: match text.align {
                 TextAlign::Left => TextAlignDto::Left,
                 TextAlign::Center => TextAlignDto::Center,
