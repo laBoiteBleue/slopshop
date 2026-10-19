@@ -386,6 +386,15 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       4 pixels apart diagonally) and Mezzotint (Fine, Medium, Grainy, Coarse Dots, Short, Medium,
       Long Lines and Strokes: each channel full or none against a random pattern); random ones
       with a seed drawn at each application; on the CPU (their looks too)
+- [x] Filter > Other > Custom (5 × 5 weights of -999 to 999, Scale, Offset; Photoshop's
+      sharpening kernel at first) and HSB/HSL (Input Mode and Row Order: RGB, HSB, HSL), Maximum's
+      and Minimum's Preserve Roundness (the disk's extremes, exact up to 32 pixels, beyond on the
+      layer reduced to blocks' extremes); Filter > Noise > Despeckle (applied at once) and Reduce
+      Noise (Strength, Preserve Details, Reduce Color Noise, Sharpen Details: the lightness and
+      the colors smoothed apart by guided filters, edges kept); Filter > Sharpen > Smart Sharpen
+      (Amount, Radius, Reduce Noise, Remove Gaussian Blur, Lens Blur without halos, Motion Blur
+      with its Angle); on the CPU (their looks too). Not yet: Reduce Noise's Remove JPEG Artifact
+      and Advanced (per channel) mode, Smart Sharpen's Shadows/Highlights fading and presets
 - [x] Filter > Liquify (Shift+Ctrl+X, [ADR 0037](adr/0037-liquify.md)): a displacement field kept
       as a stack entry (sparse tiles of a grid of 1, 2 or 4 pixels a node), edited again in its
       own workspace (Forward Warp, Reconstruct, Smooth, Twirl, Pucker, Bloat, Push Left, Freeze
