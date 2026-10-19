@@ -57,6 +57,7 @@ pub mod paint;
 pub mod pattern;
 pub mod pick;
 pub mod quick_select;
+pub mod paths;
 pub mod raster;
 pub mod resample;
 pub mod selection;
@@ -80,6 +81,7 @@ pub use document::{
 };
 pub use edit::{Arrange, Edit, EditError, ImageTurn, Lock};
 pub use geom::{Rect, Size};
+pub use paths::{DocumentPath, PathId};
 pub use job::{CancelToken, Progress};
 pub use raster::RasterImage;
 pub use session::{Copies, HistoryLabel, Session};

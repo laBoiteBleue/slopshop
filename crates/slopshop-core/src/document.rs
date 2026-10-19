@@ -717,6 +717,10 @@ pub struct Document {
     /// Selections kept by name, in the order they were saved; saved with the document.
     saved_selections: Vec<SavedSelection>,
     next_saved_selection_id: u64,
+    /// The Paths panel's paths (ADR 0041): saved paths and the Work Path, in the panel's
+    /// order; saved with the document.
+    paths: Vec<crate::paths::DocumentPath>,
+    next_path_id: u64,
     /// The guides, in the order they were placed; saved with the document.
     guides: Vec<Guide>,
     /// Layer > Layer Style > Global Light (ADR 0032): the light of the effects that use it;
@@ -773,6 +777,8 @@ impl Document {
             quick_mask: None,
             saved_selections: Vec::new(),
             next_saved_selection_id: 1,
+            paths: Vec::new(),
+            next_path_id: 1,
             guides: Vec::new(),
             global_light: GlobalLight::default(),
             next_layer_id: 1,
@@ -807,6 +813,8 @@ impl Document {
             quick_mask: None,
             saved_selections: Vec::new(),
             next_saved_selection_id: 1,
+            paths: Vec::new(),
+            next_path_id: 1,
             guides: Vec::new(),
             global_light: GlobalLight::default(),
             next_layer_id,
@@ -850,6 +858,48 @@ impl Document {
         self.saved_selections = saved;
         self.next_saved_selection_id = next_id;
         Ok(self)
+    }
+
+    /// The document with the paths of a file (ADR 0041), and the id counter they come with:
+    /// see [`crate::paths::valid_paths`].
+    pub fn with_paths(
+        mut self,
+        paths: Vec<crate::paths::DocumentPath>,
+        next_id: u64,
+    ) -> Result<Self, RestoreError> {
+        if !crate::paths::valid_paths(&paths, next_id) {
+            return Err(RestoreError::InvalidPaths);
+        }
+        self.paths = paths;
+        self.next_path_id = next_id;
+        Ok(self)
+    }
+
+    /// The Paths panel's paths: saved paths and the Work Path, in the panel's order.
+    pub fn paths(&self) -> &[crate::paths::DocumentPath] {
+        &self.paths
+    }
+
+    pub fn path(&self, id: crate::paths::PathId) -> Option<&crate::paths::DocumentPath> {
+        self.paths.iter().find(|p| p.id == id)
+    }
+
+    /// The Work Path, if there is one.
+    pub fn work_path(&self) -> Option<&crate::paths::DocumentPath> {
+        self.paths.iter().find(|p| p.work)
+    }
+
+    /// The id the next path will get: every id below it was handed out already.
+    pub fn next_path_id(&self) -> u64 {
+        self.next_path_id
+    }
+
+    /// Reserve a fresh id for a path about to be added with an edit (not a document change:
+    /// ids are never reused).
+    pub fn allocate_path_id(&mut self) -> crate::paths::PathId {
+        let id = crate::paths::PathId::from_raw(self.next_path_id);
+        self.next_path_id += 1;
+        id
     }
 
     /// The document with the guides of a file.
@@ -1097,6 +1147,10 @@ impl Document {
         &mut self.saved_selections
     }
 
+    pub(crate) fn paths_mut(&mut self) -> &mut Vec<crate::paths::DocumentPath> {
+        &mut self.paths
+    }
+
     /// Put `light` in place of the document's global light, every effect using it lit by it;
     /// the previous light.
     pub(crate) fn set_global_light(&mut self, light: GlobalLight) -> GlobalLight {
@@ -1263,12 +1317,15 @@ pub enum RestoreError {
     InvalidSavedSelection(SavedSelectionId),
     /// Too many guides, or one at a position that is not finite or out of range.
     InvalidGuides,
+    /// Paths that are not valid, ids repeated or not below the counter, or two Work Paths.
+    InvalidPaths,
 }
 
 impl fmt::Display for RestoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RestoreError::InvalidGuides => write!(f, "invalid guides"),
+            RestoreError::InvalidPaths => write!(f, "invalid paths"),
             RestoreError::InvalidGlobalLight => write!(f, "invalid global light"),
             RestoreError::InvalidResolution => write!(f, "invalid resolution"),
             RestoreError::InvalidSavedSelection(id) => write!(f, "{id} is invalid"),

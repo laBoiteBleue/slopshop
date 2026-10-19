@@ -78,6 +78,9 @@ impl HistoryLabel {
             Edit::RemoveSavedSelection { .. } => "deleteSavedSelection",
             Edit::RenameSavedSelection { .. } => "renameSavedSelection",
             Edit::SetSavedSelection { .. } => "replaceSavedSelection",
+            Edit::InsertPath { .. } => "newPath",
+            Edit::RemovePath { .. } => "deletePath",
+            Edit::SetPath { .. } => "path",
             Edit::SetLayerLocks { .. } => "locks",
             Edit::Image(edit) => return Self::of(edit),
             Edit::Batch(edits) => return edits.first().map_or(Self::new("edit"), Self::of),
@@ -138,6 +141,11 @@ impl Session {
     /// See [`Document::allocate_layer_id`].
     pub fn allocate_layer_id(&mut self) -> LayerId {
         self.document.allocate_layer_id()
+    }
+
+    /// See [`Document::allocate_path_id`].
+    pub fn allocate_path_id(&mut self) -> crate::paths::PathId {
+        self.document.allocate_path_id()
     }
 
     /// See [`Document::allocate_saved_selection_id`].

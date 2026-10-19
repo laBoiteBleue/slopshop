@@ -8,6 +8,7 @@
 //! - [`text`]: what a text layer says (its outlines are laid out by `slopshop-text`).
 //! - [`layer`]: what a vector layer draws: its paints as masked fills (as a style's effects).
 //! - [`mask`]: vector masks, a path masking any layer.
+//! - [`trace`]: a selection's outline as a path (Make Work Path).
 
 pub mod draw;
 pub mod layer;
@@ -16,6 +17,7 @@ pub mod model;
 pub mod path;
 pub mod spans;
 pub mod text;
+pub mod trace;
 
 pub use draw::{COVERAGE_FORMAT, coverage};
 pub use layer::{Drawing, Drawn};
