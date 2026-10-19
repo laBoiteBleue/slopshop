@@ -1495,6 +1495,7 @@ fn build_adjustment(
 ) -> Result<Built, ImportError> {
     let adjustment = record
         .adjustment
+        .clone()
         .ok_or_else(|| corrupt("adjustment layer without its adjustment"))?;
     Ok(Built {
         content: LayerContent::Adjustment { adjustment },

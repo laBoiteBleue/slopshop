@@ -1978,7 +1978,7 @@ fn adjustment_table(adjustment: &Adjustment) -> Arc<[u32]> {
     }
     let table: Arc<[u32]> = table.into();
     made.truncate(KEPT - 1);
-    made.insert(0, (*adjustment, Arc::clone(&table)));
+    made.insert(0, (adjustment.clone(), Arc::clone(&table)));
     table
 }
 

@@ -96,7 +96,7 @@ pub enum Step<'a> {
     /// mask (placed by `transform`).
     Adjust {
         layer: &'a Layer,
-        adjustment: Adjustment,
+        adjustment: &'a Adjustment,
         opacity: f32,
         transform: Projective,
         /// The mask applied, as a layer's.
@@ -418,7 +418,7 @@ fn push_layer<'a>(
     if let LayerContent::Adjustment { adjustment } = &layer.content {
         steps.push(Step::Adjust {
             layer,
-            adjustment: *adjustment,
+            adjustment,
             opacity,
             transform,
             mask,
@@ -3162,7 +3162,12 @@ mod tests {
                 let layer = new_layer(&mut doc, varied(0.2), BlendMode::Normal, 1.0);
                 push(&mut doc, layer);
                 let below = all(&doc);
-                let layer = new_layer(&mut doc, adjustment(adjust), BlendMode::Normal, opacity);
+                let layer = new_layer(
+                    &mut doc,
+                    adjustment(adjust.clone()),
+                    BlendMode::Normal,
+                    opacity,
+                );
                 push(&mut doc, layer);
                 let blender = Blender::new(space);
                 let expected: Vec<f32> = below

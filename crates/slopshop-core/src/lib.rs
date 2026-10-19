@@ -21,6 +21,7 @@
 //! - [`copy`]: the clipboard's pixels (Copy Merged, the image other applications get) and where
 //!   Paste places what it pastes.
 //! - [`liquify`]: Filter > Liquify, a displacement field edited by brush tools (ADR 0037).
+//! - [`lut`]: color lookup tables (Image > Adjustments > Color Lookup).
 //! - [`job`]: cancellation and progress of background jobs.
 //! - [`align`]: Layer > Align and Distribute.
 //! - [`bake`]: Layer > Bake to Pixels: Rasterize, Merge, Merge Visible, Flatten (ADR 0031).
@@ -51,6 +52,7 @@ pub mod heal;
 pub mod histogram;
 pub mod job;
 pub mod liquify;
+pub mod lut;
 mod maxflow;
 pub mod move_pixels;
 pub mod paint;

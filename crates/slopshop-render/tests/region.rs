@@ -1691,7 +1691,9 @@ fn gpu_new_adjustments_match_the_cpu_reference_compositor() {
             push_into(
                 &mut s,
                 None,
-                LayerContent::Adjustment { adjustment },
+                LayerContent::Adjustment {
+                    adjustment: adjustment.clone(),
+                },
                 BlendMode::Normal,
                 0.85,
             );
@@ -1782,7 +1784,9 @@ fn gpu_adjustments_of_many_parameters_match_the_cpu_reference_compositor() {
             push_into(
                 &mut s,
                 None,
-                LayerContent::Adjustment { adjustment },
+                LayerContent::Adjustment {
+                    adjustment: adjustment.clone(),
+                },
                 BlendMode::Normal,
                 0.85,
             );

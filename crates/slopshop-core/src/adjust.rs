@@ -7,6 +7,7 @@ use std::sync::LazyLock;
 use crate::color::{ColorSpace, Mat3, TransferFunction, WORKING_SPACE, mat_vec};
 use crate::curve::{Curve, lookup};
 use crate::gradient::Gradient;
+use crate::lut::ColorLut;
 
 /// Number of parameters of an adjustment ([`Adjustment::params`]).
 pub const PARAM_COUNT: usize = 37;
@@ -22,7 +23,7 @@ pub type LevelsChannel = [f32; 5];
 pub const LEVELS_IDENTITY: LevelsChannel = [0.0, 1.0, 1.0, 0.0, 1.0];
 
 /// An adjustment and its parameters.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Adjustment {
     /// In linear light: `(v · 2^exposure + offset)^(1 / gamma)`.
     Exposure {
@@ -121,13 +122,21 @@ pub enum Adjustment {
         ranges: [[i16; 4]; SELECTIVE_RANGES],
         absolute: bool,
     },
+    /// Photoshop's Color Lookup: each color through a lookup table (a `.cube` or `.3dl` file's,
+    /// [`ColorLut`]); none chosen yet, colors are left as they are. On sRGB-encoded values
+    /// whatever the blend space, as Gradient Map: the values such files are made for (display
+    /// referred, sRGB primaries); colors outside the table's domain are clamped to it, as
+    /// grading software does. The table is its own data, not in [`Adjustment::params`].
+    ColorLookup {
+        lut: Option<std::sync::Arc<ColorLut>>,
+    },
 }
 
 impl Adjustment {
     /// Every adjustment, with the parameters a new layer gets (Photoshop's defaults): neutral
     /// ones, except for Invert, Posterize, Threshold, Black & White, Photo Filter and Gradient
     /// Map, which change the image by nature.
-    pub const DEFAULTS: [Adjustment; 15] = [
+    pub const DEFAULTS: [Adjustment; 16] = [
         Adjustment::Exposure {
             exposure: 0.0,
             offset: 0.0,
@@ -197,6 +206,7 @@ impl Adjustment {
             ranges: [[0; 4]; SELECTIVE_RANGES],
             absolute: false,
         },
+        Adjustment::ColorLookup { lut: None },
     ];
 
     /// Stable identifier (files, IPC).
@@ -217,6 +227,7 @@ impl Adjustment {
             Adjustment::Curves { .. } => "curves",
             Adjustment::GradientMap { .. } => "gradientMap",
             Adjustment::SelectiveColor { .. } => "selectiveColor",
+            Adjustment::ColorLookup { .. } => "colorLookup",
         }
     }
 
@@ -243,6 +254,7 @@ impl Adjustment {
             Adjustment::Curves { .. } => 12,
             Adjustment::GradientMap { .. } => 13,
             Adjustment::SelectiveColor { .. } => 14,
+            Adjustment::ColorLookup { .. } => 15,
         }
     }
 
@@ -252,7 +264,7 @@ impl Adjustment {
             Adjustment::Exposure { .. } | Adjustment::HueSaturation { .. } => 3,
             Adjustment::Levels { .. } => 20,
             Adjustment::BrightnessContrast { .. } | Adjustment::Vibrance { .. } => 2,
-            Adjustment::Invert | Adjustment::Curves { .. } => 0,
+            Adjustment::Invert | Adjustment::Curves { .. } | Adjustment::ColorLookup { .. } => 0,
             Adjustment::Posterize { .. }
             | Adjustment::Threshold { .. }
             | Adjustment::GradientMap { .. } => 1,
@@ -305,7 +317,9 @@ impl Adjustment {
                 vibrance,
                 saturation,
             } => vec![vibrance, saturation],
-            Adjustment::Invert | Adjustment::Curves { .. } => vec![],
+            Adjustment::Invert | Adjustment::Curves { .. } | Adjustment::ColorLookup { .. } => {
+                vec![]
+            }
             Adjustment::GradientMap { reverse, .. } => vec![flag(reverse)],
             // The ranges' cyan, magenta, yellow and black, then the method.
             Adjustment::SelectiveColor { ranges, absolute } => ranges
@@ -420,8 +434,9 @@ impl Adjustment {
                 blue: row(8),
                 monochrome: flag(p[12]),
             },
-            // Curves are set with Adjustment::Curves itself.
-            curves @ Adjustment::Curves { .. } => curves,
+            // Curves are set with Adjustment::Curves itself, the table with
+            // Adjustment::ColorLookup.
+            same @ (Adjustment::Curves { .. } | Adjustment::ColorLookup { .. }) => same,
             // The gradient is set with Adjustment::GradientMap itself.
             Adjustment::GradientMap { gradient, .. } => Adjustment::GradientMap {
                 gradient,
@@ -517,8 +532,10 @@ impl Adjustment {
                 .iter()
                 .flatten()
                 .all(|&v| within(v, -200.0, 200.0)),
-            // Valid by construction (Curve::new, Gradient::new).
-            Adjustment::Curves { .. } | Adjustment::GradientMap { .. } => true,
+            // Valid by construction (Curve::new, Gradient::new, ColorLut::new).
+            Adjustment::Curves { .. }
+            | Adjustment::GradientMap { .. }
+            | Adjustment::ColorLookup { .. } => true,
             Adjustment::SelectiveColor { ranges, .. } => {
                 ranges.iter().flatten().all(|v| (-100..=100).contains(v))
             }
@@ -558,18 +575,28 @@ impl Adjustment {
             (None, None) => Vec::new(),
         };
         Prepared {
-            adjustment: *self,
+            adjustment: self.clone(),
             luts,
         }
     }
 
-    /// Runs on sRGB-encoded values whatever the document's blend space: Gradient Map and
-    /// Selective Color.
+    /// Runs on sRGB-encoded values whatever the document's blend space: Gradient Map,
+    /// Selective Color and Color Lookup.
     pub fn is_perceptual(&self) -> bool {
         matches!(
             self,
-            Adjustment::GradientMap { .. } | Adjustment::SelectiveColor { .. }
+            Adjustment::GradientMap { .. }
+                | Adjustment::SelectiveColor { .. }
+                | Adjustment::ColorLookup { .. }
         )
+    }
+
+    /// Color Lookup's table, once one is chosen.
+    pub fn lut(&self) -> Option<&std::sync::Arc<ColorLut>> {
+        match self {
+            Adjustment::ColorLookup { lut } => lut.as_ref(),
+            _ => None,
+        }
     }
 
     /// Runs in linear light whatever the document's blend space (ADR 0020).
@@ -775,6 +802,7 @@ impl Adjustment {
             Adjustment::SelectiveColor { ranges, absolute } => {
                 selective_color(c, &ranges, absolute)
             }
+            Adjustment::ColorLookup { ref lut } => lut.as_ref().map_or(c, |lut| lut.apply(c)),
         }
     }
 }
@@ -982,7 +1010,10 @@ mod tests {
         let c = [0.2, 0.55, 0.9];
         for a in Adjustment::DEFAULTS {
             assert!(a.is_valid(), "{a:?}");
-            assert_eq!(Adjustment::from_params(a.id(), &a.params()), Some(a));
+            assert_eq!(
+                Adjustment::from_params(a.id(), &a.params()),
+                Some(a.clone())
+            );
             assert!(a.params()[a.param_count()..].iter().all(|&p| p == 0.0));
             let changes = matches!(
                 a,
@@ -995,7 +1026,51 @@ mod tests {
             );
             assert_eq!(!close(a.apply(c), c), changes, "{a:?}");
         }
-        assert_eq!(Adjustment::defaults("colorLookup"), None);
+        assert_eq!(Adjustment::defaults("colorLookups"), None);
+    }
+
+    #[test]
+    fn color_lookup_maps_colors_through_its_table() {
+        use crate::lut::{ColorLut, LutDimension};
+        // Red and blue swapped, on 2 points a side (exact: a linear map).
+        let mut values = Vec::new();
+        for b in 0..2 {
+            for g in 0..2 {
+                for r in 0..2 {
+                    values.extend([b as f32, g as f32, r as f32]);
+                }
+            }
+        }
+        let lut = ColorLut::new(
+            "swap.cube",
+            LutDimension::Three,
+            2,
+            ColorLut::UNIT_DOMAIN,
+            values,
+        )
+        .unwrap();
+        let a = Adjustment::ColorLookup {
+            lut: Some(std::sync::Arc::clone(&lut)),
+        };
+        assert!(a.is_valid() && a.is_perceptual() && a.param_count() == 0);
+        assert!(close(a.apply([0.2, 0.55, 0.9]), [0.9, 0.55, 0.2]));
+        assert_eq!(a.lut().map(|l| l.name()), Some("swap.cube"));
+        // The table is not a parameter: from parameters, none chosen.
+        assert_eq!(
+            Adjustment::from_params("colorLookup", &[]),
+            Some(Adjustment::ColorLookup { lut: None })
+        );
+        // Equal to the same table read again, not to another.
+        let again = ColorLut::new(
+            "swap.cube",
+            LutDimension::Three,
+            2,
+            ColorLut::UNIT_DOMAIN,
+            lut.values().to_vec(),
+        )
+        .unwrap();
+        assert_eq!(a, Adjustment::ColorLookup { lut: Some(again) });
+        assert_ne!(a, Adjustment::ColorLookup { lut: None });
     }
 
     #[test]

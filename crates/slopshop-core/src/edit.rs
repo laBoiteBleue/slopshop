@@ -1268,7 +1268,7 @@ impl Edit {
                 continue;
             };
             let effect = crate::stack::Effect {
-                adjustment,
+                adjustment: adjustment.clone(),
                 selection: doc.selection().cloned(),
                 to_document: layer.transform.then(doc.parent_transform(id)),
                 space: doc.blend_space(),
@@ -2561,7 +2561,7 @@ mod tests {
             clipped: false,
             transform: crate::transform::Projective::IDENTITY,
             content: LayerContent::Adjustment {
-                adjustment: Adjustment::DEFAULTS[0],
+                adjustment: Adjustment::DEFAULTS[0].clone(),
             },
             warp: None,
             vector_mask: None,
@@ -2592,7 +2592,10 @@ mod tests {
             offset: 0.0,
             gamma: 1.0,
         };
-        for (target, adjustment) in [(id, out_of_range), (ids[0], Adjustment::DEFAULTS[1])] {
+        for (target, adjustment) in [
+            (id, out_of_range),
+            (ids[0], Adjustment::DEFAULTS[1].clone()),
+        ] {
             assert_eq!(
                 Edit::SetAdjustment {
                     id: target,
@@ -4620,7 +4623,13 @@ mod tests {
             Err(EditError::Stack(crate::stack::StackError::InvalidEffect))
         );
         assert_eq!(
-            Edit::set_entry(&doc, id, 0, Some(&[lower[0], lower[0]]), false),
+            Edit::set_entry(
+                &doc,
+                id,
+                0,
+                Some(&[lower[0].clone(), lower[0].clone()]),
+                false
+            ),
             Err(EditError::Stack(crate::stack::StackError::InvalidEffect))
         );
         assert_eq!(

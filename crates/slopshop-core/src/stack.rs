@@ -92,7 +92,7 @@ impl Entry {
 
 /// What an entry's steps are set to when it is edited again (ADR 0034): an adjustment for each
 /// step of an effect entry, a filter for each step of a filter entry.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Operation {
     Adjustment(Adjustment),
     Filter(Filter),
@@ -256,7 +256,7 @@ impl Effect {
         {
             return None;
         }
-        let adjustment = match (self.adjustment, next.adjustment) {
+        let adjustment = match (&self.adjustment, &next.adjustment) {
             (Adjustment::Invert, Adjustment::Invert) => return Some(None),
             (
                 Adjustment::Exposure {
@@ -3618,14 +3618,14 @@ impl LayerStack {
             Entry::Effect(effect) if operations.len() == effect.steps.len() => {
                 let mut steps = Vec::with_capacity(operations.len());
                 for (step, operation) in effect.steps.iter().zip(operations) {
-                    let Operation::Adjustment(adjustment) = *operation else {
+                    let Operation::Adjustment(adjustment) = operation else {
                         return Err(StackError::InvalidEffect);
                     };
-                    steps.push(if step.adjustment == adjustment {
+                    steps.push(if step.adjustment == *adjustment {
                         Arc::clone(step)
                     } else {
                         Arc::new(Effect {
-                            adjustment,
+                            adjustment: adjustment.clone(),
                             ..(**step).clone()
                         })
                     });
@@ -5058,7 +5058,7 @@ mod tests {
                 0,
                 &[
                     Operation::Adjustment(Adjustment::Posterize { levels: 3.0 }),
-                    Operation::Adjustment(entry.steps()[1].adjustment),
+                    Operation::Adjustment(entry.steps()[1].adjustment.clone()),
                 ],
             )
             .unwrap();
@@ -5276,7 +5276,7 @@ mod tests {
             lightness: 0.0,
         };
         let two = base
-            .with_effect(effect(saturated, None))
+            .with_effect(effect(saturated.clone(), None))
             .unwrap()
             .with_effect(effect(saturated, None))
             .unwrap();
