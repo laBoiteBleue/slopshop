@@ -313,3 +313,13 @@ test("a star's indent; the Line has a stroke only; the Rectangle its corners' ra
   expect(screen.getByRole("button", { name: "Stroke color" })).toBeInTheDocument();
   expect(screen.queryByText("Radius:")).toBeNull();
 });
+
+test("the Pen's mode: Shape shows the fill and stroke, Path none of them", async () => {
+  const { user } = open("pen", { shape: defaultShapeOptions("#000000"), penMode: "shape" });
+  const mode = screen.getByRole("combobox", { name: "Tool mode" });
+  expect(mode).toHaveValue("shape");
+  expect(screen.getByRole("button", { name: "Fill color" })).toBeInTheDocument();
+  await user.selectOptions(mode, "path");
+  expect(screen.getByRole("combobox", { name: "Tool mode" })).toHaveValue("path");
+  expect(screen.queryByRole("button", { name: "Fill color" })).toBeNull();
+});
