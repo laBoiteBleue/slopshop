@@ -438,6 +438,11 @@ test("Distort > Displace: a map of the Sources panel or a file, its scales and m
   expect(within(dialog).getByRole("option", { name: "map of C:/maps/ripples.psd" })).toBeTruthy();
   await user.click(within(dialog).getByRole("button", { name: "OK" }));
   await vi.waitFor(() => expect(applied()).toMatchObject({ filter: "displace", map: 77 }));
+  // Repeat: the same map.
+  await user.keyboard("{Control>}f{/Control}");
+  await vi.waitFor(() =>
+    expect(sent("perform").at(-1)?.edit).toMatchObject({ filter: "displace", map: 77 }),
+  );
 });
 
 test("Distort > ZigZag and Spherize's modes", async () => {
