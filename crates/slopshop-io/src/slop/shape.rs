@@ -52,7 +52,7 @@
 //!
 //! `inverted`: the path hides what it encloses (Reveal All); `feather` in pixels (0 to 250).
 //!
-//! The Paths panel's paths (schema 0.44) are the document's `paths`, each
+//! The Paths panel's paths (schema 0.45) are the document's `paths`, each
 //! `{ "id": 1, "name": "Path 1", "path": { "path": { … } } }` (a `path` geometry, in document
 //! pixels), the Work Path with `"work": true` and no name; `next_path_id` is their counter.
 
@@ -63,7 +63,7 @@ use slopshop_core::shape::{
     StrokeJoin, Subpath, Text, TextAlign, TextBaseline, TextCase, TextSpan, VectorMask,
 };
 
-/// A document path's geometry (schema 0.44) as the manifest writes it: a shape's geometry.
+/// A document path's geometry (schema 0.45) as the manifest writes it: a shape's geometry.
 pub(super) fn path_to_json(geometry: &Geometry) -> Value {
     self::geometry(geometry)
 }

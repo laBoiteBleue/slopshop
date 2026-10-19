@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 44;
+pub(crate) const SCHEMA_MINOR: u32 = 45;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -185,11 +185,11 @@ pub(crate) struct DocumentDto {
     /// Absent: none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shapes: Vec<ShapeDto>,
-    /// The Paths panel's paths (schema 0.44, ADR 0041): saved paths and the Work Path, in the
+    /// The Paths panel's paths (schema 0.45, ADR 0041): saved paths and the Work Path, in the
     /// panel's order. Absent: none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<PathDto>,
-    /// The paths' id counter (schema 0.44). Absent: one above the largest id.
+    /// The paths' id counter (schema 0.45). Absent: one above the largest id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_path_id: Option<u64>,
     /// Layer > Layer Style > Global Light (schema 0.37): `[angle, altitude]`, degrees. Absent:
@@ -228,7 +228,7 @@ pub(crate) struct ShapeDto {
     pub paints: Vec<Value>,
 }
 
-/// A path of the Paths panel (schema 0.44, ADR 0041): `path` is a shape's `path` geometry (see
+/// A path of the Paths panel (schema 0.45, ADR 0041): `path` is a shape's `path` geometry (see
 /// `slop::shape`) in document pixels; `work` marks the Work Path, whose `name` is absent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PathDto {

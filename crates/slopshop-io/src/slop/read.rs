@@ -1277,7 +1277,7 @@ pub(super) fn document_guides(doc: &DocumentDto) -> Result<Vec<Guide>, FileError
         .collect()
 }
 
-/// The Paths panel's paths (schema 0.44) and their id counter (one above the largest id when the
+/// The Paths panel's paths (schema 0.45) and their id counter (one above the largest id when the
 /// file does not say). Their ids are checked when the document is restored.
 fn document_paths(doc: &DocumentDto) -> Result<(Vec<DocumentPath>, u64), FileError> {
     let paths = doc
