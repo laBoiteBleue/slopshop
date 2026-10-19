@@ -629,6 +629,12 @@ impl Stroke {
         }
     }
 
+    /// The pen lifted: the next sample starts a new run, with a dab of its own, rather than
+    /// joining the last one (Stroke Path's subpaths, painted as one stroke).
+    pub fn lift(&mut self) {
+        self.last = None;
+    }
+
     /// Continue the stroke through `samples`: dabs every spacing along the path (the first
     /// sample of the stroke gets one), added to the coverage. Samples that are not finite are
     /// skipped; pressures are clamped to `[0, 1]`.
@@ -1444,6 +1450,23 @@ mod tests {
             assert_eq!(pixel(&image, x, 20)[3], 255, "gap at {x}");
         }
         assert_eq!(pixel(&image, 150, 30)[3], 0);
+    }
+
+    #[test]
+    fn a_lifted_stroke_starts_a_new_run_without_joining_the_last() {
+        let brush = Brush {
+            diameter: 10.0,
+            ..Brush::default()
+        };
+        let mut s = stroke(transparent(Size::new(300, 40)), brush, red());
+        s.add(&[sample(10.0, 20.0), sample(100.0, 20.0)]);
+        s.lift();
+        s.add(&[sample(200.0, 20.0), sample(290.0, 20.0)]);
+        let image = s.finish().unwrap().unwrap();
+        for x in (10..100).chain(200..290) {
+            assert_eq!(pixel(&image, x, 20)[3], 255, "gap at {x}");
+        }
+        assert_eq!(pixel(&image, 150, 20)[3], 0);
     }
 
     #[test]
