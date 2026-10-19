@@ -561,7 +561,7 @@ first.
       below. Done: pixel layers, Layout mode (planes drawn as rectangles, snapped and joined at
       their corners, fitted, deleted) and Warp mode (corners moved, the layer warped live, each
       plane a homography, joined planes kept joined, the content outside the planes following),
-      Enter and Esc, editable again, `.slop` 0.39, Rasterize. Open: Shift+click to straighten
+      Enter and Esc, editable again, `.slop` 0.41, Rasterize. Open: Shift+click to straighten
       an edge (and keep it straight), the automatic Straighten buttons (horizontal, vertical,
       both), other layer kinds.
 - [x] **Free Transform: distort and perspective** (corner handles moved freely, Ctrl and

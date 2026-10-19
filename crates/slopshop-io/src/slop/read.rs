@@ -30,9 +30,9 @@ use super::manifest::{
     NODE_PATTERN_FILL, NODE_RASTER, NODE_VECTOR, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED,
     NODE_VERSION_GLOWS, NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED,
     NODE_VERSION_PATTERN, NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE,
-    NODE_VERSION_STACK, NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR,
-    NODE_VERSION_VECTOR_MASK, NODE_VERSION_PERSPECTIVE_WARP, NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR,
-    SCHEMA_MINOR_SOURCES,
+    NODE_VERSION_PERSPECTIVE_WARP, NODE_VERSION_STACK, NODE_VERSION_STYLED,
+    NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NODE_VERSION_VECTOR_MASK, NODE_VERSION_WARP,
+    NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR_SOURCES,
 };
 use super::write::{image_key, parallel_map};
 use super::{FileError, ImageRecord, Residue, SlopFile};
@@ -651,7 +651,7 @@ fn node_locks(node: &NodeDto) -> Result<slopshop_core::LayerLocks, FileError> {
 
 /// A raster node's warp (ADR 0044): a grid (version 18), `{ kind: "grid", frame: [x0, y0, x1,
 /// y1], columns, rows, points: [x, y, …], preset?: { style, bend, vertical } }`, or planes
-/// (version 19), `{ kind: "planes", frame, layout: [x, y, …], warped: [x, y, …], planes:
+/// (version 20), `{ kind: "planes", frame, layout: [x, y, …], warped: [x, y, …], planes:
 /// [[a, b, c, d], …] }`.
 fn node_warp(
     node: &NodeDto,
