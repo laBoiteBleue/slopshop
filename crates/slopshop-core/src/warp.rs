@@ -10,6 +10,10 @@
 
 use crate::transform::{Affine, Projective};
 
+mod planes;
+
+pub use planes::{CELLS_PER_PLANE, MAX_PLANES, Planes};
+
 /// Most patches per side of a warp grid.
 pub const MAX_PATCHES: u32 = 16;
 /// Cells per patch side the mesh is cut into: fine enough that each triangle is close to its
@@ -99,11 +103,97 @@ impl WarpPreset {
     }
 }
 
+/// A layer's warp (ADR 0044): Edit > Transform > Warp's grid, or Edit > Perspective Warp's
+/// planes. Either is drawn as a [`PlacedMesh`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Warp {
+    Grid(Grid),
+    Planes(Planes),
+}
+
+impl From<Grid> for Warp {
+    fn from(grid: Grid) -> Self {
+        Warp::Grid(grid)
+    }
+}
+
+impl From<Planes> for Warp {
+    fn from(planes: Planes) -> Self {
+        Warp::Planes(planes)
+    }
+}
+
+impl Warp {
+    /// The frame of the content it warps (content pixels, `[x0, y0, x1, y1]`).
+    pub fn frame(&self) -> [f64; 4] {
+        match self {
+            Warp::Grid(grid) => grid.frame(),
+            Warp::Planes(planes) => planes.frame(),
+        }
+    }
+
+    /// The grid, when it is Warp's.
+    pub fn grid(&self) -> Option<&Grid> {
+        match self {
+            Warp::Grid(grid) => Some(grid),
+            Warp::Planes(_) => None,
+        }
+    }
+
+    /// The planes, when it is Perspective Warp's.
+    pub fn planes(&self) -> Option<&Planes> {
+        match self {
+            Warp::Planes(planes) => Some(planes),
+            Warp::Grid(_) => None,
+        }
+    }
+
+    /// The box of the warped content (content pixels).
+    pub fn bounds(&self) -> [f64; 4] {
+        match self {
+            Warp::Grid(grid) => grid.bounds(),
+            Warp::Planes(planes) => planes.bounds(),
+        }
+    }
+
+    /// [`Self::bounds`] with the reach of the resampling filter around it: where the warped
+    /// content's antialiased edges can show.
+    pub fn drawn_bounds(&self) -> [f64; 4] {
+        let m = crate::resample::RADIUS + 1.0;
+        let [x0, y0, x1, y1] = self.bounds();
+        [x0 - m, y0 - m, x1 + m, y1 + m]
+    }
+
+    /// The same warp of content moved by (`dx`, `dy`) content pixels.
+    pub fn translated(&self, dx: f64, dy: f64) -> Result<Warp, InvalidWarp> {
+        let [x0, y0, x1, y1] = self.frame();
+        let frame = [x0 + dx, y0 + dy, x1 + dx, y1 + dy];
+        let moved = |points: &[(f64, f64)]| -> Vec<(f64, f64)> {
+            points.iter().map(|&(x, y)| (x + dx, y + dy)).collect()
+        };
+        Ok(match self {
+            Warp::Grid(grid) => Warp::Grid(Grid::new(
+                frame,
+                grid.columns,
+                grid.rows,
+                moved(&grid.points),
+                grid.preset,
+            )?),
+            Warp::Planes(planes) => Warp::Planes(Planes::new(
+                frame,
+                moved(planes.layout()),
+                moved(planes.warped()),
+                planes.planes().to_vec(),
+            )?),
+        })
+    }
+}
+
 /// A warp grid (ADR 0044): `columns × rows` bicubic Bézier patches over `frame` (content pixels,
 /// `[x0, y0, x1, y1]`), their control points in content pixels, row-major, `3·columns + 1` per
 /// row and `3·rows + 1` rows (neighboring patches share their edges' points).
 #[derive(Debug, Clone, PartialEq)]
-pub struct Warp {
+pub struct Grid {
     frame: [f64; 4],
     columns: u32,
     rows: u32,
@@ -127,7 +217,7 @@ impl std::error::Error for InvalidWarp {}
 /// Coordinates beyond which a warp is refused (content pixels), as transforms are (ADR 0018).
 const MAX_COORDINATE: f64 = 1e7;
 
-impl Warp {
+impl Grid {
     /// A grid of `columns × rows` patches with these control points; refused when the counts do
     /// not match, the frame is empty or a number is not finite or too large.
     pub fn new(
@@ -240,14 +330,6 @@ impl Warp {
         )
     }
 
-    /// [`Self::bounds`] with the reach of the resampling filter around it: where the warped
-    /// content's antialiased edges can show.
-    pub fn drawn_bounds(&self) -> [f64; 4] {
-        let m = crate::resample::RADIUS + 1.0;
-        let [x0, y0, x1, y1] = self.bounds();
-        [x0 - m, y0 - m, x1 + m, y1 + m]
-    }
-
     /// The box of the warped content (content pixels): its patches' control points bound them.
     pub fn bounds(&self) -> [f64; 4] {
         self.points.iter().fold(
@@ -259,6 +341,56 @@ impl Warp {
             ],
             |[x0, y0, x1, y1], &(x, y)| [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
         )
+    }
+}
+
+/// A regular grid of mesh vertices, row-major, `stride` per row: each where it lands (content
+/// pixels, before the layer's transform) and the content point it shows. Each cell is cut into
+/// two triangles.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct VertexGrid {
+    pub(crate) stride: usize,
+    pub(crate) vertices: Vec<((f64, f64), (f64, f64))>,
+}
+
+impl VertexGrid {
+    fn triangles(&self) -> usize {
+        let rows = self.vertices.len() / self.stride.max(1);
+        2 * self.stride.saturating_sub(1) * rows.saturating_sub(1)
+    }
+}
+
+impl Grid {
+    /// The mesh's vertices: each patch cut into [`CELLS_PER_PATCH`] cells a side, the border
+    /// extended by `margin` content pixels (at most a quarter of a patch: extrapolating beyond
+    /// that folds the border).
+    fn vertices(&self, margin: f64) -> VertexGrid {
+        let (cols, rows) = (self.columns, self.rows);
+        let [fx0, fy0, fx1, fy1] = self.frame;
+        let ms = (margin * f64::from(cols) / (fx1 - fx0)).clamp(0.0, 0.25);
+        let mt = (margin * f64::from(rows) / (fy1 - fy0)).clamp(0.0, 0.25);
+        let params = |patches: u32, m: f64| -> Vec<f64> {
+            let n = patches * CELLS_PER_PATCH;
+            let mut p = Vec::with_capacity(n as usize + 3);
+            if m > 0.0 {
+                p.push(-m);
+            }
+            p.extend((0..=n).map(|k| f64::from(k) / f64::from(CELLS_PER_PATCH)));
+            if m > 0.0 {
+                p.push(f64::from(patches) + m);
+            }
+            p
+        };
+        let (ss, ts) = (params(cols, ms), params(rows, mt));
+        let vertices = ts
+            .iter()
+            .flat_map(|&t| ss.iter().map(move |&s| (s, t)))
+            .map(|(s, t)| (self.eval(s, t), self.source(s, t)))
+            .collect();
+        VertexGrid {
+            stride: ss.len(),
+            vertices,
+        }
     }
 }
 
@@ -411,46 +543,16 @@ impl PlacedMesh {
     /// resampling filter's reach, so that the layer's edges are antialiased as unwarped ones
     /// are). `None` where the transform sends a point beyond its horizon line.
     pub fn new(warp: &Warp, transform: Projective, margin: f64) -> Option<Self> {
-        let (cols, rows) = (warp.columns, warp.rows);
-        let [fx0, fy0, fx1, fy1] = warp.frame;
-        // The margin in grid parameters, at most a quarter of a patch (extrapolation beyond
-        // that folds the border).
-        let ms = (margin * f64::from(cols) / (fx1 - fx0)).clamp(0.0, 0.25);
-        let mt = (margin * f64::from(rows) / (fy1 - fy0)).clamp(0.0, 0.25);
-        let params = |patches: u32, m: f64| -> Vec<f64> {
-            let n = patches * CELLS_PER_PATCH;
-            let mut p = Vec::with_capacity(n as usize + 3);
-            if m > 0.0 {
-                p.push(-m);
-            }
-            p.extend((0..=n).map(|k| f64::from(k) / f64::from(CELLS_PER_PATCH)));
-            if m > 0.0 {
-                p.push(f64::from(patches) + m);
-            }
-            p
-        };
-        let (ss, ts) = (params(cols, ms), params(rows, mt));
-        // Each grid vertex: in the document, and in the content before the warp.
-        let mut vertices = Vec::with_capacity(ss.len() * ts.len());
-        for &t in &ts {
-            for &s in &ss {
-                let (wx, wy) = warp.eval(s, t);
-                if transform.w(wx, wy) <= 0.0 {
-                    return None;
-                }
-                vertices.push((transform.apply(wx, wy), warp.source(s, t)));
-            }
+        match warp {
+            Warp::Grid(grid) => Self::from_grids(&[grid.vertices(margin)], transform),
+            Warp::Planes(planes) => Self::from_grids(&planes.vertices(margin), transform),
         }
-        let stride = ss.len();
-        let mut triangles = Vec::with_capacity((ss.len() - 1) * (ts.len() - 1) * 2);
-        for j in 0..ts.len() - 1 {
-            for i in 0..stride - 1 {
-                let v = |di: usize, dj: usize| vertices[(j + dj) * stride + i + di];
-                let (v00, v10, v01, v11) = (v(0, 0), v(1, 0), v(0, 1), v(1, 1));
-                triangles.extend(triangle(v00, v10, v11));
-                triangles.extend(triangle(v00, v11, v01));
-            }
-        }
+    }
+
+    /// The triangles of regular vertex grids, in order (where they overlap, the last one's
+    /// show), placed by `transform`.
+    fn from_grids(grids: &[VertexGrid], transform: Projective) -> Option<Self> {
+        let mut triangles = Vec::with_capacity(grids.iter().map(VertexGrid::triangles).sum());
         let mut bounds = [
             f64::INFINITY,
             f64::INFINITY,
@@ -458,19 +560,39 @@ impl PlacedMesh {
             f64::NEG_INFINITY,
         ];
         let mut source_bounds = bounds;
-        for ((x, y), (sx, sy)) in &vertices {
-            bounds = [
-                bounds[0].min(*x),
-                bounds[1].min(*y),
-                bounds[2].max(*x),
-                bounds[3].max(*y),
-            ];
-            source_bounds = [
-                source_bounds[0].min(*sx),
-                source_bounds[1].min(*sy),
-                source_bounds[2].max(*sx),
-                source_bounds[3].max(*sy),
-            ];
+        for grid in grids {
+            // Each vertex: in the document, and in the content before the warp.
+            let mut vertices = Vec::with_capacity(grid.vertices.len());
+            for &((wx, wy), source) in &grid.vertices {
+                if transform.w(wx, wy) <= 0.0 {
+                    return None;
+                }
+                vertices.push((transform.apply(wx, wy), source));
+            }
+            let stride = grid.stride;
+            let rows = vertices.len() / stride;
+            for j in 0..rows.saturating_sub(1) {
+                for i in 0..stride - 1 {
+                    let v = |di: usize, dj: usize| vertices[(j + dj) * stride + i + di];
+                    let (v00, v10, v01, v11) = (v(0, 0), v(1, 0), v(0, 1), v(1, 1));
+                    triangles.extend(triangle(v00, v10, v11));
+                    triangles.extend(triangle(v00, v11, v01));
+                }
+            }
+            for ((x, y), (sx, sy)) in &vertices {
+                bounds = [
+                    bounds[0].min(*x),
+                    bounds[1].min(*y),
+                    bounds[2].max(*x),
+                    bounds[3].max(*y),
+                ];
+                source_bounds = [
+                    source_bounds[0].min(*sx),
+                    source_bounds[1].min(*sy),
+                    source_bounds[2].max(*sx),
+                    source_bounds[3].max(*sy),
+                ];
+            }
         }
         if !bounds.iter().all(|v| v.is_finite()) {
             return None;
@@ -562,11 +684,13 @@ pub fn frame_of(layer: &crate::document::Layer) -> Option<[f64; 4]> {
 }
 
 /// The grid Edit > Transform > Warp shows for a pixel layer: its warp, or a plain 3 × 3 grid over
-/// [`frame_of`] when it has none. `None` for the other layers.
-pub fn grid_of(layer: &crate::document::Layer) -> Option<Warp> {
-    match &layer.warp {
-        Some(warp) => Some(Warp::clone(warp)),
-        None => Warp::identity(frame_of(layer)?, 3, 3).ok(),
+/// [`frame_of`] when it has none. `None` for the other layers, and for a layer warped by
+/// Perspective Warp's planes.
+pub fn grid_of(layer: &crate::document::Layer) -> Option<Grid> {
+    match layer.warp.as_deref() {
+        Some(Warp::Grid(grid)) => Some(grid.clone()),
+        Some(Warp::Planes(_)) => None,
+        None => Grid::identity(frame_of(layer)?, 3, 3).ok(),
     }
 }
 
@@ -704,11 +828,11 @@ mod tests {
 
     #[test]
     fn the_identity_grid_changes_nothing() {
-        let warp = Warp::identity(FRAME, 3, 3).unwrap();
+        let warp = Grid::identity(FRAME, 3, 3).unwrap();
         for (s, t) in [(0.0, 0.0), (1.5, 0.25), (3.0, 3.0), (2.2, 1.7)] {
             assert!(close(warp.eval(s, t), warp.source(s, t)), "{s} {t}");
         }
-        let mesh = PlacedMesh::new(&warp, Projective::IDENTITY, 0.0).unwrap();
+        let mesh = PlacedMesh::new(&warp.clone().into(), Projective::IDENTITY, 0.0).unwrap();
         let t = mesh.find(50.5, 40.5).unwrap();
         assert!(close(t.to_content.apply(50.5, 40.5), (50.5, 40.5)));
         assert!(boxes_close(mesh.bounds(), FRAME));
@@ -717,9 +841,9 @@ mod tests {
 
     #[test]
     fn a_placed_mesh_maps_through_the_transform() {
-        let warp = Warp::identity(FRAME, 2, 1).unwrap();
+        let warp = Grid::identity(FRAME, 2, 1).unwrap();
         let transform: Projective = Affine::translation(100.0, -5.0).into();
-        let mesh = PlacedMesh::new(&warp, transform, 0.0).unwrap();
+        let mesh = PlacedMesh::new(&warp.clone().into(), transform, 0.0).unwrap();
         let t = mesh.find(150.0, 30.0).unwrap();
         assert!(close(t.to_content.apply(150.0, 30.0), (50.0, 35.0)));
         assert!(boxes_close(mesh.bounds(), [110.0, 15.0, 210.0, 65.0]));
@@ -727,8 +851,8 @@ mod tests {
 
     #[test]
     fn the_margin_extends_the_border() {
-        let warp = Warp::identity(FRAME, 3, 3).unwrap();
-        let mesh = PlacedMesh::new(&warp, Projective::IDENTITY, 2.0).unwrap();
+        let warp = Grid::identity(FRAME, 3, 3).unwrap();
+        let mesh = PlacedMesh::new(&warp.clone().into(), Projective::IDENTITY, 2.0).unwrap();
         let [x0, y0, x1, y1] = mesh.bounds();
         assert!((x0 - 8.0).abs() < 1e-9 && (y0 - 18.0).abs() < 1e-9);
         assert!((x1 - 112.0).abs() < 1e-9 && (y1 - 72.0).abs() < 1e-9);
@@ -746,14 +870,14 @@ mod tests {
                     bend: 0.0,
                     vertical,
                 };
-                let warp = Warp::from_preset(FRAME, plain).unwrap();
-                let identity = Warp::identity(FRAME, 3, 3).unwrap();
+                let warp = Grid::from_preset(FRAME, plain).unwrap();
+                let identity = Grid::identity(FRAME, 3, 3).unwrap();
                 for (a, b) in warp.points().iter().zip(identity.points()) {
                     assert!(close(*a, *b), "{style:?} {a:?} {b:?}");
                 }
-                let bent = Warp::from_preset(FRAME, WarpPreset { bend: 0.5, ..plain }).unwrap();
+                let bent = Grid::from_preset(FRAME, WarpPreset { bend: 0.5, ..plain }).unwrap();
                 assert_ne!(bent.points(), identity.points(), "{style:?}");
-                assert!(PlacedMesh::new(&bent, Projective::IDENTITY, 2.0).is_some());
+                assert!(PlacedMesh::new(&bent.clone().into(), Projective::IDENTITY, 2.0).is_some());
             }
         }
     }
@@ -766,11 +890,11 @@ mod tests {
                 bend: 0.5,
                 vertical: false,
             };
-            Warp::from_preset(FRAME, preset).unwrap()
+            Grid::from_preset(FRAME, preset).unwrap()
         };
-        let plain = Warp::identity(FRAME, 3, 3).unwrap();
-        let y = |w: &Warp, s, t| w.eval(s, t).1;
-        let x = |w: &Warp, s, t| w.eval(s, t).0;
+        let plain = Grid::identity(FRAME, 3, 3).unwrap();
+        let y = |w: &Grid, s, t| w.eval(s, t).1;
+        let x = |w: &Grid, s, t| w.eval(s, t).0;
         // Arc Lower: the bottom bends down, the top stays; Arc Upper the other way round.
         let lower = grid(WarpStyle::ArcLower);
         assert!(y(&lower, 1.5, 3.0) > y(&plain, 1.5, 3.0) + 1.0);
@@ -792,7 +916,7 @@ mod tests {
         assert!(x(&shell, 0.0, 3.0) > x(&plain, 0.0, 3.0));
         // Fish: taller on the left than on the right.
         let fish = grid(WarpStyle::Fish);
-        let height = |w: &Warp, s| y(w, s, 3.0) - y(w, s, 0.0);
+        let height = |w: &Grid, s| y(w, s, 3.0) - y(w, s, 0.0);
         assert!(height(&fish, 0.75) > height(&fish, 2.25) + 1.0);
         // Rise: the right side higher than the left.
         let rise = grid(WarpStyle::Rise);
@@ -814,7 +938,7 @@ mod tests {
             bend: 0.5,
             vertical: false,
         };
-        let warp = Warp::from_preset(FRAME, preset).unwrap();
+        let warp = Grid::from_preset(FRAME, preset).unwrap();
         let (_, top_middle) = warp.eval(1.5, 0.0);
         let (_, top_corner) = warp.eval(0.0, 0.0);
         assert!(top_middle < top_corner);
@@ -826,31 +950,31 @@ mod tests {
 
     #[test]
     fn invalid_grids_are_refused() {
-        assert!(Warp::new(FRAME, 1, 1, vec![(0.0, 0.0); 15], None).is_err());
-        assert!(Warp::new([0.0, 0.0, 0.0, 1.0], 1, 1, vec![(0.0, 0.0); 16], None).is_err());
-        assert!(Warp::new(FRAME, 0, 1, vec![], None).is_err());
-        let mut points = Warp::identity(FRAME, 1, 1).unwrap().points().to_vec();
+        assert!(Grid::new(FRAME, 1, 1, vec![(0.0, 0.0); 15], None).is_err());
+        assert!(Grid::new([0.0, 0.0, 0.0, 1.0], 1, 1, vec![(0.0, 0.0); 16], None).is_err());
+        assert!(Grid::new(FRAME, 0, 1, vec![], None).is_err());
+        let mut points = Grid::identity(FRAME, 1, 1).unwrap().points().to_vec();
         points[3].0 = f64::NAN;
-        assert!(Warp::new(FRAME, 1, 1, points, None).is_err());
+        assert!(Grid::new(FRAME, 1, 1, points, None).is_err());
         let preset = WarpPreset {
             style: WarpStyle::Flag,
             bend: 1.5,
             vertical: false,
         };
-        assert!(Warp::from_preset(FRAME, preset).is_err());
+        assert!(Grid::from_preset(FRAME, preset).is_err());
     }
 
     #[test]
     fn folds_show_the_last_triangle() {
         // Every point of the right column pulled onto the left one's: the right patch folds
         // back over the left.
-        let mut points = Warp::identity(FRAME, 1, 1).unwrap().points().to_vec();
+        let mut points = Grid::identity(FRAME, 1, 1).unwrap().points().to_vec();
         for row in 0..4 {
             points[row * 4 + 3].0 = 10.0;
             points[row * 4 + 2].0 = 10.0;
         }
-        let warp = Warp::new(FRAME, 1, 1, points, None).unwrap();
-        let mesh = PlacedMesh::new(&warp, Projective::IDENTITY, 0.0).unwrap();
+        let warp = Grid::new(FRAME, 1, 1, points, None).unwrap();
+        let mesh = PlacedMesh::new(&warp.clone().into(), Projective::IDENTITY, 0.0).unwrap();
         let found = mesh.find(12.0, 45.0).unwrap();
         let last = mesh
             .triangles()

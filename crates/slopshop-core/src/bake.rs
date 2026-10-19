@@ -504,15 +504,9 @@ fn warped_mask(
             .map_err(|_| EditError::InvalidMask)?,
     );
     let t = f64::from(TILE_SIZE);
-    let [x0, y0, x1, y1] = warp.frame();
-    let moved = crate::warp::Warp::new(
-        [x0 + t, y0 + t, x1 + t, y1 + t],
-        warp.columns(),
-        warp.rows(),
-        warp.points().iter().map(|&(x, y)| (x + t, y + t)).collect(),
-        None,
-    )
-    .map_err(|_| EditError::InvalidTransform)?;
+    let moved = warp
+        .translated(t, t)
+        .map_err(|_| EditError::InvalidTransform)?;
     Ok(Layer {
         visible: true,
         opacity: 1.0,
@@ -1003,7 +997,7 @@ mod tests {
 
     #[test]
     fn rasterizing_a_warped_layer_bakes_its_warp() {
-        use crate::warp::{Warp, WarpPreset, WarpStyle};
+        use crate::warp::{Grid, WarpPreset, WarpStyle};
         let mut doc = Document::new(Size::new(100, 100));
         let pixels: Vec<u8> = (0..40 * 30)
             .flat_map(|i| [(i % 40 * 6) as u8, (i / 40 * 8) as u8, 90, 255])
@@ -1024,7 +1018,9 @@ mod tests {
             vertical: false,
         };
         layer.warp = Some(Arc::new(
-            Warp::from_preset([0.0, 0.0, 40.0, 30.0], preset).unwrap(),
+            Grid::from_preset([0.0, 0.0, 40.0, 30.0], preset)
+                .unwrap()
+                .into(),
         ));
         let id = push(&mut doc, layer);
         // The bulge shows above the layer's box: hit there.
@@ -1050,7 +1046,7 @@ mod tests {
 
     #[test]
     fn rasterizing_a_warped_layer_with_a_mask_warps_the_mask_alike() {
-        use crate::warp::{Warp, WarpPreset, WarpStyle};
+        use crate::warp::{Grid, WarpPreset, WarpStyle};
         let mut doc = Document::new(Size::new(100, 100));
         let pixels: Vec<u8> = (0..40 * 30)
             .flat_map(|i| [(i % 40 * 6) as u8, 120, (i / 40 * 8) as u8, 255])
@@ -1059,7 +1055,7 @@ mod tests {
         let mut layer = plain(&mut doc, "photo", LayerContent::raster(image));
         layer.transform = Affine::translation(20.0, 30.0).into();
         layer.warp = Some(Arc::new(
-            Warp::from_preset(
+            Grid::from_preset(
                 [0.0, 0.0, 40.0, 30.0],
                 WarpPreset {
                     style: WarpStyle::Arc,
@@ -1067,7 +1063,8 @@ mod tests {
                     vertical: false,
                 },
             )
-            .unwrap(),
+            .unwrap()
+            .into(),
         ));
         // A mask fading from left to right, hiding the bottom rows.
         let gray = PixelFormat {
