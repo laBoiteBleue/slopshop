@@ -495,7 +495,12 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     many as its curve takes: Undefined Areas, 0 Wrap Around or 1 Repeat Edge Pixels, then each
     point's row, in percent of the frame's height from its top, and offset, in percent of half
     its width (-100 to 100, to the right), 2 to 16 points, the first row 0, the last 100, rows
-    strictly increasing), the others as an effect step's. A filter reads around
+    strictly increasing; Displace's: the horizontal and vertical scales in percent, -999 to
+    999, the map 0 Stretch to Fit or 1 Tile, Undefined Areas 0 Wrap Around or 1 Repeat Edge
+    Pixels), the others as an effect step's. A Displace step also has `map`, the index in
+    `sources` of its displacement map ([ADR 0040](adr/0040-sources.md), amended
+    2026-10-19): its red channel moves pixels across, its green one down (a gray map both),
+    128 levels of 8 bits nothing, each level a pixel at 100 %. A filter reads around
     each pixel: the result of the entries below it is filtered whole (the layer's edges
     repeating outward, in premultiplied values of `space`), mixed with what it was by the
     selection's coverage, and rounded to the original's format. Older readers refuse such an
