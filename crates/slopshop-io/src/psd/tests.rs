@@ -1081,9 +1081,9 @@ fn adjustment_layers_are_imported_with_their_settings() {
         .document
         .layers()
         .iter()
-        .filter_map(|l| match l.content {
+        .filter_map(|l| match &l.content {
             slopshop_core::LayerContent::Adjustment { adjustment } => {
-                Some((l.name.clone(), adjustment))
+                Some((l.name.clone(), adjustment.clone()))
             }
             _ => None,
         })
@@ -1108,7 +1108,7 @@ fn adjustment_layers_are_imported_with_their_settings() {
         adjustments
             .iter()
             .find(|(n, _)| n == name)
-            .map(|(_, a)| *a)
+            .map(|(_, a)| a.clone())
             .unwrap()
     };
     assert_eq!(
@@ -1286,8 +1286,8 @@ fn adjustments_of_many_settings_are_imported() {
         .document
         .layers()
         .iter()
-        .filter_map(|l| match l.content {
-            slopshop_core::LayerContent::Adjustment { adjustment } => Some(adjustment),
+        .filter_map(|l| match &l.content {
+            slopshop_core::LayerContent::Adjustment { adjustment } => Some(adjustment.clone()),
             _ => None,
         })
         .collect();

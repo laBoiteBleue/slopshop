@@ -978,6 +978,8 @@ fn adjustment_blocks(adjustment: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             }
             vec![(*b"selc", b)]
         }
+        // TODO(color-lookup): clrL.
+        Adjustment::ColorLookup { .. } => vec![],
     }
 }
 

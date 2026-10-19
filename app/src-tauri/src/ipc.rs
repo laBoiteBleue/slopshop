@@ -2215,7 +2215,9 @@ impl EditRequest {
                             opacity: 1.0,
                             blend_mode: BlendMode::Normal,
                             mask: mask.clone(),
-                            content: LayerContent::Adjustment { adjustment },
+                            content: LayerContent::Adjustment {
+                                adjustment: adjustment.clone(),
+                            },
                             warp: None,
                             vector_mask: None,
                         },

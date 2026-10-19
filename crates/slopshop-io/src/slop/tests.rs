@@ -1690,7 +1690,9 @@ fn gradient_maps_keep_their_stops_and_reverse() {
     push(
         &mut doc,
         "map",
-        LayerContent::Adjustment { adjustment },
+        LayerContent::Adjustment {
+            adjustment: adjustment.clone(),
+        },
         1.0,
     );
     SlopFile::create(&path, &doc).unwrap();
@@ -1823,7 +1825,9 @@ fn selective_color_keeps_its_ranges_and_method() {
     push(
         &mut doc,
         "selective",
-        LayerContent::Adjustment { adjustment },
+        LayerContent::Adjustment {
+            adjustment: adjustment.clone(),
+        },
         1.0,
     );
     SlopFile::create(&path, &doc).unwrap();

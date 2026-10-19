@@ -1579,8 +1579,8 @@ fn layered_psd_round_trips_through_the_importer() {
         assert_eq!(summary(back), summary(&doc), "{depth:?}");
         let adjustments = |d: &Document| -> Vec<slopshop_core::adjust::Adjustment> {
             d.all_layers()
-                .filter_map(|l| match l.content {
-                    LayerContent::Adjustment { adjustment } => Some(adjustment),
+                .filter_map(|l| match &l.content {
+                    LayerContent::Adjustment { adjustment } => Some(adjustment.clone()),
                     _ => None,
                 })
                 .collect()
@@ -1646,7 +1646,7 @@ fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
                 .unwrap(),
         },
     ];
-    for (index, adjustment) in written.into_iter().enumerate() {
+    for (index, adjustment) in written.iter().cloned().enumerate() {
         let id = doc.allocate_layer_id();
         Edit::InsertLayer {
             parent: None,
@@ -1694,8 +1694,8 @@ fn adjustments_of_many_settings_round_trip_through_a_layered_psd() {
         .document
         .layers()
         .iter()
-        .filter_map(|l| match l.content {
-            LayerContent::Adjustment { adjustment } => Some(adjustment),
+        .filter_map(|l| match &l.content {
+            LayerContent::Adjustment { adjustment } => Some(adjustment.clone()),
             _ => None,
         })
         .collect();
