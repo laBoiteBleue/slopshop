@@ -1120,6 +1120,8 @@ pub struct AdjustmentView {
     pub curve_samples: Option<[Vec<f32>; 4]>,
     /// Gradient Map's stops `[location 0–4096, r, g, b]` (not reversed: `values[0]` says).
     pub gradient: Option<Vec<[u16; 4]>>,
+    /// Color Lookup's table, once one is chosen.
+    pub lut: Option<crate::lut::LutView>,
 }
 
 impl AdjustmentView {
@@ -1141,6 +1143,7 @@ impl AdjustmentView {
                 Adjustment::GradientMap { gradient, .. } => Some(gradient_stops(gradient)),
                 _ => None,
             },
+            lut: adjustment.lut().map(|lut| crate::lut::LutView::new(lut)),
         }
     }
 }
@@ -1409,6 +1412,10 @@ pub enum EditRequest {
         /// Gradient Map's stops (`AdjustmentView::gradient`); required for `gradientMap`.
         #[serde(default)]
         gradient: Option<Vec<[u16; 4]>>,
+        /// Color Lookup's table (`LutView::id`: one loaded, or one the document uses); absent:
+        /// none.
+        #[serde(default)]
+        lut: Option<u64>,
     },
     /// A new empty layer to paint on (Layer > New > Layer, ADR 0027): canvas-sized, 8-bit
     /// sRGB, transparent, at `index` among the layers of `parent` (absent: the top level).
@@ -1503,6 +1510,8 @@ pub enum EditRequest {
         curves: Option<Vec<Vec<[u8; 2]>>>,
         #[serde(default)]
         gradient: Option<Vec<[u16; 4]>>,
+        #[serde(default)]
+        lut: Option<u64>,
     },
     /// Image > Auto Tone, Auto Contrast and Auto Color (`correction`: `tone`, `contrast` or
     /// `color`):
@@ -2155,14 +2164,16 @@ impl EditRequest {
                 values,
                 curves,
                 gradient,
+                lut,
             } => {
-                let mut built = Adjustment::from_params(&adjustment, &values).ok_or(format!(
-                    "unknown adjustment {adjustment} or too many values"
-                ))?;
-                if built.curves().is_some() {
-                    built = curves_adjustment(curves.as_deref())?;
+                let built = AdjustmentSettings {
+                    adjustment,
+                    values,
+                    curves,
+                    gradient,
+                    lut,
                 }
-                built = with_gradient(built, gradient.as_deref())?;
+                .adjustment(session.document())?;
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::apply_effect(session.document(), &ids, built).map_err(|e| e.to_string())?
             }
@@ -2241,7 +2252,7 @@ impl EditRequest {
                     (Some(steps), _) => Some(
                         steps
                             .iter()
-                            .map(|s| s.adjustment().map(Operation::Adjustment))
+                            .map(|s| s.adjustment(session.document()).map(Operation::Adjustment))
                             .collect::<Result<_, _>>()?,
                     ),
                     (None, Some(filters)) => Some(
@@ -2431,6 +2442,7 @@ impl EditRequest {
                 values,
                 curves,
                 gradient,
+                lut,
             } => Edit::SetAdjustment {
                 id: LayerId::from_raw(id),
                 adjustment: AdjustmentSettings {
@@ -2438,8 +2450,9 @@ impl EditRequest {
                     values,
                     curves,
                     gradient,
+                    lut,
                 }
-                .adjustment()?,
+                .adjustment(session.document())?,
             },
             EditRequest::GroupLayers { ids, name } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
@@ -3050,16 +3063,29 @@ pub struct AdjustmentSettings {
     /// Gradient Map's stops (`AdjustmentView::gradient`); required for `gradientMap`.
     #[serde(default)]
     gradient: Option<Vec<[u16; 4]>>,
+    /// Color Lookup's table (`LutView::id`); absent: none.
+    #[serde(default)]
+    lut: Option<u64>,
 }
 
 impl AdjustmentSettings {
-    fn adjustment(&self) -> Result<Adjustment, String> {
+    /// The adjustment, Color Lookup's table found among those loaded or `document`'s.
+    fn adjustment(&self, document: &slopshop_core::Document) -> Result<Adjustment, String> {
         let adjustment = &self.adjustment;
         let mut built = Adjustment::from_params(adjustment, &self.values).ok_or(format!(
             "unknown adjustment {adjustment} or too many values"
         ))?;
         if built.curves().is_some() {
             built = curves_adjustment(self.curves.as_deref())?;
+        }
+        if let Adjustment::ColorLookup { .. } = built {
+            let lut = match self.lut {
+                Some(id) => Some(
+                    crate::lut::find(document, id).ok_or(format!("unknown lookup table {id}"))?,
+                ),
+                None => None,
+            };
+            return Ok(Adjustment::ColorLookup { lut });
         }
         with_gradient(built, self.gradient.as_deref())
     }
