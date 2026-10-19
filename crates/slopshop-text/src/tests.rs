@@ -1,6 +1,6 @@
 use slopshop_core::color::LinearRgba;
-use slopshop_core::shape::CharStyle;
 use slopshop_core::shape::path::shape_bounds;
+use slopshop_core::shape::{CharStyle, TextBaseline, TextCase};
 
 use super::*;
 
@@ -14,6 +14,13 @@ fn text(content: &str) -> Text {
         color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
         tracking: 0.0,
         leading: None,
+        faux_bold: false,
+        faux_italic: false,
+        case: TextCase::Normal,
+        baseline: TextBaseline::Normal,
+        underline: false,
+        strikethrough: false,
+        ligatures: true,
         align: TextAlign::Left,
         position: [100.0, 200.0],
         frame: None,
@@ -337,4 +344,241 @@ fn a_span_in_a_missing_family_is_set_in_the_default_one() {
     let laid = fonts.lay_out(&gone);
     assert!(laid.missing_font);
     assert_eq!(laid.outlines, fonts.lay_out(&text("ab")).outlines);
+}
+
+/// The text with `style` on its characters `range`, or on the whole text.
+fn styled(content: &str, range: Option<std::ops::Range<usize>>, style: CharStyle) -> Text {
+    text(content).styled(range, &style)
+}
+
+fn height(b: [f64; 4]) -> f64 {
+    b[3] - b[1]
+}
+
+fn subpaths(laid: &Laid) -> Vec<Subpath> {
+    match &laid.outlines.geometry {
+        Geometry::Path { subpaths, .. } => subpaths.clone(),
+        _ => unreachable!("text outlines are a path"),
+    }
+}
+
+fn path_bounds(subpath: &Subpath) -> [f64; 4] {
+    shape_bounds(&Shape {
+        geometry: Geometry::Path {
+            subpaths: vec![subpath.clone()],
+            rule: FillRule::NonZero,
+        },
+        fill: Some(Paint::Solid(LinearRgba::new(0.0, 0.0, 0.0, 1.0))),
+        stroke: None,
+    })
+    .expect("a subpath has bounds")
+}
+
+#[test]
+fn underline_and_strikethrough_draw_lines_with_the_glyphs() {
+    let mut fonts = Fonts::bundled();
+    let plain = fonts.lay_out(&text("xx"));
+    let under = fonts.lay_out(&styled(
+        "xx",
+        None,
+        CharStyle {
+            underline: Some(true),
+            ..CharStyle::default()
+        },
+    ));
+    let (glyphs, lined) = (subpaths(&plain), subpaths(&under));
+    assert_eq!(lined.len(), glyphs.len() + 1, "one line for the run");
+    let line = lined.last().unwrap();
+    let line_box = path_bounds(line);
+    // Under the baseline (y = 200) as the font says (Inter: 0.17 em, 0.07 em thick), across
+    // the characters' advance.
+    assert!(line_box[1] > 205.0 && line_box[3] < 215.0, "{line_box:?}");
+    assert!(
+        (2.0..5.0).contains(&(line_box[3] - line_box[1])),
+        "{line_box:?}"
+    );
+    let [l, _, r, _] = bounds(&plain);
+    assert!(line_box[0] <= l && line_box[2] >= r - 1.0, "{line_box:?}");
+    // Wound as the glyphs are: where they meet, they add up (non-zero), they do not cut.
+    assert_eq!(
+        signed_area(std::slice::from_ref(line)) > 0.0,
+        signed_area(&glyphs) > 0.0
+    );
+    // The strikethrough, through the lowercase letters (between the baseline and the
+    // x-height, about 0.55 em).
+    let struck = fonts.lay_out(&styled(
+        "xx",
+        None,
+        CharStyle {
+            strikethrough: Some(true),
+            ..CharStyle::default()
+        },
+    ));
+    let strike = path_bounds(subpaths(&struck).last().unwrap());
+    assert!(strike[1] < 195.0 && strike[1] > 200.0 - 27.0, "{strike:?}");
+    assert_eq!(bounds(&struck)[3], bounds(&plain)[3]);
+}
+
+#[test]
+fn all_caps_sets_capitals_and_keeps_the_carets_of_the_content() {
+    let mut fonts = Fonts::bundled();
+    let caps = CharStyle {
+        case: Some(TextCase::AllCaps),
+        ..CharStyle::default()
+    };
+    let upper = styled("abc", None, caps.clone());
+    assert_eq!(
+        fonts.lay_out(&upper).outlines,
+        fonts.lay_out(&text("ABC")).outlines
+    );
+    // "ß" becomes "SS": one place in the content, two letters drawn.
+    let sharp = styled("aß", None, caps.clone());
+    assert_eq!(
+        fonts.lay_out(&sharp).outlines,
+        fonts.lay_out(&text("ASS")).outlines
+    );
+    let geometry = fonts.geometry(&sharp);
+    assert_eq!(geometry.carets.len(), 3);
+    let after = fonts.geometry(&text("ASS"));
+    assert_eq!(
+        geometry.carets[2], after.carets[3],
+        "the caret after the SS"
+    );
+    assert_eq!((geometry.lines[0].start, geometry.lines[0].end), (0, 2));
+    // On some characters only.
+    let some = styled("abc", Some(1..2), caps);
+    assert_eq!(
+        fonts.lay_out(&some).outlines,
+        fonts.lay_out(&text("aBc")).outlines
+    );
+}
+
+#[test]
+fn small_caps_set_lowercase_letters_as_smaller_capitals() {
+    let mut fonts = Fonts::bundled();
+    let small = styled(
+        "Hh",
+        None,
+        CharStyle {
+            case: Some(TextCase::SmallCaps),
+            ..CharStyle::default()
+        },
+    );
+    // As "HH" with the second at 70 % of the size.
+    let by_hand = styled(
+        "HH",
+        Some(1..2),
+        CharStyle {
+            size: Some(35.0),
+            ..CharStyle::default()
+        },
+    );
+    let (a, b) = (
+        bounds(&fonts.lay_out(&small)),
+        bounds(&fonts.lay_out(&by_hand)),
+    );
+    for (x, y) in a.iter().zip(&b) {
+        assert!((x - y).abs() < 0.01, "{a:?} {b:?}");
+    }
+    assert!(a[2] < bounds(&fonts.lay_out(&text("HH")))[2] - 5.0);
+    assert_eq!(fonts.geometry(&small).carets.len(), 3);
+}
+
+#[test]
+fn superscript_and_subscript_are_smaller_and_raised_or_lowered() {
+    let mut fonts = Fonts::bundled();
+    let plain = bounds(&fonts.lay_out(&text("H")));
+    let raised = |content: &str, baseline| {
+        styled(
+            content,
+            None,
+            CharStyle {
+                baseline: Some(baseline),
+                ..CharStyle::default()
+            },
+        )
+    };
+    let sup = bounds(&fonts.lay_out(&raised("H", TextBaseline::Superscript)));
+    let sub = bounds(&fonts.lay_out(&raised("H", TextBaseline::Subscript)));
+    // 58.3 % of the size, its baseline 33.3 % of the size (16.65 px) above or below.
+    assert!(
+        (height(sup) / height(plain) - 0.583).abs() < 0.01,
+        "{sup:?}"
+    );
+    assert!((sup[3] - (plain[3] - 16.65)).abs() < 0.5, "{sup:?}");
+    assert!((sub[3] - (plain[3] + 16.65)).abs() < 0.5, "{sub:?}");
+    // The leading stays the character's own: a second line goes down as far.
+    let lines = fonts
+        .geometry(&raised("H\nH", TextBaseline::Superscript))
+        .lines;
+    assert!((lines[1].top - lines[0].top - 60.0).abs() < 0.01);
+}
+
+#[test]
+fn faux_bold_thickens_and_faux_italic_slants() {
+    let mut fonts = Fonts::bundled();
+    let plain = bounds(&fonts.lay_out(&text("I")));
+    let faux = |content: &str, style: CharStyle| {
+        bounds(&Fonts::bundled().lay_out(&styled(content, None, style)))
+    };
+    let bold_style = CharStyle {
+        faux_bold: Some(true),
+        ..CharStyle::default()
+    };
+    let bold = faux("I", bold_style.clone());
+    // A fortieth of 50 px on each side.
+    for side in [
+        plain[0] - bold[0],
+        bold[2] - plain[2],
+        plain[1] - bold[1],
+        bold[3] - plain[3],
+    ] {
+        assert!((side - 1.25).abs() < 0.05, "{plain:?} {bold:?}");
+    }
+    // The glyphs it thickens are spaced apart by as much.
+    let thin = bounds(&fonts.lay_out(&text("II")));
+    let thick = faux("II", bold_style);
+    let grown = (thick[2] - thick[0]) - (thin[2] - thin[0]);
+    assert!((grown - 2.5 - 2.5).abs() < 0.1, "{grown}");
+    let italic = faux(
+        "I",
+        CharStyle {
+            faux_italic: Some(true),
+            ..CharStyle::default()
+        },
+    );
+    // Slanted by 14 degrees about the baseline: the top leans right by tan 14° of its height.
+    let lean = (italic[2] - italic[0]) - (plain[2] - plain[0]);
+    let expected = 14f64.to_radians().tan() * (200.0 - plain[1]);
+    assert!((lean - expected).abs() < 0.5, "{lean} {expected}");
+    assert!((italic[1] - plain[1]).abs() < 1e-9);
+}
+
+#[test]
+fn standard_ligatures_are_on_unless_turned_off() {
+    // The bundled font has none (Inter has no `liga`): what parley is asked is tested.
+    let t = text("fi");
+    let none = CharStyle::default();
+    let off_style = CharStyle {
+        ligatures: Some(false),
+        ..CharStyle::default()
+    };
+    let features = |r: &Resolved<'_>| {
+        properties(r, DEFAULT_FAMILY, 1.0, Ink::default())
+            .into_iter()
+            .find_map(|p| match p {
+                StyleProperty::FontFeatures(f) => Some(f),
+                _ => None,
+            })
+            .expect("font features are set")
+    };
+    assert_eq!(features(&t.resolved(&none)), FontFeatures::empty());
+    assert_eq!(features(&t.resolved(&off_style)), (&NO_LIGATURES).into());
+    // Off, the text lays out the same with this font.
+    let off = Text {
+        ligatures: false,
+        ..t.clone()
+    };
+    let mut fonts = Fonts::bundled();
+    assert_eq!(fonts.lay_out(&off).outlines, fonts.lay_out(&t).outlines);
 }
