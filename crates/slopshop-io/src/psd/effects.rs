@@ -3,12 +3,14 @@
 //!
 //! What SlopShop draws comes over: Drop Shadow, Inner Shadow, Outer and Inner Glow, Color
 //! Overlay and Stroke, with their color, mode, opacity, angle (the global light's when they use
-//! it), distance, spread or choke and size. What it does not draw (Bevel & Emboss, Satin,
-//! Gradient and Pattern Overlay, gradient or precise glows, glows from the center, gradient or
-//! pattern strokes, contours, noise, several effects of one kind) is reported as approximated.
+//! it), distance, spread or choke and size, their contours (a curve's points, anti-aliased or
+//! not, a glow's range); Gradient Overlay, Satin and Bevel and Emboss likewise. What it does not
+//! draw (gradient or precise glows, glows from the center, gradient or pattern strokes, noise,
+//! several effects of one kind, a contour of more than 16 points) is reported as approximated.
 
 use slopshop_core::blend::BlendMode;
 use slopshop_core::color::LinearRgba;
+use slopshop_core::contour::{Contour, ContourPoint};
 use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
 use slopshop_core::selection::StrokeLocation;
 use slopshop_core::style::{
@@ -130,6 +132,45 @@ impl Read {
         d.number(b"Ckmt").unwrap_or(0.0).clamp(0.0, 100.0)
     }
 
+    /// The contour at `key` (`TrnS` or `MpgS`: an object listing its points in `Crv `, each a
+    /// `CrPt` of `Hrzn` and `Vrtc` on 0–255, `Cnty` false at a corner); absent, linear. One
+    /// SlopShop cannot hold (more than 16 points, inputs not increasing) is approximated as
+    /// linear.
+    fn contour(&mut self, d: &Descriptor, key: &[u8]) -> Contour {
+        let Some(curve) = d.object(key) else {
+            return Contour::LINEAR;
+        };
+        let byte = |v: Option<f64>| v.unwrap_or(0.0).round().clamp(0.0, 255.0) as u8;
+        let points: Option<Vec<ContourPoint>> = curve.list(b"Crv ").map(|list| {
+            list.iter()
+                .filter_map(|v| match v {
+                    Value::Object(point) => Some(point),
+                    _ => None,
+                })
+                .map(|point| ContourPoint {
+                    x: byte(point.number(b"Hrzn")),
+                    y: byte(point.number(b"Vrtc")),
+                    corner: point.bool(b"Cnty") == Some(false),
+                })
+                .collect()
+        });
+        match points.as_deref().and_then(Contour::new) {
+            Some(contour) => contour,
+            None => {
+                self.approximated = true;
+                Contour::LINEAR
+            }
+        }
+    }
+
+    /// A contour's range (`Inpr`), percent; absent, Photoshop's 50.
+    fn range(d: &Descriptor) -> f64 {
+        d.number(b"Inpr").unwrap_or(50.0).clamp(
+            slopshop_core::style::MIN_CONTOUR_RANGE,
+            slopshop_core::style::MAX_CONTOUR_RANGE,
+        )
+    }
+
     fn noise(&mut self, d: &Descriptor) {
         if d.number(b"Nose").is_some_and(|n| n > 0.0) {
             self.approximated = true;
@@ -155,6 +196,8 @@ impl Read {
                 .clamp(0.0, slopshop_core::style::MAX_DISTANCE),
             spread: Self::spread(d),
             size: self.size(d, b"blur"),
+            contour: self.contour(d, b"TrnS"),
+            anti_aliased: d.bool(b"AntA").unwrap_or(false),
         }
     }
 
@@ -179,6 +222,9 @@ impl Read {
             opacity: Self::opacity(d),
             spread: Self::spread(d),
             size: self.size(d, b"blur"),
+            contour: self.contour(d, b"TrnS"),
+            anti_aliased: d.bool(b"AntA").unwrap_or(false),
+            range: Self::range(d),
         }
     }
 
@@ -270,8 +316,8 @@ impl Read {
         overlay
     }
 
-    /// A Bevel and Emboss (`ebbl`): Smooth; Chisel, Stroke Emboss, a texture, a gloss contour
-    /// other than linear are approximated.
+    /// A Bevel and Emboss (`ebbl`): Smooth, its gloss contour (`TrnS`) and its Contour element
+    /// (`useShape`, `MpgS`); Chisel, Stroke Emboss, a texture are approximated.
     fn bevel(&mut self, d: &Descriptor) -> BevelEmboss {
         let style = match d.enumerated(b"bvlS") {
             Some(b"InrB") | None => BevelStyle::InnerBevel,
@@ -285,9 +331,6 @@ impl Read {
         };
         if d.enumerated(b"bvlT").is_some_and(|t| t != b"SfBL")
             || d.bool(b"useTexture").unwrap_or(false)
-            || d.object(b"TrnS")
-                .and_then(|c| c.list(b"Crv "))
-                .is_some_and(|points| points.len() > 2)
         {
             self.approximated = true;
         }
@@ -346,17 +389,17 @@ impl Read {
             shadow_color,
             shadow_mode,
             shadow_opacity,
+            gloss_contour: self.contour(d, b"TrnS"),
+            gloss_anti_aliased: d.bool(b"antialiasGloss").unwrap_or(false),
+            contour_enabled: d.bool(b"useShape").unwrap_or(false),
+            contour: self.contour(d, b"MpgS"),
+            contour_anti_aliased: d.bool(b"AntA").unwrap_or(false),
+            contour_range: Self::range(d),
         }
     }
 
-    /// A Satin (`ChFX`); a contour other than linear is approximated.
+    /// A Satin (`ChFX`), its contour (`MpgS`).
     fn satin(&mut self, d: &Descriptor) -> Satin {
-        if d.object(b"MpgS")
-            .and_then(|c| c.list(b"Crv "))
-            .is_some_and(|points| points.len() > 2)
-        {
-            self.approximated = true;
-        }
         Satin {
             enabled: self.enabled(d),
             color: self.color(d),
@@ -367,6 +410,8 @@ impl Read {
                 .clamp(0.0, MAX_SATIN_DISTANCE),
             size: self.size(d, b"blur"),
             invert: d.bool(b"Invr").unwrap_or(true),
+            contour: self.contour(d, b"MpgS"),
+            anti_aliased: d.bool(b"AntA").unwrap_or(false),
         }
     }
 
@@ -525,6 +570,52 @@ fn color(c: LinearRgba) -> Vec<u8> {
     )
 }
 
+/// A list of objects (`VlLs`).
+fn list(objects: Vec<Vec<u8>>) -> Vec<u8> {
+    let mut out = (objects.len() as u32).to_be_bytes().to_vec();
+    for object in objects {
+        out.extend(b"Objc");
+        out.extend(object);
+    }
+    out
+}
+
+/// A Unicode string (`TEXT`): its length with the closing zero, UTF-16 big-endian.
+fn text(s: &str) -> Vec<u8> {
+    let units: Vec<u16> = s.encode_utf16().chain([0]).collect();
+    let mut out = (units.len() as u32).to_be_bytes().to_vec();
+    for unit in units {
+        out.extend(unit.to_be_bytes());
+    }
+    out
+}
+
+/// A contour as Photoshop's object (`ShpC`): its name (the preset's, else "Custom"), its points.
+fn contour(c: &Contour) -> Vec<u8> {
+    let name = c.preset().map_or("Custom", |p| p.photoshop_name());
+    let points = c
+        .points()
+        .iter()
+        .map(|p| {
+            object(
+                b"CrPt",
+                &[
+                    (b"Hrzn", b"doub", f64::from(p.x).to_be_bytes().to_vec()),
+                    (b"Vrtc", b"doub", f64::from(p.y).to_be_bytes().to_vec()),
+                    (b"Cnty", b"bool", vec![u8::from(!p.corner)]),
+                ],
+            )
+        })
+        .collect();
+    object(
+        b"ShpC",
+        &[
+            (b"Nm  ", b"TEXT", text(name)),
+            (b"Crv ", b"VlLs", list(points)),
+        ],
+    )
+}
+
 fn common(enabled: bool, mode: BlendMode, c: LinearRgba, opacity: f32) -> Vec<Item> {
     vec![
         (b"enab", b"bool", vec![u8::from(enabled)]),
@@ -545,7 +636,8 @@ fn shadow(s: DropShadow) -> Vec<Item> {
         (b"Ckmt", b"UntF", unit(b"#Pxl", s.spread)),
         (b"blur", b"UntF", unit(b"#Pxl", s.size)),
         (b"Nose", b"UntF", unit(b"#Prc", 0.0)),
-        (b"AntA", b"bool", vec![0]),
+        (b"AntA", b"bool", vec![u8::from(s.anti_aliased)]),
+        (b"TrnS", b"Objc", contour(&s.contour)),
     ]);
     items
 }
@@ -558,8 +650,9 @@ fn glow(g: Glow, inner: bool) -> Vec<Item> {
         (b"blur", b"UntF", unit(b"#Pxl", g.size)),
         (b"Nose", b"UntF", unit(b"#Prc", 0.0)),
         (b"ShdN", b"UntF", unit(b"#Prc", 0.0)),
-        (b"AntA", b"bool", vec![0]),
-        (b"Inpr", b"UntF", unit(b"#Prc", 50.0)),
+        (b"AntA", b"bool", vec![u8::from(g.anti_aliased)]),
+        (b"Inpr", b"UntF", unit(b"#Prc", g.range)),
+        (b"TrnS", b"Objc", contour(&g.contour)),
     ]);
     if inner {
         items.push((b"glwS", b"enum", enumerated(b"IGSr", b"SrcE")));
@@ -571,14 +664,6 @@ fn glow(g: Glow, inner: bool) -> Vec<Item> {
 /// their locations, opaque, midpoints in the middle).
 fn gradient_overlay(o: GradientOverlay) -> Vec<Item> {
     let long = |v: i32| v.to_be_bytes().to_vec();
-    let list = |objects: Vec<Vec<u8>>| {
-        let mut out = (objects.len() as u32).to_be_bytes().to_vec();
-        for object in objects {
-            out.extend(b"Objc");
-            out.extend(object);
-        }
-        out
-    };
     let colors = o
         .gradient
         .stops()
@@ -678,7 +763,8 @@ pub(crate) fn write(style: &LayerStyle) -> Option<Vec<u8>> {
     if let Some(s) = style.satin {
         let mut satin = common(s.enabled, s.mode, s.color, s.opacity);
         satin.extend([
-            (&b"AntA"[..], b"bool", vec![1]),
+            (&b"AntA"[..], b"bool", vec![u8::from(s.anti_aliased)]),
+            (b"MpgS", b"Objc", contour(&s.contour)),
             (b"Invr", b"bool", vec![u8::from(s.invert)]),
             (b"lagl", b"UntF", unit(b"#Ang", s.angle)),
             (b"Dstn", b"UntF", unit(b"#Pxl", s.distance)),
@@ -732,6 +818,16 @@ pub(crate) fn write(style: &LayerStyle) -> Option<Vec<u8>> {
                 enumerated(b"BESs", if b.up { b"In  " } else { b"Out " }),
             ),
             (b"Sftn", b"UntF", unit(b"#Pxl", b.soften)),
+            (b"TrnS", b"Objc", contour(&b.gloss_contour)),
+            (
+                b"antialiasGloss",
+                b"bool",
+                vec![u8::from(b.gloss_anti_aliased)],
+            ),
+            (b"useShape", b"bool", vec![u8::from(b.contour_enabled)]),
+            (b"MpgS", b"Objc", contour(&b.contour)),
+            (b"AntA", b"bool", vec![u8::from(b.contour_anti_aliased)]),
+            (b"Inpr", b"UntF", unit(b"#Prc", b.contour_range)),
             (b"useTexture", b"bool", vec![0]),
         ];
         items.push((b"ebbl", b"Objc", object(b"ebbl", &bevel)));
@@ -763,6 +859,7 @@ pub(crate) fn write(style: &LayerStyle) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slopshop_core::contour::ContourPreset;
 
     /// A global light from `angle`, 30° high.
     fn light(angle: f64) -> GlobalLight {
@@ -782,6 +879,8 @@ mod tests {
                 distance: 12.0,
                 spread: 20.0,
                 size: 9.0,
+                contour: ContourPreset::Cone.contour(),
+                anti_aliased: true,
                 ..DropShadow::default()
             }),
             inner_shadow: Some(DropShadow {
@@ -791,6 +890,8 @@ mod tests {
             }),
             outer_glow: Some(Glow {
                 opacity: 0.5,
+                contour: ContourPreset::RingDouble.contour(),
+                range: 35.0,
                 ..Glow::default()
             }),
             inner_glow: Some(Glow {
@@ -832,6 +933,29 @@ mod tests {
                 ..Satin::default()
             }),
             bevel: Some(BevelEmboss {
+                gloss_contour: ContourPreset::Sawtooth.contour(),
+                gloss_anti_aliased: true,
+                contour_enabled: true,
+                // A custom contour: written as "Custom", read back by its points.
+                contour: Contour::new(&[
+                    ContourPoint {
+                        x: 0,
+                        y: 40,
+                        corner: false,
+                    },
+                    ContourPoint {
+                        x: 90,
+                        y: 200,
+                        corner: true,
+                    },
+                    ContourPoint {
+                        x: 255,
+                        y: 10,
+                        corner: false,
+                    },
+                ])
+                .unwrap(),
+                contour_range: 70.0,
                 style: BevelStyle::PillowEmboss,
                 depth: 250.0,
                 up: false,
@@ -924,7 +1048,89 @@ mod tests {
         );
         assert!((b.shadow_opacity - c.shadow_opacity).abs() < 1e-6);
         assert!(close(b.highlight_color, c.highlight_color));
+        // Contours come back exactly, with their anti-aliasing and range.
+        let (s, t) = (style.drop_shadow.unwrap(), back.drop_shadow.unwrap());
+        assert_eq!((s.contour, s.anti_aliased), (t.contour, t.anti_aliased));
+        assert_eq!(
+            back.inner_shadow.unwrap().contour.preset(),
+            Some(ContourPreset::Linear)
+        );
+        let (g, h) = (style.outer_glow.unwrap(), back.outer_glow.unwrap());
+        assert_eq!(
+            (g.contour, g.anti_aliased, g.range),
+            (h.contour, h.anti_aliased, h.range)
+        );
+        assert_eq!(back.inner_glow.unwrap().range, 50.0);
+        let (s, t) = (style.satin.unwrap(), back.satin.unwrap());
+        assert_eq!((s.contour, s.anti_aliased), (t.contour, t.anti_aliased));
+        assert_eq!(t.contour.preset(), Some(ContourPreset::Gaussian));
+        assert_eq!(
+            (
+                b.gloss_contour,
+                b.gloss_anti_aliased,
+                b.contour_enabled,
+                b.contour,
+                b.contour_anti_aliased,
+                b.contour_range
+            ),
+            (
+                c.gloss_contour,
+                c.gloss_anti_aliased,
+                c.contour_enabled,
+                c.contour,
+                c.contour_anti_aliased,
+                c.contour_range
+            )
+        );
         assert_eq!(write(&LayerStyle::default()), None);
+    }
+
+    #[test]
+    fn contours_slopshop_cannot_hold_are_approximated_as_linear() {
+        let point = |x: f64, y: f64| {
+            object(
+                b"CrPt",
+                &[
+                    (b"Hrzn", b"doub", x.to_be_bytes().to_vec()),
+                    (b"Vrtc", b"doub", y.to_be_bytes().to_vec()),
+                ],
+            )
+        };
+        let shadow_with = |points: Vec<Vec<u8>>| {
+            let mut items = shadow(DropShadow::default());
+            items.retain(|(k, _, _)| *k != b"TrnS");
+            items.push((
+                b"TrnS",
+                b"Objc",
+                object(b"ShpC", &[(b"Crv ", b"VlLs", list(points))]),
+            ));
+            let mut block = 0u32.to_be_bytes().to_vec();
+            block.extend(16u32.to_be_bytes());
+            block.extend(object(
+                b"null",
+                &[(b"DrSh", b"Objc", object(b"DrSh", &items))],
+            ));
+            read(&block, light(30.0)).unwrap()
+        };
+        // Three points, smooth (no `Cnty`: smooth, as Photoshop reads it).
+        let fine = shadow_with(vec![
+            point(0.0, 0.0),
+            point(128.0, 255.0),
+            point(255.0, 0.0),
+        ]);
+        assert!(!fine.approximated);
+        assert_eq!(
+            fine.style.drop_shadow.unwrap().contour.preset(),
+            Some(ContourPreset::Ring)
+        );
+        // Seventeen points; inputs going back.
+        let many = (0..17).map(|i| point(f64::from(i) * 15.0, 0.0)).collect();
+        let backwards = vec![point(200.0, 0.0), point(100.0, 255.0)];
+        for points in [many, backwards] {
+            let read = shadow_with(points);
+            assert!(read.approximated);
+            assert_eq!(read.style.drop_shadow.unwrap().contour, Contour::LINEAR);
+        }
     }
 
     #[test]

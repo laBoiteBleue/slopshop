@@ -31,10 +31,19 @@
 //! keeping its own `enabled`; absent, they show (an older reader shows them, losing nothing).
 //! From schema 0.37, `"use_global_light": true` in a shadow or a bevel: its angle (and a
 //! bevel's altitude) follow the document's `global_light`; absent, its own.
+//!
+//! From schema 0.39, contours: `"contour": [[x, y, corner], …]` (points on 0–255, `corner` a
+//! boolean, inputs increasing) and `"anti_aliased": true` in a shadow, a glow or a Satin, with a
+//! glow's `"range"` (percent); a bevel's `"gloss_contour"` and `"gloss_anti_aliased"`, and its
+//! Contour element `"contour": { "enabled": true, "curve": [[x, y, corner], …],
+//! "anti_aliased": false, "range": 50 }`. Each is written when it is not what its absence reads:
+//! a linear contour, not anti-aliased, a glow's range at 100, a bevel's Contour off (linear,
+//! 50 %), as effects were drawn before (Photoshop's Satin, Gaussian, is written).
 
 use serde_json::{Map, Value, json};
 use slopshop_core::blend::BlendMode;
 use slopshop_core::color::LinearRgba;
+use slopshop_core::contour::{Contour, ContourPoint};
 use slopshop_core::gradient::{Gradient, GradientShape, GradientStop};
 use slopshop_core::selection::StrokeLocation;
 use slopshop_core::style::{
@@ -44,6 +53,43 @@ use slopshop_core::style::{
 
 fn color(c: LinearRgba) -> Value {
     json!([c.r, c.g, c.b])
+}
+
+fn contour(c: &Contour) -> Value {
+    Value::Array(
+        c.points()
+            .iter()
+            .map(|p| json!([p.x, p.y, p.corner]))
+            .collect(),
+    )
+}
+
+/// A contour and whether it is anti-aliased into `value`, when they are not what absence reads
+/// (linear, not anti-aliased).
+fn insert_contour(value: &mut Value, c: &Contour, anti_aliased: bool) {
+    if *c != Contour::LINEAR {
+        value["contour"] = contour(c);
+    }
+    if anti_aliased {
+        value["anti_aliased"] = json!(true);
+    }
+}
+
+fn contour_of(value: &Value) -> Option<Contour> {
+    let points = value
+        .as_array()?
+        .iter()
+        .map(|p| {
+            let p = p.as_array().filter(|p| p.len() == 3)?;
+            let byte = |v: &Value| v.as_u64().and_then(|v| u8::try_from(v).ok());
+            Some(ContourPoint {
+                x: byte(&p[0])?,
+                y: byte(&p[1])?,
+                corner: p[2].as_bool()?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Contour::new(&points)
 }
 
 fn position_id(position: StrokeLocation) -> &'static str {
@@ -88,17 +134,23 @@ pub(super) fn to_json(
         if s.use_global_light {
             value["use_global_light"] = json!(true);
         }
+        insert_contour(&mut value, &s.contour, s.anti_aliased);
         value
     };
     let glow = |g: Glow| {
-        json!({
+        let mut value = json!({
             "enabled": g.enabled,
             "color": color(g.color),
             "mode": g.mode.id(),
             "opacity": g.opacity,
             "spread": g.spread,
             "size": g.size,
-        })
+        });
+        insert_contour(&mut value, &g.contour, g.anti_aliased);
+        if g.range != 100.0 {
+            value["range"] = json!(g.range);
+        }
+        value
     };
     if let Some(s) = style.drop_shadow {
         value.insert("drop_shadow".into(), shadow(s));
@@ -163,19 +215,18 @@ pub(super) fn to_json(
         );
     }
     if let Some(s) = style.satin {
-        value.insert(
-            "satin".into(),
-            json!({
-                "enabled": s.enabled,
-                "color": color(s.color),
-                "mode": s.mode.id(),
-                "opacity": s.opacity,
-                "angle": s.angle,
-                "distance": s.distance,
-                "size": s.size,
-                "invert": s.invert,
-            }),
-        );
+        let mut satin = json!({
+            "enabled": s.enabled,
+            "color": color(s.color),
+            "mode": s.mode.id(),
+            "opacity": s.opacity,
+            "angle": s.angle,
+            "distance": s.distance,
+            "size": s.size,
+            "invert": s.invert,
+        });
+        insert_contour(&mut satin, &s.contour, s.anti_aliased);
+        value.insert("satin".into(), satin);
     }
     if let Some(b) = style.bevel {
         let mut bevel = json!({
@@ -200,6 +251,25 @@ pub(super) fn to_json(
         });
         if b.use_global_light {
             bevel["use_global_light"] = json!(true);
+        }
+        if b.gloss_contour != Contour::LINEAR {
+            bevel["gloss_contour"] = contour(&b.gloss_contour);
+        }
+        if b.gloss_anti_aliased {
+            bevel["gloss_anti_aliased"] = json!(true);
+        }
+        let plain = BevelEmboss::default();
+        if b.contour_enabled
+            || b.contour != plain.contour
+            || b.contour_anti_aliased
+            || b.contour_range != plain.contour_range
+        {
+            bevel["contour"] = json!({
+                "enabled": b.contour_enabled,
+                "curve": contour(&b.contour),
+                "anti_aliased": b.contour_anti_aliased,
+                "range": b.contour_range,
+            });
         }
         value.insert("bevel".into(), bevel);
     }
@@ -247,6 +317,22 @@ impl Fields<'_> {
         BlendMode::from_id(self.0.get("mode")?.as_str()?)
     }
 
+    /// A boolean: absent, false (schema 0.39).
+    fn flag(&self, key: &str) -> Option<bool> {
+        match self.0.get(key) {
+            None => Some(false),
+            Some(value) => value.as_bool(),
+        }
+    }
+
+    /// A contour: absent, linear (schema 0.39).
+    fn contour(&self, key: &str) -> Option<Contour> {
+        match self.0.get(key) {
+            None => Some(Contour::LINEAR),
+            Some(value) => contour_of(value),
+        }
+    }
+
     fn color(&self) -> Option<LinearRgba> {
         let c = self.0.get("color")?.as_array()?;
         let [r, g, b] = [c.first()?, c.get(1)?, c.get(2)?].map(|v| v.as_f64());
@@ -290,6 +376,8 @@ pub(super) fn from_json(
             distance: f.number("distance")?,
             spread: f.number("spread")?,
             size: f.number("size")?,
+            contour: f.contour("contour")?,
+            anti_aliased: f.flag("anti_aliased")?,
         })
     };
     let glow = |f: &Fields| {
@@ -300,6 +388,13 @@ pub(super) fn from_json(
             opacity: f.opacity()?,
             spread: f.number("spread")?,
             size: f.number("size")?,
+            contour: f.contour("contour")?,
+            anti_aliased: f.flag("anti_aliased")?,
+            // Absent: the whole fade, as glows were drawn before.
+            range: match f.0.get("range") {
+                None => 100.0,
+                Some(range) => range.as_f64()?,
+            },
         })
     };
     let drop_shadow = effect(style, "drop_shadow", shadow).ok()?;
@@ -371,6 +466,8 @@ pub(super) fn from_json(
             distance: f.number("distance")?,
             size: f.number("size")?,
             invert: f.0.get("invert")?.as_bool()?,
+            contour: f.contour("contour")?,
+            anti_aliased: f.flag("anti_aliased")?,
         })
     })
     .ok()?;
@@ -389,6 +486,20 @@ pub(super) fn from_json(
         ]
         .into_iter()
         .find(|s| Some(bevel_style_id(*s)) == f.0.get("style").and_then(Value::as_str))?;
+        let plain = BevelEmboss::default();
+        let (contour_enabled, contour, contour_anti_aliased, contour_range) =
+            match f.0.get("contour") {
+                None => (false, plain.contour, false, plain.contour_range),
+                Some(value) => {
+                    let element = Fields(value.as_object()?);
+                    (
+                        element.0.get("enabled")?.as_bool()?,
+                        contour_of(element.0.get("curve")?)?,
+                        element.0.get("anti_aliased")?.as_bool()?,
+                        element.number("range")?,
+                    )
+                }
+            };
         Some(BevelEmboss {
             enabled: f.enabled()?,
             style,
@@ -405,6 +516,12 @@ pub(super) fn from_json(
             shadow_color,
             shadow_mode,
             shadow_opacity,
+            gloss_contour: f.contour("gloss_contour")?,
+            gloss_anti_aliased: f.flag("gloss_anti_aliased")?,
+            contour_enabled,
+            contour,
+            contour_anti_aliased,
+            contour_range,
         })
     })
     .ok()?;
