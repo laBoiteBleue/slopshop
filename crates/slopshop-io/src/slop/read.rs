@@ -571,9 +571,12 @@ pub(super) fn read_node(
     let style = match node.params.get("style") {
         None | Some(Value::Null) => None,
         Some(value) if node.version >= NODE_VERSION_STYLED => Some(
-            super::style::from_json(value, &|i| sources.listed_at(i))
-                .map(slopshop_core::style::Style::new)
-                .ok_or_else(|| corrupt("invalid layer style"))?,
+            super::style::check_known(value)
+                .and_then(|()| {
+                    super::style::from_json(value, &|i| sources.listed_at(i))
+                        .ok_or_else(|| corrupt("invalid layer style"))
+                })
+                .map(slopshop_core::style::Style::new)?,
         ),
         Some(_) => return Err(corrupt("a style needs node version 8")),
     };
@@ -799,7 +802,7 @@ fn gradient_map_of(
 fn gradient_fill_of(
     params: &Map<String, Value>,
 ) -> Result<slopshop_core::gradient::GradientField, FileError> {
-    use slopshop_core::gradient::{GradientField, GradientShape};
+    use slopshop_core::gradient::GradientField;
     let invalid = || corrupt("gradient fill without a valid gradient");
     let pair = |key: &str| -> Option<[f64; 2]> {
         let v = params.get(key)?.as_array().filter(|v| v.len() == 2)?;
@@ -810,9 +813,8 @@ fn gradient_fill_of(
         gradient: gradient_of(params).ok_or_else(invalid)?,
         alpha: alpha.map(|a| a as f32),
         shape: match params.get("shape").and_then(Value::as_str) {
-            Some("linear") => GradientShape::Linear,
-            Some("radial") => GradientShape::Radial,
-            _ => return Err(invalid()),
+            Some(id) => gradient_shape(id)?,
+            None => return Err(invalid()),
         },
         from: pair("from").ok_or_else(invalid)?,
         to: pair("to").ok_or_else(invalid)?,
@@ -821,6 +823,15 @@ fn gradient_fill_of(
         return Err(invalid());
     }
     Ok(field)
+}
+
+/// The gradient shape of `id` (schema 0.24: `linear`, `radial`; 0.42: `angle`, `reflected`,
+/// `diamond`); another comes from a newer SlopShop.
+pub(super) fn gradient_shape(
+    id: &str,
+) -> Result<slopshop_core::gradient::GradientShape, FileError> {
+    slopshop_core::gradient::GradientShape::from_id(id)
+        .ok_or_else(|| FileError::UnknownNodeType(format!("gradient shape {id}")))
 }
 
 /// The gradient of `params.gradient`'s stops, `[location, r, g, b]`.

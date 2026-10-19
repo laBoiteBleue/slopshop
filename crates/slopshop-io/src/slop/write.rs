@@ -582,13 +582,9 @@ fn gradient_stops(gradient: &slopshop_core::gradient::Gradient) -> Vec<[u16; 4]>
 
 /// A gradient fill layer's parameters (schema 0.24).
 fn gradient_fill_params(field: &slopshop_core::gradient::GradientField) -> Value {
-    let shape = match field.shape {
-        slopshop_core::gradient::GradientShape::Linear => "linear",
-        slopshop_core::gradient::GradientShape::Radial => "radial",
-    };
     json!({
         "gradient": gradient_stops(&field.gradient),
-        "shape": shape,
+        "shape": field.shape.id(),
         "from": field.from,
         "to": field.to,
         "alpha": field.alpha,

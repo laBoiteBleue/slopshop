@@ -1671,6 +1671,28 @@ fn gradient_fills_keep_their_gradient_and_place() {
             from: [0.0, 4.0],
             to: [0.0, 0.0],
         },
+        // Schema 0.42.
+        GradientField {
+            gradient,
+            alpha: [0.5, 1.0],
+            shape: GradientShape::Angle,
+            from: [2.0, 2.0],
+            to: [3.0, 0.5],
+        },
+        GradientField {
+            gradient,
+            alpha: [1.0, 1.0],
+            shape: GradientShape::Reflected,
+            from: [2.0, 2.0],
+            to: [2.0, 4.0],
+        },
+        GradientField {
+            gradient: gradient.reversed(),
+            alpha: [1.0, 0.0],
+            shape: GradientShape::Diamond,
+            from: [1.0, 3.0],
+            to: [4.0, 1.0],
+        },
     ];
     for field in fields {
         push(
@@ -1689,6 +1711,39 @@ fn gradient_fills_keep_their_gradient_and_place() {
         }
     }
     fs::remove_file(&path).ok();
+}
+
+#[test]
+fn gradient_shapes_round_trip_and_unknown_ones_are_newer() {
+    use slopshop_core::gradient::GradientShape;
+    use slopshop_core::style::{GradientOverlay, LayerStyle};
+    for shape in GradientShape::ALL {
+        let style = LayerStyle {
+            gradient_overlay: Some(GradientOverlay {
+                shape,
+                ..GradientOverlay::default()
+            }),
+            ..LayerStyle::default()
+        };
+        let json = super::style::to_json(&style, &|_| None);
+        assert_eq!(json["gradient_overlay"]["shape"], shape.id());
+        assert_eq!(
+            super::style::check_known(&json).map_err(|e| e.code()),
+            Ok(())
+        );
+        assert_eq!(super::style::from_json(&json, &|_| None), Some(style));
+    }
+    // A shape from a newer SlopShop is "newer version", not corruption.
+    assert_eq!(
+        read::gradient_shape("spiral").map_err(|e| e.code()),
+        Err("newerVersion")
+    );
+    let mut json = super::style::to_json(&LayerStyle::default(), &|_| None);
+    json["gradient_overlay"] = serde_json::json!({ "shape": "spiral" });
+    assert_eq!(
+        super::style::check_known(&json).map_err(|e| e.code()),
+        Err("newerVersion")
+    );
 }
 
 #[test]
@@ -1942,7 +1997,7 @@ fn gradient_overlays_and_satins_round_trip_on_every_kind_of_layer() {
     let fine = serde_json::json!([[0, 0, 0, 0], [4096, 255, 255, 255]]);
     assert!(super::style::from_json(&json(fine.clone(), "linear"), &|_| None).is_some());
     assert_eq!(
-        super::style::from_json(&json(fine, "diamond"), &|_| None),
+        super::style::from_json(&json(fine, "spiral"), &|_| None),
         None
     );
     let backwards = serde_json::json!([[4096, 0, 0, 0], [0, 255, 255, 255]]);

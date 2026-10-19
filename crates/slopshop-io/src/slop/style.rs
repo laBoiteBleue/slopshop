@@ -39,6 +39,9 @@
 //! "anti_aliased": false, "range": 50 }`. Each is written when it is not what its absence reads:
 //! a linear contour, not anti-aliased, a glow's range at 100, a bevel's Contour off (linear,
 //! 50 %), as effects were drawn before (Photoshop's Satin, Gaussian, is written).
+//!
+//! From schema 0.42, a Gradient Overlay's `shape` may also be `angle`, `reflected` or
+//! `diamond`; a shape this version does not know comes from a newer SlopShop.
 
 use serde_json::{Map, Value, json};
 use slopshop_core::blend::BlendMode;
@@ -202,10 +205,7 @@ pub(super) fn to_json(
                 "enabled": o.enabled,
                 "gradient": stops,
                 "reverse": o.reverse,
-                "shape": match o.shape {
-                    GradientShape::Linear => "linear",
-                    GradientShape::Radial => "radial",
-                },
+                "shape": o.shape.id(),
                 "angle": o.angle,
                 "scale": o.scale,
                 "align": o.align_with_layer,
@@ -353,6 +353,19 @@ fn effect<T>(
     }
 }
 
+/// `Err` when `params.style` names what a newer SlopShop wrote: a Gradient Overlay's shape this
+/// version does not know. What is malformed is left to [`from_json`].
+pub(super) fn check_known(value: &Value) -> Result<(), super::FileError> {
+    match value
+        .get("gradient_overlay")
+        .and_then(|o| o.get("shape"))
+        .and_then(Value::as_str)
+    {
+        Some(id) => super::read::gradient_shape(id).map(|_| ()),
+        None => Ok(()),
+    }
+}
+
 /// `params.style` as a style; `None` when it is malformed or out of range. `source(i)` is the
 /// document's source `i` (a Pattern Overlay's).
 pub(super) fn from_json(
@@ -443,11 +456,7 @@ pub(super) fn from_json(
             enabled: f.enabled()?,
             gradient: Gradient::new(&stops)?,
             reverse: f.0.get("reverse")?.as_bool()?,
-            shape: match f.0.get("shape")?.as_str()? {
-                "linear" => GradientShape::Linear,
-                "radial" => GradientShape::Radial,
-                _ => return None,
-            },
+            shape: GradientShape::from_id(f.0.get("shape")?.as_str()?)?,
             angle: f.number("angle")?,
             scale: f.number("scale")?,
             align_with_layer: f.0.get("align")?.as_bool()?,
