@@ -1556,6 +1556,30 @@ impl Edit {
         Ok(Edit::Batch(edits))
     }
 
+    /// The edit that makes the text layers among `ids` vector layers of their glyph outlines
+    /// (Type > Convert to Shape, as Photoshop's): a path filled with the text's own color, no
+    /// longer editable as text. Like any shape change, every layer linked to one of them follows
+    /// (ADR 0040); names, styles, masks and transforms are kept. [`EditError::NoLayers`] when
+    /// none of them is a text layer.
+    pub fn convert_to_shape(doc: &Document, ids: &[LayerId]) -> Result<Edit, EditError> {
+        let mut edits = Vec::new();
+        let mut seen = HashSet::new();
+        for &id in ids {
+            let layer = doc.layer(id).ok_or(EditError::UnknownLayer(id))?;
+            let LayerContent::Vector { source, .. } = &layer.content else {
+                continue;
+            };
+            if source.text_of().is_none() || !seen.insert(source.id()) {
+                continue;
+            }
+            edits.push(Self::reshape(doc, id, source.shape().clone())?);
+        }
+        if edits.is_empty() {
+            return Err(EditError::NoLayers);
+        }
+        Ok(Edit::Batch(edits))
+    }
+
     /// The edit that gives each of `ids` showing a source other layers show too a source of its
     /// own, of the same pixels (Layer > Make Unique, ADR 0040): changing it then leaves the
     /// others. [`EditError::NoLayers`] when none of them shares its source.
