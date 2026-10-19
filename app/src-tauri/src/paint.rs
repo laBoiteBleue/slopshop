@@ -949,6 +949,9 @@ pub struct GradientDto {
 enum GradientShapeDto {
     Linear,
     Radial,
+    Angle,
+    Reflected,
+    Diamond,
 }
 
 impl GradientDto {
@@ -959,6 +962,9 @@ impl GradientDto {
             shape: match field.shape {
                 GradientShape::Linear => GradientShapeDto::Linear,
                 GradientShape::Radial => GradientShapeDto::Radial,
+                GradientShape::Angle => GradientShapeDto::Angle,
+                GradientShape::Reflected => GradientShapeDto::Reflected,
+                GradientShape::Diamond => GradientShapeDto::Diamond,
             },
             from: field.from,
             to: field.to,
@@ -972,6 +978,9 @@ impl GradientDto {
             shape: match self.shape {
                 GradientShapeDto::Linear => GradientShape::Linear,
                 GradientShapeDto::Radial => GradientShape::Radial,
+                GradientShapeDto::Angle => GradientShape::Angle,
+                GradientShapeDto::Reflected => GradientShape::Reflected,
+                GradientShapeDto::Diamond => GradientShape::Diamond,
             },
             from: self.from,
             to: self.to,
