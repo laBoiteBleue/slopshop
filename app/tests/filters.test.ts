@@ -12,6 +12,8 @@ import {
   centerAt,
   filterEntryEdit,
   filterSteps,
+  mapChoices,
+  takesMap,
   filterable,
   hasSettings,
   newSeed,
@@ -263,6 +265,7 @@ test("the distortions: Twirl's angle, Pinch's and Spherize's amounts, Polar's wa
   expect(validValues("offset", [0.5, 0, 0])).toBe(false);
   expect(validValues("offset", [0, 0, 3])).toBe(false);
   expect(FILTER_MENU.find((m) => m.label === "menu.filter.distort")?.filters).toEqual([
+    "displace",
     "pinch",
     "polarCoordinates",
     "ripple",
@@ -272,6 +275,73 @@ test("the distortions: Twirl's angle, Pinch's and Spherize's amounts, Polar's wa
     "wave",
     "zigZag",
   ]);
+});
+
+test("Displace: Photoshop's scales and modes, a map besides, sent by its id", () => {
+  expect(FILTERS.displace.params.map((p) => p.key)).toEqual([
+    "horizontal",
+    "vertical",
+    "mapMode",
+    "edge",
+  ]);
+  expect(FILTERS.displace.defaults).toEqual([10, 10, 0, 1]);
+  expect(validValues("displace", [-999, 999, 1, 0])).toBe(true);
+  expect(validValues("displace", [1000, 0, 0, 0])).toBe(false);
+  expect(validValues("displace", [10.5, 0, 0, 0])).toBe(false);
+  expect(validValues("displace", [10, 10, 2, 0])).toBe(false);
+  expect(takesMap("displace")).toBe(true);
+  expect(takesMap("shear")).toBe(false);
+  const map = { id: 7, name: "map.png" };
+  expect(applyFilterEdit(3, { filter: "displace", values: [1, 2, 0, 1], map })).toEqual({
+    kind: "applyFilter",
+    id: 3,
+    filter: "displace",
+    values: [1, 2, 0, 1],
+    map: 7,
+  });
+  expect(applyFilterEdit(3, { filter: "pinch", values: [5] })).toEqual({
+    kind: "applyFilter",
+    id: 3,
+    filter: "pinch",
+    values: [5],
+  });
+  // An entry's map read back, kept by it: not sent again.
+  const entry = {
+    kind: "filter",
+    count: 1,
+    hidden: false,
+    steps: [],
+    filter: "displace",
+    filterSteps: [{ id: "displace", values: [1, 2, 0, 1], map }],
+  } as unknown as StackEntryView;
+  const settings = filterSteps(entry);
+  expect(settings).toEqual([{ filter: "displace", values: [1, 2, 0, 1], map }]);
+  expect(filterEntryEdit(3, 0, settings, false)).toEqual({
+    kind: "setStackEntry",
+    id: 3,
+    index: 0,
+    hidden: false,
+    filters: [{ filter: "displace", values: [1, 2, 0, 1] }],
+  });
+});
+
+test("Displace's maps: the Sources panel's images, those opened, the current one, once each", () => {
+  const sources = [
+    { id: 1, name: "photo.jpg", width: 2, height: 2, layers: [1] },
+    { id: 2, kind: "shape" as const, name: "Star", width: 2, height: 2, layers: [2] },
+    { id: 3, kind: "image" as const, name: "clouds.png", width: 2, height: 2, layers: [3] },
+  ];
+  const loaded = [
+    { id: 9, name: "ripples.psd" },
+    { id: 3, name: "clouds.png" },
+  ];
+  expect(mapChoices({ sources }, loaded, { id: 12, name: "old.png" })).toEqual([
+    { id: 1, name: "photo.jpg" },
+    { id: 3, name: "clouds.png" },
+    { id: 9, name: "ripples.psd" },
+    { id: 12, name: "old.png" },
+  ]);
+  expect(mapChoices(null, [])).toEqual([]);
 });
 
 test("Shear: Undefined Areas, then its curve's points, as many as it has", () => {

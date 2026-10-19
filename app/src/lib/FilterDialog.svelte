@@ -11,7 +11,7 @@
   // entry of a stack again.
   import { onMount, untrack } from "svelte";
   import { movable } from "./dialogDrag";
-  import type { FilterId } from "./engine";
+  import type { FilterId, MapView } from "./engine";
   import {
     FILTERS,
     KERNEL_SIDE,
@@ -22,6 +22,7 @@
     shownParams,
     sliderPosition,
     sliderValue,
+    takesMap,
     validValues,
   } from "./filters";
   import { t } from "./i18n/index.svelte";
@@ -36,17 +37,28 @@
     onpreview,
     onok,
     oncancel,
+    map = null,
+    maps = [],
+    mapFixed = false,
+    onchoosemap,
   }: {
     filter: FilterId;
     /** The settings it opens with. */
     values: number[];
     /** The canvas shows the settings. */
     preview: boolean;
-    /** Valid settings, each time they change, the first ones included. */
-    onlive: (values: number[]) => void;
+    /** Valid settings, each time they change, the first ones included; Displace's map too. */
+    onlive: (values: number[], map?: MapView) => void;
     onpreview: (preview: boolean) => void;
-    onok: (values: number[]) => void;
+    onok: (values: number[], map?: MapView) => void;
     oncancel: () => void;
+    /** Displace's map it opens with (`takesMap`), and those it may choose from. */
+    map?: MapView | null;
+    maps?: MapView[];
+    /** The map is the entry's, edited again: shown, not chosen. */
+    mapFixed?: boolean;
+    /** Choose a File…: an image file opened as a map, `null` when none was. */
+    onchoosemap?: () => Promise<MapView | null>;
   } = $props();
 
   const params = $derived(FILTERS[filter].params);
@@ -64,12 +76,26 @@
     ),
   );
   let current = $state<number[]>(untrack(() => [...values]));
-  const valid = $derived(validValues(filter, current));
+  // Displace's map: OK and the preview wait for one.
+  const mapped = $derived(takesMap(filter));
+  let currentMap = $state<MapView | null>(untrack(() => map));
+  const choices = $derived(
+    currentMap && !maps.some((m) => m.id === currentMap?.id) ? [...maps, currentMap] : maps,
+  );
+  const valid = $derived(validValues(filter, current) && (!mapped || currentMap !== null));
 
   $effect(() => {
     const shown = [...current];
-    if (untrack(() => validValues(filter, shown))) untrack(() => onlive(shown));
+    const chosen = currentMap;
+    if (!untrack(() => validValues(filter, shown))) return;
+    if (!untrack(() => takesMap(filter))) untrack(() => onlive(shown));
+    else if (chosen) untrack(() => onlive(shown, chosen));
   });
+
+  async function chooseFile() {
+    const chosen = await onchoosemap?.();
+    if (chosen) currentMap = chosen;
+  }
 
   let dialog: HTMLDialogElement;
 
@@ -106,7 +132,9 @@
 
   function submit(e: SubmitEvent) {
     e.preventDefault();
-    if (valid) onok([...current]);
+    if (!valid) return;
+    if (mapped && currentMap) onok([...current], currentMap);
+    else onok([...current]);
   }
 </script>
 
@@ -259,6 +287,33 @@
           />
         {/if}
       {/each}
+      {#if mapped}
+        <!-- Displace's map: an image of the Sources panel, or a file opened for it. -->
+        <div class="map-setting">
+          <label for="filter-map">{t("filter.displace.source")}</label>
+          <select
+            id="filter-map"
+            disabled={mapFixed}
+            value={currentMap?.id ?? ""}
+            onchange={(e) => {
+              const id = Number(e.currentTarget.value);
+              currentMap = choices.find((m) => m.id === id) ?? null;
+            }}
+          >
+            {#if !currentMap}
+              <option value="" disabled>{t("filter.displace.pick")}</option>
+            {/if}
+            {#each choices as choice (choice.id)}
+              <option value={choice.id}>{choice.name || t("filter.displace.unnamed")}</option>
+            {/each}
+          </select>
+          {#if !mapFixed}
+            <button type="button" class="btn" onclick={chooseFile}>
+              {t("filter.displace.chooseFile")}
+            </button>
+          {/if}
+        </div>
+      {/if}
     </div>
     <div class="buttons">
       <button type="submit" class="btn primary" disabled={!valid}>{t("sizeDialog.ok")}</button>
@@ -357,6 +412,16 @@
 
   .curve-setting {
     order: -1;
+  }
+
+  .map-setting {
+    display: grid;
+    gap: 4px;
+    justify-items: start;
+  }
+
+  .map-setting select {
+    max-width: 100%;
   }
 
   /* Custom's 5 × 5 weights. */

@@ -40,6 +40,7 @@
     type LayerStyle,
     type FontsView,
     type LayerView,
+    type MapView,
     type CharStyleDto,
     type TextAlign,
     type TextDto,
@@ -190,6 +191,8 @@
     filterEntryEdit,
     filterSteps,
     filterable,
+    mapChoices,
+    takesMap,
     type FilterSettings,
   } from "./lib/filters";
   import { ALIGNS, DISTRIBUTES, type AlignId, type DistributeId } from "./lib/align";
@@ -2076,6 +2079,7 @@
         filter: entry.filter,
         preview: true,
         values: settings[step].values,
+        map: settings[step].map ?? null,
         entry: { index, step, hidden: entry.hidden, original: settings, settings },
       };
       // A hidden entry shows while it is edited.
@@ -2147,6 +2151,10 @@
   let lastFilter = $state<FilterSettings | null>(null);
   /** Each filter's settings used last, its dialog's start, for the session. */
   const filterValues: Partial<Record<FilterId, number[]>> = {};
+  /** Displace's maps opened from files for each document (by its id), for the session. */
+  let loadedMaps = $state<Record<number, MapView[]>>({});
+  /** Displace's map chosen last, and the document it is of: its dialog's start there. */
+  let lastMap: { documentId: number; map: MapView } | null = null;
 
   /**
    * A filter's dialog (ADR 0034): applying it to the active layer, or editing a filter entry of
@@ -2163,6 +2171,8 @@
     preview: boolean;
     /** The settings shown (of the step edited). */
     values: number[];
+    /** Displace's map (`takesMap`): none until one is chosen; an entry's, edited again. */
+    map: MapView | null;
     entry: {
       index: number;
       step: number;
@@ -2182,8 +2192,12 @@
       : null;
   }
 
-  /** Filter > `filter`…: its dialog on the active layer, at `values`. */
-  function openFilter(filter: FilterId, values = filterValues[filter] ?? FILTERS[filter].defaults) {
+  /** Filter > `filter`…: its dialog on the active layer, at `values` (Displace with `map`). */
+  function openFilter(
+    filter: FilterId,
+    values = filterValues[filter] ?? FILTERS[filter].defaults,
+    map: MapView | null = null,
+  ) {
     commitTransform();
     const doc = active;
     const layer = filterLayer();
@@ -2203,8 +2217,29 @@
       preview: true,
       // Applied anew: another grain for the filters that draw one, the colors of the moment.
       values: fresh(filter, values),
+      map: takesMap(filter) ? (map ?? (lastMap?.documentId === doc.id ? lastMap.map : null)) : null,
       entry: null,
     };
+  }
+
+  /** Displace's Choose a File…: an image file opened as a map for the dialog's document. */
+  async function chooseDisplacementMap(): Promise<MapView | null> {
+    const documentId = filterDialog?.documentId;
+    if (documentId === undefined) return null;
+    const picked = await openDialog({
+      title: t("filter.displace.chooseFile"),
+      multiple: false,
+      directory: false,
+    });
+    if (typeof picked !== "string") return null;
+    try {
+      const map = await engine.loadDisplacementMap(documentId, picked);
+      loadedMaps[documentId] = [...(loadedMaps[documentId] ?? []), map];
+      return map;
+    } catch (e) {
+      showError(t("filter.displace.loadFailed", { detail: String(e) }));
+      return null;
+    }
   }
 
   /** `values` of `filter` applied anew: new seeds, the current drawing colors. */
@@ -2231,6 +2266,7 @@
       filter,
       preview: true,
       values: filterValues[filter] ?? FILTERS[filter].defaults,
+      map: null,
       entry: null,
     };
   }
@@ -2250,6 +2286,7 @@
       const request = applyFiltersEdit(dialog.layerIds, {
         filter: dialog.filter,
         values: dialog.values,
+        ...(dialog.map ? { map: dialog.map } : {}),
       });
       void sync(engine.performLive(dialog.documentId, request, true));
     } else {
@@ -2257,9 +2294,10 @@
     }
   }
 
-  function filterLive(values: number[]) {
+  function filterLive(values: number[], map?: MapView) {
     const dialog = filterDialog;
     if (!dialog) return;
+    if (map && !dialog.entry) dialog.map = map;
     const entry = dialog.entry && {
       ...dialog.entry,
       settings: dialog.entry.settings.map((s, i) =>
@@ -2281,13 +2319,19 @@
    * (Preview on, the same settings) is kept as it is, with what was computed of it: applying
    * it again would compute the filter again.
    */
-  function applyFilterDialog(values: number[]) {
+  function applyFilterDialog(values: number[], map?: MapView) {
     const dialog = filterDialog;
     filterDialog = null;
     if (!dialog) return;
-    const shown = dialog.preview && JSON.stringify(values) === JSON.stringify(dialog.values);
+    const shown =
+      dialog.preview &&
+      JSON.stringify(values) === JSON.stringify(dialog.values) &&
+      (dialog.entry !== null || map?.id === dialog.map?.id);
     if (!dialog.entry) {
-      const settings = { filter: dialog.filter, values };
+      const settings: FilterSettings = map
+        ? { filter: dialog.filter, values, map }
+        : { filter: dialog.filter, values };
+      if (map) lastMap = { documentId: dialog.documentId, map };
       filterValues[dialog.filter] = values;
       // Filter > Repeat repeats the Filter menu's filters only.
       if (!isAdjustmentFilter(dialog.filter)) lastFilter = settings;
@@ -2361,8 +2405,11 @@
     const doc = active;
     const layer = filterLayer();
     if (!doc || !layer || !lastFilter) return;
-    const { filter, values } = lastFilter;
-    void edit(doc.id, applyFilterEdit(layer.id, { filter, values: fresh(filter, values) }));
+    const { filter, values, map } = lastFilter;
+    void edit(
+      doc.id,
+      applyFilterEdit(layer.id, { filter, values: fresh(filter, values), ...(map ? { map } : {}) }),
+    );
   }
 
   /** Edit > Fill is open, for this layer, with Color…'s color; hidden while it is picked. */
@@ -5492,7 +5539,8 @@
       },
       repeatFilterSettings: {
         label: t("menu.filter.repeatSettings"),
-        run: () => lastFilter && openFilter(lastFilter.filter, lastFilter.values),
+        run: () =>
+          lastFilter && openFilter(lastFilter.filter, lastFilter.values, lastFilter.map ?? null),
         disabled: !lastFilter || !filterLayer(),
       },
       adjustLevels: {
@@ -7465,6 +7513,10 @@
     onpreview={filterPreview}
     onok={applyFilterDialog}
     oncancel={cancelFilter}
+    map={filterDialog.map}
+    maps={mapChoices(active, loadedMaps[filterDialog.documentId] ?? [], filterDialog.map)}
+    mapFixed={filterDialog.entry !== null}
+    onchoosemap={chooseDisplacementMap}
   />
 {/if}
 {#if liquifyDialog}
