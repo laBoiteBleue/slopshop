@@ -108,8 +108,12 @@ test("the glows and Inner Shadow come at Photoshop's defaults, in the dialog's o
     opacity: 0.75,
     spread: 0,
     size: 5,
+    // Linear (absent), over 50 %.
+    antiAliased: false,
+    range: 50,
   });
   assert.equal(withEffect(null, "innerShadow", true).innerShadow?.mode, "multiply");
+  assert.equal(withEffect(null, "innerShadow", true).innerShadow?.contour, undefined);
   let style = withEffect(null, "dropShadow", true);
   for (const id of ["outerGlow", "innerGlow", "innerShadow", "stroke", "colorOverlay"] as const) {
     style = withEffect(style, id, true);
@@ -170,6 +174,8 @@ test("Satin comes black, Multiply, 50 %, 19°, 11 and 14 pixels, inverted, under
     distance: 11,
     size: 14,
     invert: true,
+    // Gaussian (absent), anti-aliased.
+    antiAliased: true,
   });
   let style = withEffect(null, "colorOverlay", true);
   style = withEffect(style, "satin", true);
@@ -197,6 +203,11 @@ test("Bevel and Emboss comes first, Photoshop's Inner Bevel lit from 120° at 30
     shadowColor: [0, 0, 0],
     shadowMode: "multiply",
     shadowOpacity: 0.75,
+    // Linear contours (absent), its Contour element off.
+    glossAntiAliased: false,
+    contourEnabled: false,
+    contourAntiAliased: false,
+    contourRange: 50,
   });
   let style = withEffect(null, "stroke", true);
   style = withEffect(style, "bevel", true);

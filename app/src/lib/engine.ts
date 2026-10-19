@@ -323,6 +323,18 @@ export type StyleBevel = {
   shadowColor: [number, number, number];
   shadowMode: BlendModeId;
   shadowOpacity: number;
+  /** Shading > Gloss Contour. Absent: Linear. */
+  glossContour?: StyleContour;
+  /** Absent: false. */
+  glossAntiAliased?: boolean;
+  /** Its Contour element (the dialog's Contour page). Absent: off. */
+  contourEnabled?: boolean;
+  /** Absent: Linear. */
+  contour?: StyleContour;
+  /** Absent: false. */
+  contourAntiAliased?: boolean;
+  /** Percent, 1 to 100. Absent: 50. */
+  contourRange?: number;
 };
 
 /** A layer style's Satin: shading inside the shape that follows its edges. */
@@ -336,6 +348,10 @@ export type StyleSatin = {
   distance: number;
   size: number;
   invert: boolean;
+  /** Absent: Gaussian (Photoshop's). */
+  contour?: StyleContour;
+  /** Absent: true. */
+  antiAliased?: boolean;
 };
 
 /** A layer style's Gradient Overlay: the layer's shape filled with a gradient. */
@@ -369,6 +385,10 @@ export type StyleShadow = {
   /** Percent. */
   spread: number;
   size: number;
+  /** Quality > Contour. Absent: Linear. */
+  contour?: StyleContour;
+  /** Absent: false. */
+  antiAliased?: boolean;
 };
 
 /** A glow of a layer style: Outer Glow, Inner Glow. */
@@ -380,7 +400,26 @@ export type StyleGlow = {
   /** Percent. */
   spread: number;
   size: number;
+  /** Quality > Contour. Absent: Linear. */
+  contour?: StyleContour;
+  /** Absent: false. */
+  antiAliased?: boolean;
+  /** The part of the glow's fade the contour spans, percent (1 to 100). Absent: 50. */
+  range?: number;
 };
+
+/**
+ * A layer style's contour (ContourDto in ipc.rs): a curve on 0–255 through its points
+ * `[input, output, corner]` (the curve breaks at a corner), reshaping an effect's fade.
+ */
+export type StyleContour = {
+  points: [number, number, boolean][];
+  /** Its output (0–1) at evenly spaced inputs, from the engine, for drawing; not read back. */
+  samples?: number[];
+};
+
+/** One of Photoshop's contours (Linear, Cone…), as the Contour picker offers it. */
+export type ContourPreset = { id: string; contour: StyleContour };
 
 /** Turns and flips of Image > Image Rotation. */
 /** What Image > Trim takes off: transparent margins, or those of a corner's color. */
@@ -1830,6 +1869,8 @@ export const engine = {
   /** Layer > Layer Style > Copy Layer Style: the layer's style kept by the app (for any tab). */
   copyLayerStyle: (documentId: number, layerId: number) =>
     serial(() => invoke<void>("copy_layer_style", { documentId, layerId })),
+  /** Photoshop's contours, in its picker's order, for the Layer Style dialog. */
+  contourPresets: () => invoke<ContourPreset[]>("contour_presets"),
   /** Layer > Layer Style > Paste Layer Style onto layers `ids`, one undo entry. */
   pasteLayerStyle: (documentId: number, ids: number[]) =>
     serial(() => invoke<DocumentView>("paste_layer_style", { documentId, ids })),

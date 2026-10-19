@@ -1,7 +1,9 @@
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { expect, test, vi } from "vitest";
-import type { LayerStyle } from "../../src/lib/engine";
+import { afterEach, expect, test, vi } from "vitest";
+import type { ContourPreset, LayerStyle, StyleContour } from "../../src/lib/engine";
+import { CONTOUR_PRESET_IDS, forgetContourPresets } from "../../src/lib/styleContours";
 import LayerStyleDialog, { type StylePage } from "../../src/lib/LayerStyleDialog.svelte";
 import { withEffect, withPatternOverlay } from "../../src/lib/layerStyle";
 import { forgetDialogPlaces } from "../../src/lib/dialogDrag";
@@ -260,4 +262,149 @@ test("a Pattern Overlay's scale, angle and link", async () => {
   expect(last(onchange).patternOverlay).toMatchObject({ source: 9, link: false, scale: 1 });
   await user.click(within(settings).getByRole("button", { name: "Choose another pattern" }));
   expect(onpickpattern).toHaveBeenCalled();
+});
+
+// Contours (Photoshop's Quality > Contour): the engine lists its presets, each drawn.
+
+const CONE: StyleContour["points"] = [
+  [0, 0, false],
+  [128, 255, true],
+  [255, 0, false],
+];
+const GAUSSIAN: StyleContour["points"] = [
+  [0, 0, false],
+  [64, 18, false],
+  [128, 128, false],
+  [191, 237, false],
+  [255, 255, false],
+];
+
+/** The engine's presets (the points of those the tests pick; the others' made up). */
+function withPresets() {
+  const presets: ContourPreset[] = CONTOUR_PRESET_IDS.map((id, i) => ({
+    id,
+    contour: {
+      points:
+        id === "cone"
+          ? CONE
+          : id === "gaussian"
+            ? GAUSSIAN
+            : [
+                [0, i, false],
+                [255, 255 - i, false],
+              ],
+      samples: [0, 0.5, 1],
+    },
+  }));
+  presets[0].contour.points = [
+    [0, 0, false],
+    [255, 255, false],
+  ];
+  mockIPC((cmd) => (cmd === "contour_presets" ? presets : null));
+}
+
+afterEach(() => {
+  clearMocks();
+  forgetContourPresets();
+});
+
+test("a shadow's Contour drops down Photoshop's contours; a pick and Anti-aliased are sent", async () => {
+  withPresets();
+  const { onchange, user } = open(withEffect(null, "dropShadow", true), "dropShadow");
+  const settings = screen.getByRole("region", { name: "Drop Shadow" });
+  const picker = within(settings).getByRole("button", { name: "Contour" });
+  expect(picker).toHaveAttribute("title", "Linear");
+  await user.click(picker);
+  const list = await within(settings).findByRole("listbox", { name: "Contour" });
+  await vi.waitFor(() => expect(within(list).getAllByRole("option")).toHaveLength(12));
+  expect(within(list).getByRole("option", { name: "Linear" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await user.click(within(list).getByRole("option", { name: "Cone" }));
+  expect(last(onchange).dropShadow?.contour?.points).toEqual(CONE);
+  expect(within(settings).queryByRole("listbox")).not.toBeInTheDocument();
+  expect(picker).toHaveAttribute("title", "Cone");
+  await user.click(within(settings).getByRole("checkbox", { name: "Anti-aliased" }));
+  expect(last(onchange).dropShadow?.antiAliased).toBe(true);
+});
+
+test("a glow has a Range; a contour from Photoshop that is no preset shows as Custom", async () => {
+  withPresets();
+  const glow = withEffect(null, "outerGlow", true);
+  const custom: StyleContour = {
+    points: [
+      [0, 40, false],
+      [90, 200, true],
+      [255, 10, false],
+    ],
+    samples: [0.2, 0.8, 0.1],
+  };
+  const { onchange, user } = open(
+    { ...glow, outerGlow: { ...glow.outerGlow!, contour: custom } },
+    "outerGlow",
+  );
+  const settings = screen.getByRole("region", { name: "Outer Glow" });
+  const picker = within(settings).getByRole("button", { name: "Contour" });
+  await vi.waitFor(() => expect(picker).toHaveAttribute("title", "Custom"));
+  const range = within(settings).getAllByRole("spinbutton").at(-1)!;
+  expect(range).toHaveValue(50);
+  await user.clear(range);
+  await user.type(range, "30");
+  await user.tab();
+  expect(last(onchange).outerGlow).toMatchObject({ range: 30, contour: custom });
+  // A shadow has none.
+  document.body.innerHTML = "";
+  open(withEffect(null, "innerShadow", true), "innerShadow");
+  const shadow = screen.getByRole("region", { name: "Inner Shadow" });
+  expect(within(shadow).queryByText("Range")).not.toBeInTheDocument();
+});
+
+test("Satin's contour is Photoshop's Gaussian, anti-aliased", async () => {
+  withPresets();
+  const { onchange, user } = open(withEffect(null, "satin", true), "satin");
+  const settings = screen.getByRole("region", { name: "Satin" });
+  expect(within(settings).getByRole("button", { name: "Contour" })).toHaveAttribute(
+    "title",
+    "Gaussian",
+  );
+  const anti = within(settings).getByRole("checkbox", { name: "Anti-aliased" });
+  expect(anti).toBeChecked();
+  await user.click(anti);
+  expect(last(onchange).satin?.antiAliased).toBe(false);
+});
+
+test("Bevel & Emboss: its Gloss Contour, and its Contour element turned on from the list", async () => {
+  withPresets();
+  const { onchange, onpage, user } = open(null, "bevel");
+  // The Contour element on: the bevel is turned on with it, its page shown.
+  await user.click(screen.getByRole("checkbox", { name: "Contour" }));
+  expect(last(onchange).bevel).toMatchObject({ enabled: true, contourEnabled: true });
+  expect(onpage).toHaveBeenLastCalledWith("bevelContour");
+  expect(screen.getByRole("checkbox", { name: "Bevel & Emboss" })).toBeChecked();
+  // Its page, as the app shows it next.
+  document.body.innerHTML = "";
+  const next = open(last(onchange), "bevelContour");
+  const page = screen.getByRole("region", { name: "Contour" });
+  await next.user.click(within(page).getByRole("button", { name: "Contour" }));
+  await next.user.click(await within(page).findByRole("option", { name: "Cone" }));
+  expect(last(next.onchange).bevel?.contour?.points).toEqual(CONE);
+  const range = within(page).getByRole("spinbutton");
+  await next.user.clear(range);
+  await next.user.type(range, "70");
+  await next.user.tab();
+  expect(last(next.onchange).bevel?.contourRange).toBe(70);
+  // Off: the bevel stays, its Contour page says how to turn it on.
+  await next.user.click(screen.getByRole("checkbox", { name: "Contour" }));
+  expect(last(next.onchange).bevel).toMatchObject({ enabled: true, contourEnabled: false });
+  expect(within(page).getByText("Check this effect in the list to set it.")).toBeInTheDocument();
+  // The Gloss Contour, on the bevel's page.
+  document.body.innerHTML = "";
+  const bevel = open(last(next.onchange), "bevel");
+  const shading = screen.getByRole("region", { name: "Bevel & Emboss" });
+  await bevel.user.click(within(shading).getByRole("button", { name: "Gloss Contour" }));
+  await bevel.user.click(await within(shading).findByRole("option", { name: "Gaussian" }));
+  expect(last(bevel.onchange).bevel?.glossContour?.points).toEqual(GAUSSIAN);
+  await bevel.user.click(within(shading).getByRole("checkbox", { name: "Anti-aliased" }));
+  expect(last(bevel.onchange).bevel?.glossAntiAliased).toBe(true);
 });
