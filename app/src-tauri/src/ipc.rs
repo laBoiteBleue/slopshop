@@ -785,6 +785,16 @@ pub struct EntryView {
 pub struct FilterView {
     pub id: &'static str,
     pub values: Vec<f32>,
+    /// Displace's map: a source (its id and name), kept by the step.
+    pub map: Option<MapView>,
+}
+
+/// A displacement map (Displace's, a source kept by the document): its id and name.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapView {
+    pub id: u64,
+    pub name: String,
 }
 
 impl DocumentView {
@@ -1057,6 +1067,10 @@ impl LayerView {
                                 .map(|step| FilterView {
                                     id: step.filter.id(),
                                     values: step.filter.params(),
+                                    map: step.map.as_ref().map(|m| MapView {
+                                        id: m.id().get(),
+                                        name: m.name().to_owned(),
+                                    }),
                                 })
                                 .collect(),
                         },
@@ -1467,6 +1481,10 @@ pub enum EditRequest {
         id: u64,
         filter: String,
         values: Vec<f32>,
+        /// Displace's map: a source of the document, or one loaded for it
+        /// (`maps::load_displacement_map`), by id.
+        #[serde(default)]
+        map: Option<u64>,
     },
     /// Image > Adjustments (ADR 0029): the adjustment applied to the visible raster layers of
     /// `ids`, within the selection (values and curves as `SetAdjustment`).
@@ -2186,12 +2204,33 @@ impl EditRequest {
                 )
                 .map_err(|e| e.to_string())?
             }
-            EditRequest::ApplyFilter { id, filter, values } => Edit::apply_filter(
-                session.document(),
-                LayerId::from_raw(id),
-                FilterSettings { filter, values }.filter()?,
-            )
-            .map_err(|e| e.to_string())?,
+            EditRequest::ApplyFilter {
+                id,
+                filter,
+                values,
+                map,
+            } => {
+                let document = session.document();
+                let map = match map {
+                    Some(map) => Some(
+                        document
+                            .all_layers()
+                            .flat_map(|l| l.sources())
+                            .chain(loaded.values())
+                            .find(|s| s.id().get() == map)
+                            .cloned()
+                            .ok_or("the displacement map is no longer in the document")?,
+                    ),
+                    None => None,
+                };
+                Edit::apply_filter_with_map(
+                    document,
+                    LayerId::from_raw(id),
+                    FilterSettings { filter, values }.filter()?,
+                    map,
+                )
+                .map_err(|e| e.to_string())?
+            }
             EditRequest::DeletePaint { ids } => {
                 let ids: Vec<LayerId> = ids.into_iter().map(LayerId::from_raw).collect();
                 Edit::delete_paint(session.document(), &ids).map_err(|e| e.to_string())?
@@ -4553,5 +4592,97 @@ mod tests {
             id.get()
         ));
         assert_eq!(view.entries[0].filter_steps[0].values, vec![7.0]);
+        assert_eq!(view.entries[0].filter_steps[0].map, None);
+    }
+
+    #[test]
+    fn displace_names_its_map_a_source_of_the_document_or_one_loaded_for_it() {
+        use slopshop_core::color::PixelFormat;
+        use slopshop_core::raster::RasterImage;
+        let size = slopshop_core::Size::new(4, 4);
+        let image = |v: u8| {
+            std::sync::Arc::new(
+                RasterImage::from_pixels(size, PixelFormat::RGBA8_SRGB, &[v; 64]).unwrap(),
+            )
+        };
+        let mut document = Document::new(size);
+        let id = document.allocate_layer_id();
+        Edit::InsertLayer {
+            parent: None,
+            index: 0,
+            layer: Layer {
+                locks: Default::default(),
+                id,
+                name: "pixels".to_owned(),
+                visible: true,
+                opacity: 1.0,
+                blend_mode: BlendMode::Normal,
+                content: LayerContent::raster(image(10)),
+                mask: None,
+                clipped: false,
+                transform: slopshop_core::Affine::IDENTITY.into(),
+                style: None,
+                warp: None,
+                vector_mask: None,
+            },
+        }
+        .apply(&mut document)
+        .unwrap();
+        let shown = document
+            .layer(id)
+            .unwrap()
+            .content
+            .source()
+            .unwrap()
+            .id()
+            .get();
+        let file = slopshop_core::Source::new(image(200), "map.png");
+        let loaded = HashMap::from([(file.id().get(), std::sync::Arc::clone(&file))]);
+        let mut session = Session::new(document);
+        let mut send = |json: String| {
+            let request: EditRequest = serde_json::from_str(&json).unwrap();
+            let edit = request.into_edit_with(&mut session, &loaded)?;
+            session.perform(edit).map_err(|e| e.to_string())?;
+            Ok::<_, String>(LayerView::new(session.document().layer(id).unwrap()))
+        };
+        let displace = |map: u64| {
+            format!(
+                r#"{{"kind":"applyFilter","id":{},"filter":"displace","values":[10,-20,1,0],"map":{map}}}"#,
+                id.get()
+            )
+        };
+        let view = send(displace(shown)).unwrap();
+        assert_eq!(view.entries[0].filter, Some("displace"));
+        assert_eq!(
+            view.entries[0].filter_steps[0].values,
+            vec![10.0, -20.0, 1.0, 0.0]
+        );
+        assert_eq!(
+            view.entries[0].filter_steps[0].map.as_ref().unwrap().id,
+            shown
+        );
+        let view = send(displace(file.id().get())).unwrap();
+        let map = view.entries[1].filter_steps[0].map.clone().unwrap();
+        assert_eq!((map.id, map.name.as_str()), (file.id().get(), "map.png"));
+        // Edited again: the map stays.
+        let view = send(format!(
+            r#"{{"kind":"setStackEntry","id":{},"index":1,"hidden":false,
+                "filters":[{{"filter":"displace","values":[50,50,0,1]}}]}}"#,
+            id.get()
+        ))
+        .unwrap();
+        assert_eq!(
+            view.entries[1].filter_steps[0].map.as_ref().unwrap().id,
+            map.id
+        );
+        // A map no longer there, or none at all, is refused.
+        assert!(send(displace(u64::MAX)).is_err());
+        assert!(
+            send(format!(
+                r#"{{"kind":"applyFilter","id":{},"filter":"displace","values":[10,10,0,1]}}"#,
+                id.get()
+            ))
+            .is_err()
+        );
     }
 }
