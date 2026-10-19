@@ -2877,7 +2877,7 @@ fn text_layers_round_trip_with_their_text_and_outlines() {
         )),
         1.0,
     );
-    // Characters set otherwise (schema 0.39), in two colors: their glyphs by color.
+    // Characters set otherwise (schema 0.41), in two colors: their glyphs by color.
     let spans = text(None, TextAlign::Left)
         .styled(
             Some(2..5),

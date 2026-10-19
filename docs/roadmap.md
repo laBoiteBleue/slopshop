@@ -485,7 +485,7 @@ Raised on 2026-10-05, to schedule:
     - [x] Part 2c, character settings: spans (per-character styles kept with the characters
           as they are typed, several colors drawn by color), the Character settings in
           Properties (family, style, size, leading, tracking, color, alignment) and the options
-          bar on the characters selected while typing, else the whole text; `.slop` 0.39
+          bar on the characters selected while typing, else the whole text; `.slop` 0.41
     - [ ] Next: Photoshop's pending style at a caret, Type > Convert to Point/Paragraph Text,
           justified paragraphs, embedded fonts, PSD editable text
 - [ ] Patterns (ADR 0042)

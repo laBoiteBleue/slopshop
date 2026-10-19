@@ -209,7 +209,7 @@ pub(crate) struct ShapeDto {
     /// shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<Value>,
-    /// A text in several colors (schema 0.39): its glyphs by color, each a shape, drawn instead
+    /// A text in several colors (schema 0.41): its glyphs by color, each a shape, drawn instead
     /// of `shape` (which keeps them all in the text's own color, for older readers).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paints: Vec<Value>,
