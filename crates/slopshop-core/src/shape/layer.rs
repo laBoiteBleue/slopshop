@@ -690,6 +690,57 @@ world"
             Some(crate::edit::EditError::InvalidShape)
         );
     }
+
+    #[test]
+    fn converting_a_text_to_a_shape_keeps_its_outlines_on_every_linked_copy() {
+        let mut doc = document();
+        let text = crate::shape::Text {
+            content: "Hi".to_owned(),
+            family: "Inter".to_owned(),
+            weight: 400.0,
+            italic: false,
+            size: 12.0,
+            color: LinearRgba::new(1.0, 0.0, 0.0, 1.0),
+            tracking: 0.0,
+            leading: None,
+            align: crate::shape::TextAlign::Left,
+            position: [0.0, 10.0],
+            frame: None,
+            spans: Vec::new(),
+        };
+        let outlines = rectangle([0.0, 0.0, 8.0, 8.0], Some(RED), None);
+        let blue = rectangle([0.0, 0.0, 4.0, 4.0], Some(BLUE), None);
+        let source = ShapeSource::text(text, outlines.clone(), vec![blue], "Title");
+        let a = add_vector(&mut doc, Arc::clone(&source), Projective::IDENTITY);
+        let b = add_vector(&mut doc, source, Projective::IDENTITY);
+        let shape = ShapeSource::new(outlines.clone(), "Box");
+        let c = add_vector(&mut doc, shape, Projective::IDENTITY);
+        let source_of = |doc: &Document, id| match &doc.layer(id).unwrap().content {
+            LayerContent::Vector { source, .. } => Arc::clone(source),
+            _ => unreachable!("a vector layer"),
+        };
+        let before_c = source_of(&doc, c);
+        // Both copies selected: converted once; the shape layer selected too is left as it is.
+        let undo = Edit::convert_to_shape(&doc, &[a, b, c])
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let converted = source_of(&doc, a);
+        assert!(converted.text_of().is_none());
+        assert!(converted.paints().is_empty(), "one fill, the text's color");
+        assert_eq!(converted.shape(), &outlines);
+        assert_eq!(converted.name(), "Title");
+        assert!(Arc::ptr_eq(&converted, &source_of(&doc, b)));
+        assert!(Arc::ptr_eq(&before_c, &source_of(&doc, c)));
+        undo.apply(&mut doc).unwrap();
+        assert!(source_of(&doc, b).text_of().is_some());
+        assert!(Arc::ptr_eq(&source_of(&doc, a), &source_of(&doc, b)));
+        // No text layer among them.
+        assert_eq!(
+            Edit::convert_to_shape(&doc, &[c]).err(),
+            Some(crate::edit::EditError::NoLayers)
+        );
+    }
     #[test]
     fn a_text_is_picked_by_the_box_around_its_letters() {
         let mut doc = document();
