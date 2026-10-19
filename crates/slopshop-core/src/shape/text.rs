@@ -31,6 +31,26 @@ pub enum TextAlign {
     Right,
 }
 
+/// Photoshop's All Caps and Small Caps: lowercase letters set as capitals, full size or small
+/// (70 % of the size, Photoshop's default Small Caps size, synthesized from the capitals).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextCase {
+    #[default]
+    Normal,
+    AllCaps,
+    SmallCaps,
+}
+
+/// Photoshop's Superscript and Subscript: characters at 58.3 % of their size, raised or
+/// lowered by 33.3 % of it (Photoshop's defaults), the leading unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextBaseline {
+    #[default]
+    Normal,
+    Superscript,
+    Subscript,
+}
+
 /// A text layer's text: point text, or paragraph text wrapped in a box (Photoshop's two kinds);
 /// its own settings, and spans of characters set otherwise (see [`super::spans`]).
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +71,19 @@ pub struct Text {
     /// The distance between baselines, in pixels; `None`: automatic (120 % of the size, as
     /// Photoshop's Auto).
     pub leading: Option<f64>,
+    /// Photoshop's Faux Bold: the glyphs thickened (by a fortieth of the size on each side).
+    pub faux_bold: bool,
+    /// Photoshop's Faux Italic: the glyphs slanted (by 14 degrees).
+    pub faux_italic: bool,
+    pub case: TextCase,
+    pub baseline: TextBaseline,
+    /// A line under the characters, as thick and as low as the font says.
+    pub underline: bool,
+    /// A line through the characters, as the font says.
+    pub strikethrough: bool,
+    /// The font's standard ligatures (OpenType `liga` and `clig`), on by default as in
+    /// Photoshop.
+    pub ligatures: bool,
     pub align: TextAlign,
     /// Point text: the anchor, in the layer's own space, where the first line's baseline meets
     /// the alignment point. Paragraph text: the box's top left corner.
@@ -124,6 +157,13 @@ mod tests {
             color: LinearRgba::new(0.0, 0.0, 0.0, 1.0),
             tracking: 0.0,
             leading: None,
+            faux_bold: false,
+            faux_italic: false,
+            case: TextCase::Normal,
+            baseline: TextBaseline::Normal,
+            underline: false,
+            strikethrough: false,
+            ligatures: true,
             align: TextAlign::Left,
             position: [10.0, 60.0],
             frame: None,
