@@ -117,13 +117,46 @@ impl Gradient {
     }
 }
 
-/// How a [`GradientField`] spreads from its start to its end (Photoshop's first two).
+/// How a [`GradientField`] spreads from its start to its end (Photoshop's five styles).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GradientShape {
     /// Along the line, square to it.
     Linear,
     /// Around the start, the end on its rim.
     Radial,
+    /// A counterclockwise sweep (as seen on screen) around the start, from the line through the
+    /// end back to it.
+    Angle,
+    /// Linear on both sides of the start, mirrored.
+    Reflected,
+    /// Out from the start in a diamond, the end one of its corners.
+    Diamond,
+}
+
+impl GradientShape {
+    /// Every shape, in Photoshop's order.
+    pub const ALL: [GradientShape; 5] = [
+        GradientShape::Linear,
+        GradientShape::Radial,
+        GradientShape::Angle,
+        GradientShape::Reflected,
+        GradientShape::Diamond,
+    ];
+
+    /// The stable identifier files and the IPC use.
+    pub fn id(self) -> &'static str {
+        match self {
+            GradientShape::Linear => "linear",
+            GradientShape::Radial => "radial",
+            GradientShape::Angle => "angle",
+            GradientShape::Reflected => "reflected",
+            GradientShape::Diamond => "diamond",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|shape| shape.id() == id)
+    }
 }
 
 /// A gradient laid across the canvas by the Gradient tool: its colors from `from` to `to`
@@ -152,9 +185,20 @@ impl GradientField {
         let [fx, fy] = self.from;
         let (dx, dy) = (self.to[0] - fx, self.to[1] - fy);
         let length2 = dx * dx + dy * dy;
+        let (vx, vy) = (x - fx, y - fy);
+        // Along the line and square to it, in lengths of the line.
+        let along = || (vx * dx + vy * dy) / length2;
+        let across = || (dx * vy - dy * vx) / length2;
         let t = match self.shape {
-            GradientShape::Linear => ((x - fx) * dx + (y - fy) * dy) / length2,
-            GradientShape::Radial => ((x - fx).powi(2) + (y - fy).powi(2)).sqrt() / length2.sqrt(),
+            GradientShape::Linear => along(),
+            GradientShape::Radial => (vx * vx + vy * vy).sqrt() / length2.sqrt(),
+            GradientShape::Angle => {
+                // Counterclockwise on screen (y goes down): from the line to the point.
+                let turn = (dy * vx - dx * vy).atan2(vx * dx + vy * dy) / std::f64::consts::TAU;
+                if turn < 0.0 { turn + 1.0 } else { turn }
+            }
+            GradientShape::Reflected => along().abs(),
+            GradientShape::Diamond => along().abs() + across().abs(),
         };
         if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) }
     }
@@ -255,5 +299,59 @@ mod tests {
             }
             .is_valid()
         );
+    }
+
+    #[test]
+    fn angle_reflected_and_diamond_follow_photoshop() {
+        let field = |shape| GradientField {
+            gradient: Gradient::BLACK_TO_WHITE,
+            alpha: [1.0, 1.0],
+            shape,
+            from: [100.0, 100.0],
+            to: [140.0, 100.0],
+        };
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        // Angle: from the line toward the end, counterclockwise on screen (up first, y down).
+        let angle = field(GradientShape::Angle);
+        assert_eq!(
+            angle.position(200.0, 100.0),
+            0.0,
+            "on the line, past the end"
+        );
+        assert!(close(angle.position(100.0, 50.0), 0.25), "above the start");
+        assert!(close(angle.position(10.0, 100.0), 0.5), "behind it");
+        assert!(close(angle.position(100.0, 130.0), 0.75), "below it");
+        assert!(
+            angle.position(200.0, 100.5) > 0.99,
+            "just under the line: the sweep's end"
+        );
+        assert_eq!(angle.position(100.0, 100.0), 0.0, "the start itself");
+        // Reflected: the linear gradient, mirrored about the start.
+        let reflected = field(GradientShape::Reflected);
+        assert_eq!(reflected.position(120.0, 7.0), 0.5);
+        assert_eq!(reflected.position(80.0, -3.0), 0.5);
+        assert_eq!(reflected.position(0.0, 0.0), 1.0);
+        // Diamond: the end is a corner; halfway along each axis meets its edge.
+        let diamond = field(GradientShape::Diamond);
+        assert_eq!(diamond.position(140.0, 100.0), 1.0);
+        assert_eq!(diamond.position(100.0, 60.0), 1.0);
+        assert!(close(diamond.position(120.0, 80.0), 1.0), "on its edge");
+        assert!(close(diamond.position(110.0, 90.0), 0.5));
+        assert!(close(diamond.position(90.0, 105.0), 0.375));
+        // Turned: the diamond turns with the line.
+        let turned = GradientField {
+            to: [130.0, 130.0],
+            ..diamond
+        };
+        assert!(close(turned.position(130.0, 70.0), 1.0));
+        assert!(close(turned.position(115.0, 115.0), 0.5));
+    }
+
+    #[test]
+    fn shapes_have_stable_ids() {
+        for shape in GradientShape::ALL {
+            assert_eq!(GradientShape::from_id(shape.id()), Some(shape));
+        }
+        assert_eq!(GradientShape::from_id("spiral"), None);
     }
 }

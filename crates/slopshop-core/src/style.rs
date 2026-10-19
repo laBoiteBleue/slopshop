@@ -830,7 +830,8 @@ impl PatternOverlay {
     }
 }
 
-/// The layer's shape filled with a gradient (Photoshop's Gradient Overlay), Linear or Radial.
+/// The layer's shape filled with a gradient (Photoshop's Gradient Overlay), in any of its five
+/// styles.
 /// The gradient spans a box, the layer's (Align with Layer) or the canvas, through its center
 /// at `angle`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -880,8 +881,9 @@ impl Default for GradientOverlay {
 
 impl GradientOverlay {
     /// The gradient laid across `area` (`[left, top, right, bottom]`, document pixels): from the
-    /// box's edge to the opposite one along the angle (Linear), or from its center out to half
-    /// its longer side (Radial), scaled. `None` for an empty box.
+    /// box's edge to the opposite one along the angle (Linear), from its center to its edge
+    /// along the angle (Reflected), or from its center out to half its longer side along the
+    /// angle (Radial, Angle, Diamond), scaled. `None` for an empty box.
     pub fn field(&self, [left, top, right, bottom]: [f64; 4]) -> Option<GradientField> {
         let (w, h) = (right - left, bottom - top);
         let center = [(left + right) / 2.0, (top + bottom) / 2.0];
@@ -889,16 +891,20 @@ impl GradientOverlay {
         // Up is negative y: at 90 degrees the gradient goes up.
         let direction = [cos, -sin];
         let scale = self.scale / 100.0;
+        // Half the box along the angle, from its center to its edge.
+        let half = (w * cos.abs() + h * sin.abs()) / 2.0 * scale;
         let (from, length) = match self.shape {
             GradientShape::Linear => {
-                let half = (w * cos.abs() + h * sin.abs()) / 2.0 * scale;
                 let from = [
                     center[0] - direction[0] * half,
                     center[1] - direction[1] * half,
                 ];
                 (from, 2.0 * half)
             }
-            GradientShape::Radial => (center, w.max(h) / 2.0 * scale),
+            GradientShape::Reflected => (center, half),
+            GradientShape::Radial | GradientShape::Angle | GradientShape::Diamond => {
+                (center, w.max(h) / 2.0 * scale)
+            }
         };
         // Empty, or not a number.
         if length.is_nan() || length <= 0.0 {
@@ -2140,6 +2146,23 @@ mod tests {
         // Radial: from the center out to half the longer side.
         let radial = o(0.0, 100.0, GradientShape::Radial).field(area).unwrap();
         assert!(close(radial.from, [40.0, 20.0]) && close(radial.to, [60.0, 20.0]));
+        // Reflected: from the center to the edge along the angle, mirrored beyond the center.
+        let reflected = o(90.0, 100.0, GradientShape::Reflected)
+            .field(area)
+            .unwrap();
+        assert!(close(reflected.from, [40.0, 20.0]) && close(reflected.to, [40.0, 10.0]));
+        assert!(
+            (reflected.position(40.0, 30.0) - 1.0).abs() < 1e-9,
+            "the bottom edge too"
+        );
+        // Angle and Diamond: about the center, the start along the angle.
+        for shape in [GradientShape::Angle, GradientShape::Diamond] {
+            let f = o(90.0, 100.0, shape).field(area).unwrap();
+            assert!(
+                close(f.from, [40.0, 20.0]) && close(f.to, [40.0, 0.0]),
+                "{f:?}"
+            );
+        }
         // Reversed: the stops the other way; an empty box: nothing.
         let reversed = GradientOverlay {
             reverse: true,
