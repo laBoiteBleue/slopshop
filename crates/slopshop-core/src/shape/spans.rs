@@ -9,7 +9,9 @@
 
 use std::ops::Range;
 
-use super::text::{MAX_FAMILY_LEN, MAX_SIZE, MAX_TRACKING, MIN_SIZE, MIN_TRACKING, Text};
+use super::text::{
+    MAX_FAMILY_LEN, MAX_SIZE, MAX_TRACKING, MIN_SIZE, MIN_TRACKING, Text, TextBaseline, TextCase,
+};
 use crate::color::LinearRgba;
 
 /// What a span of characters sets differently from its text: each field `None` takes the
@@ -26,6 +28,13 @@ pub struct CharStyle {
     pub tracking: Option<f64>,
     /// Pixels between baselines; `Some(None)`: automatic (120 % of the size).
     pub leading: Option<Option<f64>>,
+    pub faux_bold: Option<bool>,
+    pub faux_italic: Option<bool>,
+    pub case: Option<TextCase>,
+    pub baseline: Option<TextBaseline>,
+    pub underline: Option<bool>,
+    pub strikethrough: Option<bool>,
+    pub ligatures: Option<bool>,
 }
 
 /// Characters `start..end` (UTF-8 bytes of the content) set in `style`.
@@ -47,6 +56,13 @@ pub struct Resolved<'a> {
     pub tracking: f64,
     /// Pixels between baselines (automatic leading resolved).
     pub line_spacing: f64,
+    pub faux_bold: bool,
+    pub faux_italic: bool,
+    pub case: TextCase,
+    pub baseline: TextBaseline,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub ligatures: bool,
 }
 
 impl CharStyle {
@@ -87,6 +103,13 @@ impl CharStyle {
             color: over.color.or(self.color),
             tracking: over.tracking.or(self.tracking),
             leading: over.leading.or(self.leading),
+            faux_bold: over.faux_bold.or(self.faux_bold),
+            faux_italic: over.faux_italic.or(self.faux_italic),
+            case: over.case.or(self.case),
+            baseline: over.baseline.or(self.baseline),
+            underline: over.underline.or(self.underline),
+            strikethrough: over.strikethrough.or(self.strikethrough),
+            ligatures: over.ligatures.or(self.ligatures),
         }
     }
 
@@ -100,6 +123,13 @@ impl CharStyle {
             color: self.color.filter(|_| other.color.is_none()),
             tracking: self.tracking.filter(|_| other.tracking.is_none()),
             leading: self.leading.filter(|_| other.leading.is_none()),
+            faux_bold: self.faux_bold.filter(|_| other.faux_bold.is_none()),
+            faux_italic: self.faux_italic.filter(|_| other.faux_italic.is_none()),
+            case: self.case.filter(|_| other.case.is_none()),
+            baseline: self.baseline.filter(|_| other.baseline.is_none()),
+            underline: self.underline.filter(|_| other.underline.is_none()),
+            strikethrough: self.strikethrough.filter(|_| other.strikethrough.is_none()),
+            ligatures: self.ligatures.filter(|_| other.ligatures.is_none()),
         }
     }
 
@@ -113,6 +143,13 @@ impl CharStyle {
             color: self.color.filter(|c| *c != text.color),
             tracking: self.tracking.filter(|t| *t != text.tracking),
             leading: self.leading.filter(|l| *l != text.leading),
+            faux_bold: self.faux_bold.filter(|b| *b != text.faux_bold),
+            faux_italic: self.faux_italic.filter(|i| *i != text.faux_italic),
+            case: self.case.filter(|c| *c != text.case),
+            baseline: self.baseline.filter(|b| *b != text.baseline),
+            underline: self.underline.filter(|u| *u != text.underline),
+            strikethrough: self.strikethrough.filter(|s| *s != text.strikethrough),
+            ligatures: self.ligatures.filter(|l| *l != text.ligatures),
         }
     }
 }
@@ -132,6 +169,13 @@ impl Text {
             color: style.color.unwrap_or(self.color),
             tracking: style.tracking.unwrap_or(self.tracking),
             line_spacing: style.leading.unwrap_or(self.leading).unwrap_or(size * 1.2),
+            faux_bold: style.faux_bold.unwrap_or(self.faux_bold),
+            faux_italic: style.faux_italic.unwrap_or(self.faux_italic),
+            case: style.case.unwrap_or(self.case),
+            baseline: style.baseline.unwrap_or(self.baseline),
+            underline: style.underline.unwrap_or(self.underline),
+            strikethrough: style.strikethrough.unwrap_or(self.strikethrough),
+            ligatures: style.ligatures.unwrap_or(self.ligatures),
         }
     }
 
@@ -283,6 +327,13 @@ impl Text {
             text.color = style.color.unwrap_or(text.color);
             text.tracking = style.tracking.unwrap_or(text.tracking);
             text.leading = style.leading.unwrap_or(text.leading);
+            text.faux_bold = style.faux_bold.unwrap_or(text.faux_bold);
+            text.faux_italic = style.faux_italic.unwrap_or(text.faux_italic);
+            text.case = style.case.unwrap_or(text.case);
+            text.baseline = style.baseline.unwrap_or(text.baseline);
+            text.underline = style.underline.unwrap_or(text.underline);
+            text.strikethrough = style.strikethrough.unwrap_or(text.strikethrough);
+            text.ligatures = style.ligatures.unwrap_or(text.ligatures);
             let runs = self
                 .runs()
                 .into_iter()
@@ -329,6 +380,13 @@ mod tests {
             color: LinearRgba::new(0.0, 0.0, 0.0, 1.0),
             tracking: 0.0,
             leading: None,
+            faux_bold: false,
+            faux_italic: false,
+            case: crate::shape::TextCase::Normal,
+            baseline: crate::shape::TextBaseline::Normal,
+            underline: false,
+            strikethrough: false,
+            ligatures: true,
             align: TextAlign::Left,
             position: [10.0, 60.0],
             frame: None,
@@ -474,6 +532,65 @@ mod tests {
         assert!(retyped.spans.is_empty(), "{:?}", retyped.spans);
         let kept = styled.retyped(text("Hey"));
         assert_eq!(kept.spans, [span(0, 2, bold())]);
+    }
+
+    #[test]
+    fn character_styles_set_faux_styles_cases_baselines_lines_and_ligatures() {
+        let under = CharStyle {
+            underline: Some(true),
+            case: Some(TextCase::SmallCaps),
+            ..CharStyle::default()
+        };
+        let styled = text("Hello world").styled(Some(0..5), &under);
+        assert_eq!(styled.spans, [span(0, 5, under.clone())]);
+        let r = styled.resolved(&styled.spans[0].style);
+        assert!(r.underline && r.ligatures && !r.faux_bold);
+        assert_eq!(
+            (r.case, r.baseline),
+            (TextCase::SmallCaps, TextBaseline::Normal)
+        );
+        // The whole text underlined: the span keeps only its case.
+        let whole = styled.styled(
+            None,
+            &CharStyle {
+                underline: Some(true),
+                ligatures: Some(false),
+                ..CharStyle::default()
+            },
+        );
+        assert!(whole.underline && !whole.ligatures);
+        assert_eq!(
+            whole.spans,
+            [span(
+                0,
+                5,
+                CharStyle {
+                    case: Some(TextCase::SmallCaps),
+                    ..CharStyle::default()
+                }
+            )]
+        );
+        // Back to the text's own case: no span left.
+        let normal = CharStyle {
+            case: Some(TextCase::Normal),
+            ..CharStyle::default()
+        };
+        assert!(whole.styled(Some(0..5), &normal).spans.is_empty());
+        // Typed characters take them too.
+        let sup = text("x2").styled(
+            Some(1..2),
+            &CharStyle {
+                baseline: Some(TextBaseline::Superscript),
+                faux_bold: Some(true),
+                ..CharStyle::default()
+            },
+        );
+        let typed = sup.with_content("x23".to_owned());
+        assert_eq!((typed.spans[0].start, typed.spans[0].end), (1, 3));
+        assert_eq!(
+            typed.spans[0].style.baseline,
+            Some(TextBaseline::Superscript)
+        );
     }
 
     #[test]

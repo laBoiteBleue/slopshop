@@ -26,4 +26,4 @@ pub use model::{
 };
 pub use path::selection_rings;
 pub use spans::{CharStyle, Resolved, TextSpan};
-pub use text::{Text, TextAlign};
+pub use text::{Text, TextAlign, TextBaseline, TextCase};
