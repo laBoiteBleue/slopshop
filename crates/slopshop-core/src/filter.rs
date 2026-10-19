@@ -300,6 +300,9 @@ pub enum OffsetEdge {
     Wrap,
 }
 
+/// Displace's Horizontal and Vertical Scale range in percent, either way (Photoshop's).
+pub const MAX_DISPLACE_SCALE: f32 = 999.0;
+
 /// Shear's points at most (as many as a Curves curve's).
 pub const SHEAR_POINTS: usize = crate::curve::CURVE_POINTS;
 
@@ -840,6 +843,17 @@ pub enum Filter {
     /// goes beyond the frame comes back on the other side (Wrap Around), else its edges repeat
     /// (Repeat Edge Pixels).
     Shear { curve: ShearCurve, wrap: bool },
+    /// Photoshop's Displace: each pixel read from as far as its displacement map says (the
+    /// step's `map`, see [`Self::displaced`]): its red channel across, its green one down (a
+    /// gray map both), 128 of 255 nothing, by `scale` percent (horizontal, vertical, -999 to
+    /// 999) of a pixel per level; the map stretched over the frame or `tile`d from its corner
+    /// at its own size; `wrap`: what goes beyond the frame comes back on the other side (Wrap
+    /// Around), else its edges repeat (Repeat Edge Pixels).
+    Displace {
+        scale: [f32; 2],
+        tile: bool,
+        wrap: bool,
+    },
     /// Photoshop's Radial Blur: each pixel the average of the layer along the arc through it
     /// around `center` (Spin, `amount` degrees) or along the line to it (`zoom`, see
     /// [`ZOOM_SPAN`]), centered on the pixel; `center` in percent of the frame (the selection's
@@ -971,7 +985,7 @@ pub enum Filter {
 impl Filter {
     /// Every filter's identifier, in menu order.
     /// Shadows/Highlights last: it is in Image > Adjustments, not in the Filter menu.
-    pub const IDS: [&'static str; 48] = [
+    pub const IDS: [&'static str; 49] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -1011,6 +1025,7 @@ impl Filter {
         "wave",
         "zigZag",
         "shear",
+        "displace",
         "clouds",
         "differenceClouds",
         "fibers",
@@ -1060,6 +1075,7 @@ impl Filter {
             Self::Wave { .. } => "wave",
             Self::ZigZag { .. } => "zigZag",
             Self::Shear { .. } => "shear",
+            Self::Displace { .. } => "displace",
             Self::RadialBlur { .. } => "radialBlur",
             Self::SurfaceBlur { .. } => "surfaceBlur",
             Self::SmartBlur { .. } => "smartBlur",
@@ -1226,6 +1242,12 @@ impl Filter {
             Self::Shear { curve, wrap } => std::iter::once(if wrap { 0.0 } else { 1.0 })
                 .chain(curve.points().iter().flatten().copied())
                 .collect(),
+            Self::Displace { scale, tile, wrap } => vec![
+                scale[0],
+                scale[1],
+                f32::from(u8::from(tile)),
+                if wrap { 0.0 } else { 1.0 },
+            ],
             Self::PolarCoordinates { to_polar } => vec![f32::from(u8::from(to_polar))],
             Self::RadialBlur {
                 amount,
@@ -1524,6 +1546,15 @@ impl Filter {
                     },
                 })
             }
+            ("displace", &[h, v, tile, edge]) => Some(Self::Displace {
+                scale: [h, v],
+                tile: flag(tile)?,
+                wrap: match edge {
+                    0.0 => true,
+                    1.0 => false,
+                    _ => return None,
+                },
+            }),
             ("polarCoordinates", &[to_polar]) => match to_polar {
                 0.0 => Some(Self::PolarCoordinates { to_polar: false }),
                 1.0 => Some(Self::PolarCoordinates { to_polar: true }),
@@ -1799,6 +1830,12 @@ impl Filter {
                 curve: ShearCurve::STRAIGHT,
                 wrap: true,
             }),
+            // Photoshop's: 10 %, Stretch to Fit, Repeat Edge Pixels.
+            "displace" => Some(Self::Displace {
+                scale: [10.0, 10.0],
+                tile: false,
+                wrap: false,
+            }),
             "polarCoordinates" => Some(Self::PolarCoordinates { to_polar: true }),
             "radialBlur" => Some(Self::RadialBlur {
                 amount: 10.0,
@@ -2069,6 +2106,9 @@ impl Filter {
             }
             // The curve is valid when made.
             Self::PolarCoordinates { .. } | Self::Average | Self::Shear { .. } => true,
+            Self::Displace { scale, .. } => scale.iter().all(|v| {
+                v.fract() == 0.0 && (-MAX_DISPLACE_SCALE..=MAX_DISPLACE_SCALE).contains(v)
+            }),
             Self::Clouds { seed, .. } | Self::DifferenceClouds { seed, .. } => seed < NOISE_SEEDS,
             Self::Fibers {
                 variance,
@@ -2185,6 +2225,7 @@ impl Filter {
             | Self::Wave { .. }
             | Self::ZigZag { .. }
             | Self::Shear { .. }
+            | Self::Displace { .. }
             | Self::PolarCoordinates { .. }
             | Self::RadialBlur { .. }
             | Self::SurfaceBlur { .. }
@@ -2368,6 +2409,7 @@ impl Filter {
             | Self::Wave { .. }
             | Self::ZigZag { .. }
             | Self::Shear { .. }
+            | Self::Displace { .. }
             | Self::PolarCoordinates { .. }
             | Self::Clouds { .. }
             | Self::DifferenceClouds { .. }
@@ -2496,6 +2538,7 @@ impl Filter {
             | Self::Wave { .. }
             | Self::ZigZag { .. }
             | Self::Shear { .. }
+            | Self::Displace { .. }
             | Self::PolarCoordinates { .. }
             | Self::Tiles { .. } => f64::INFINITY,
             Self::ClarityTexture { scale, .. } => {
@@ -2809,6 +2852,7 @@ impl Filter {
             | Self::Wave { .. }
             | Self::ZigZag { .. }
             | Self::Shear { .. }
+            | Self::Displace { .. }
             | Self::PolarCoordinates { .. } => Plan {
                 factor: 1,
                 kernel: Kernel::Identity,
@@ -2834,6 +2878,7 @@ impl Filter {
                 | Self::Wave { .. }
                 | Self::ZigZag { .. }
                 | Self::Shear { .. }
+                | Self::Displace { .. }
                 | Self::PolarCoordinates { .. }
                 | Self::Tiles { .. }
                 | Self::Crystallize { .. }
@@ -3205,6 +3250,59 @@ impl Filter {
         }
     }
 
+    /// Displace's map point for the pixel at layer point `p` (layer pixels) in `frame` (as
+    /// [`Self::source`]'s), the map `map` pixels (width, height): in the map's pixels, their
+    /// centers on whole numbers (as a bilinear read takes them). Stretched over the frame, or
+    /// tiled from its corner at the map's size. `p` itself for another filter.
+    pub fn map_point(&self, p: [f64; 2], frame: [f64; 4], map: [f64; 2]) -> [f64; 2] {
+        let Self::Displace { tile, .. } = *self else {
+            return p;
+        };
+        let [left, top, right, bottom] = frame;
+        let (w, h) = (right - left, bottom - top);
+        let at = |v: f64, start: f64, size: f64, side: f64| {
+            if tile && side > 0.0 {
+                (v - start).rem_euclid(side) - 0.5
+            } else if size > 0.0 {
+                (v - start) / size * side - 0.5
+            } else {
+                0.0
+            }
+        };
+        [at(p[0], left, w, map[0]), at(p[1], top, h, map[1])]
+    }
+
+    /// Where Displace reads the pixel at layer point `p` from, in `frame` (as
+    /// [`Self::source`]'s), its map there `value` (its red and green channels, 0 to 1, over
+    /// 128 levels of gray where it is transparent): as many pixels as the value's levels (of 8
+    /// bits) from 128, by the scale (Photoshop's: at 100 %, 0 reads 128 pixels back, 255 127
+    /// on); wrapped within the frame or its edge pixels repeated. `p` itself for another
+    /// filter.
+    pub fn displaced(&self, p: [f64; 2], frame: [f64; 4], value: [f64; 2]) -> [f64; 2] {
+        let Self::Displace { scale, wrap, .. } = *self else {
+            return p;
+        };
+        let [left, top, right, bottom] = frame;
+        let q: [f64; 2] = std::array::from_fn(|i| {
+            p[i] + (value[i] * 255.0 - 128.0) * f64::from(scale[i]) / 100.0
+        });
+        let within = |v: f64, start: f64, end: f64| {
+            if end - start <= 0.0 {
+                v
+            } else if wrap {
+                start + (v - start).rem_euclid(end - start)
+            } else {
+                v.clamp(start + 0.5, (end - 0.5).max(start + 0.5))
+            }
+        };
+        [within(q[0], left, right), within(q[1], top, bottom)]
+    }
+
+    /// Whether the filter reads a displacement map (the step's `map`): Displace.
+    pub fn takes_map(&self) -> bool {
+        matches!(self, Self::Displace { .. })
+    }
+
     /// Whether a pixel's result depends on its own value besides its blur's.
     pub(crate) fn reads_original(&self) -> bool {
         !matches!(
@@ -3224,6 +3322,7 @@ impl Filter {
                 | Self::Wave { .. }
                 | Self::ZigZag { .. }
                 | Self::Shear { .. }
+                | Self::Displace { .. }
                 | Self::PolarCoordinates { .. }
                 | Self::RadialBlur { .. }
                 | Self::SurfaceBlur { .. }
@@ -3337,6 +3436,7 @@ impl Filter {
             | Self::Wave { .. }
             | Self::ZigZag { .. }
             | Self::Shear { .. }
+            | Self::Displace { .. }
             | Self::PolarCoordinates { .. }
             | Self::RadialBlur { .. }
             | Self::SurfaceBlur { .. }
@@ -6680,6 +6780,70 @@ mod tests {
         let bottom = read(shear(false), [290.0, 100.0]);
         assert_eq!(bottom, [299.5, 100.0]);
         assert_eq!(read(shear(true), [290.0, 100.0]), [115.0, 100.0]);
+    }
+
+    #[test]
+    fn displace_reads_as_far_as_its_map_says_stretched_or_tiled() {
+        let displace = |scale, tile, wrap| Filter::Displace { scale, tile, wrap };
+        let d = Filter::defaults("displace").unwrap();
+        assert_eq!(d, displace([10.0, 10.0], false, false));
+        assert!(d.is_valid() && d.samples() && d.framed() && d.takes_map());
+        assert_eq!(d.params(), vec![10.0, 10.0, 0.0, 1.0]);
+        assert_eq!(d.scaled(4.0), d, "in the layer's pixels");
+        let any = displace([-999.0, 999.0], true, true);
+        assert!(any.is_valid());
+        assert_eq!(Filter::from_params("displace", &any.params()), Some(any));
+        for wrong in [
+            displace([1000.0, 0.0], false, false),
+            displace([0.0, -1000.0], false, false),
+            displace([10.5, 0.0], false, false),
+        ] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        assert_eq!(
+            Filter::from_params("displace", &[10.0, 10.0, 2.0, 0.0]),
+            None
+        );
+        assert_eq!(
+            Filter::from_params("displace", &[10.0, 10.0, 0.0, 2.0]),
+            None
+        );
+        assert!(!Filter::GaussianBlur { radius: 1.0 }.takes_map());
+        // The map over a frame 200 × 100 from (100, 0): stretched, or tiled at its size.
+        let frame = [100.0, 0.0, 300.0, 100.0];
+        let map = [20.0, 10.0];
+        let stretched = displace([100.0, 100.0], false, false);
+        assert_eq!(stretched.map_point([100.0, 0.0], frame, map), [-0.5, -0.5]);
+        assert_eq!(stretched.map_point([200.0, 50.0], frame, map), [9.5, 4.5]);
+        let tiled = displace([100.0, 100.0], true, false);
+        assert_eq!(tiled.map_point([125.5, 13.5], frame, map), [5.0, 3.0]);
+        // 128 moves nothing; each level a pixel at 100 %, by the scale either way.
+        let p = [200.0, 50.0];
+        let level = |v: f64| v / 255.0;
+        let close =
+            |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
+        assert!(close(stretched.displaced(p, frame, [level(128.0); 2]), p));
+        assert!(close(
+            stretched.displaced(p, frame, [level(148.0), level(118.0)]),
+            [220.0, 40.0]
+        ));
+        assert!(close(
+            displace([-50.0, 200.0], false, false).displaced(
+                p,
+                frame,
+                [level(148.0), level(118.0)]
+            ),
+            [190.0, 30.0]
+        ));
+        // At the extremes, 128 back and 127 on; beyond the frame wrapped, or its edges kept.
+        assert!(close(
+            stretched.displaced(p, frame, [0.0, 1.0]),
+            [100.5, 99.5]
+        ));
+        assert!(close(
+            displace([100.0, 100.0], false, true).displaced(p, frame, [0.0, 1.0]),
+            [272.0, 77.0]
+        ));
     }
 
     #[test]

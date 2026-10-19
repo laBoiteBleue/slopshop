@@ -276,6 +276,7 @@ fn a_filtered_layer_shows_the_look_at_what_is_seen() {
                 selection: None,
                 to_document: Affine::IDENTITY.into(),
                 space: BlendSpace::Perceptual,
+                map: None,
             },
             Some(Arc::clone(&original)),
         )

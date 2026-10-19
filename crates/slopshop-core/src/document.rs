@@ -527,15 +527,28 @@ impl Layer {
         Size::new(side(x1), side(y1))
     }
 
-    /// Every source the layer shows: its content's (ADR 0040), then its Pattern Overlay's
-    /// (ADR 0042). A file keeps them all.
+    /// Every source the layer shows: its content's (ADR 0040), its Pattern Overlay's
+    /// (ADR 0042), then its Displace entries' maps. A file keeps them all.
     pub fn sources(&self) -> impl Iterator<Item = &Arc<crate::source::Source>> {
         let overlay = self
             .style
             .as_ref()
             .and_then(|s| s.settings().pattern_overlay.as_ref())
             .map(|o| &o.pattern.source);
-        self.content.source().into_iter().chain(overlay)
+        let stack = match &self.content {
+            LayerContent::Raster {
+                stack: Some(stack), ..
+            } => stack.entries(),
+            _ => &[],
+        };
+        let maps = stack
+            .iter()
+            .flat_map(|entry| match entry {
+                crate::stack::Entry::Filter(filter) => filter.steps(),
+                _ => &[],
+            })
+            .filter_map(|step| step.map.as_ref());
+        self.content.source().into_iter().chain(overlay).chain(maps)
     }
 
     pub fn is_group(&self) -> bool {

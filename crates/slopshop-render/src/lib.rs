@@ -3029,6 +3029,7 @@ mod tests {
                     selection: None,
                     to_document: Affine::IDENTITY.into(),
                     space: BlendSpace::Perceptual,
+                    map: None,
                 },
                 Some(Arc::clone(&image)),
             )
@@ -3333,6 +3334,7 @@ mod tests {
                         selection: None,
                         to_document: Affine::IDENTITY.into(),
                         space: BlendSpace::Perceptual,
+                        map: None,
                     },
                     Some(Arc::clone(image)),
                 )
@@ -3390,6 +3392,7 @@ mod tests {
                     selection: None,
                     to_document: Affine::IDENTITY.into(),
                     space: BlendSpace::Perceptual,
+                    map: None,
                 },
                 Some(gray),
             )
@@ -3447,6 +3450,7 @@ mod tests {
                         selection: None,
                         to_document: Affine::IDENTITY.into(),
                         space: BlendSpace::Perceptual,
+                        map: None,
                     },
                     Some(Arc::clone(&original)),
                 )
