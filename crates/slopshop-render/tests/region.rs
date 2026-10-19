@@ -1235,7 +1235,7 @@ fn gpu_layers_in_perspective_match_the_cpu_reference_compositor() {
 #[test]
 fn gpu_warped_layers_match_the_cpu_reference_compositor() {
     use slopshop_core::Projective;
-    use slopshop_core::warp::{Warp, WarpPreset, WarpStyle};
+    use slopshop_core::warp::{Grid, WarpPreset, WarpStyle};
     use std::sync::Arc;
     let Some(r) = renderer() else { return };
     let size = Size::new(300, 260);
@@ -1293,13 +1293,80 @@ fn gpu_warped_layers_match_the_cpu_reference_compositor() {
             bend,
             vertical,
         };
-        let warp = Warp::from_preset(frame, preset).unwrap();
+        let warp = Grid::from_preset(frame, preset).unwrap();
         s.perform(Edit::SetLayerWarp {
             id,
-            warp: Some(Arc::new(warp)),
+            warp: Some(Arc::new(warp.into())),
         })
         .unwrap();
         let what = format!("{style:?}");
+        assert_matches_cpu(&r, s.document(), size.bounds(), &what);
+        assert_matches_cpu(&r, s.document(), Rect::new(61, 47, 130, 90), &what);
+    }
+}
+
+#[test]
+fn gpu_perspective_warped_layers_match_the_cpu_reference_compositor() {
+    use slopshop_core::Projective;
+    use slopshop_core::warp::Planes;
+    use std::sync::Arc;
+    let Some(r) = renderer() else { return };
+    let size = Size::new(300, 260);
+    let photo = image(Size::new(256, 192), PixelFormat::RGBA8_SRGB, pattern);
+    let frame = [0.0, 0.0, 256.0, 192.0];
+    // Two planes joined along x = 128, each moved into a perspective of its own; the content
+    // outside them follows.
+    let layout = vec![
+        (30.0, 30.0),
+        (128.0, 20.0),
+        (128.0, 170.0),
+        (30.0, 160.0),
+        (230.0, 40.0),
+        (230.0, 150.0),
+    ];
+    let warped = vec![
+        (40.0, 50.0),
+        (120.0, 10.0),
+        (125.0, 180.0),
+        (35.0, 150.0),
+        (250.0, 60.0),
+        (220.0, 130.0),
+    ];
+    let planes = Planes::new(frame, layout, warped, vec![[0, 1, 2, 3], [1, 4, 5, 2]]).unwrap();
+    for (masked, placed) in [
+        (false, Affine::translation(22.0, 40.0)),
+        (
+            true,
+            Affine::scale(0.7, 0.7)
+                .then(Affine::rotation(0.25))
+                .then(Affine::translation(90.0, 20.0)),
+        ),
+    ] {
+        let mut s = Session::new(Document::new(size));
+        let bg = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
+            vec![(x % 256) as u8, (y % 256) as u8, 60, 255]
+        });
+        push_into(&mut s, None, raster(&bg), BlendMode::Normal, 1.0);
+        let id = push_into(&mut s, None, raster(&photo), BlendMode::Normal, 0.9);
+        if masked {
+            let mask = slopshop_core::LayerMask::from_transparency(&photo).unwrap();
+            s.perform(Edit::SetLayerMask {
+                id,
+                mask: Some(mask),
+            })
+            .unwrap();
+        }
+        s.perform(Edit::SetLayerTransform {
+            id,
+            transform: Projective::from(placed),
+        })
+        .unwrap();
+        s.perform(Edit::SetLayerWarp {
+            id,
+            warp: Some(Arc::new(planes.clone().into())),
+        })
+        .unwrap();
+        let what = format!("planes, masked {masked}");
         assert_matches_cpu(&r, s.document(), size.bounds(), &what);
         assert_matches_cpu(&r, s.document(), Rect::new(61, 47, 130, 90), &what);
     }
