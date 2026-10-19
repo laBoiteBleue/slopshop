@@ -212,7 +212,7 @@ Status: accepted (2026-10-19, under the maintainer's delegation; to review).
   stays where it was. Enter or a double-click applies the planes' warp in either mode (one undo
   entry), Esc or undo cancels. A layer warped by planes opens in Warp mode, editable again.
   Removing every plane takes the warp away.
-- **`.slop`**: node version 20 (schema 0.41), `params.warp` of kind `planes`.
+- **`.slop`**: node version 20 (schema 0.43), `params.warp` of kind `planes`.
 - **Left for part 2**: Shift+click on an edge to straighten it (and keep it straight in later
   warps), the automatic Straighten buttons (horizontal, vertical, both), dragging an edge or a
   whole plane, and other layer kinds.

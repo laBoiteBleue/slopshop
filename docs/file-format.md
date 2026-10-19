@@ -467,7 +467,7 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     one, else its image's for a raster, else the canvas seen from the layer and a shape's
     bounds), feathered, inverted, and multiplied with the layer's enabled mask. A node of v19
     reads every parameter of the versions before it. Only those nodes are written at v19.
-  - v20 (schema 0.41, [ADR 0044](adr/0044-mesh-warps.md)) is a raster node warped by Edit >
+  - v20 (schema 0.43, [ADR 0044](adr/0044-mesh-warps.md)) is a raster node warped by Edit >
     Perspective Warp's planes: `params.warp` is `{"kind": "planes", "frame": [x0, y0, x1, y1],
     "layout", "warped", "planes"}`. `layout` and `warped` are the planes' corners flattened
     `[x, y, …]` (content pixels, as many in each): where they were laid out and where they were

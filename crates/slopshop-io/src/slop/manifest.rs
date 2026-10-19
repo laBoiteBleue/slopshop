@@ -16,7 +16,7 @@ use super::FileError;
 
 /// Schema version written by this code; readers accept any 0.x.
 pub(crate) const SCHEMA_MAJOR: u32 = 0;
-pub(crate) const SCHEMA_MINOR: u32 = 42;
+pub(crate) const SCHEMA_MINOR: u32 = 43;
 /// The first schema listing the document's sources (ADR 0040); before it, each raster node's
 /// original is read as a source.
 pub(crate) const SCHEMA_MINOR_SOURCES: u32 = 26;
@@ -111,7 +111,7 @@ pub(crate) const NODE_VERSION_WARP: u32 = 18;
 /// refuse them instead of showing them unmasked. It reads every parameter of the versions
 /// before it.
 pub(crate) const NODE_VERSION_VECTOR_MASK: u32 = 19;
-/// Version of the raster nodes warped by Perspective Warp's planes (schema 0.41, ADR 0044):
+/// Version of the raster nodes warped by Perspective Warp's planes (schema 0.43, ADR 0044):
 /// `params.warp` of kind `planes` (see `warp_json`). Written only for those, so that older
 /// readers refuse them. It reads every parameter of the versions before it. The newest node
 /// version this code reads.
