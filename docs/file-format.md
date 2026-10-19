@@ -370,6 +370,22 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     `"use_global_light": true` (absent: false): their `angle` (and the bevel's `altitude`) are
     the document's `global_light`, written as such too, so that a reader that does not know
     it draws the same.
+    From schema 0.39, contours (Photoshop's Quality > Contour): `drop_shadow`, `inner_shadow`,
+    `outer_glow`, `inner_glow` and `satin` may have `"contour": [[x, y, corner], …]` (2 to 16
+    points, `x` and `y` integers on 0–255, `x` strictly increasing, `corner` a boolean: the
+    curve breaks there; between corners it is a natural cubic spline through the points, flat
+    before the first and after the last) and `"anti_aliased": true`; a glow may have
+    `"range"` (1 to 100, percent). The effect's mask (0 to 1) is divided by `range / 100`
+    (clamped to 1), stepped down to whole percents unless anti-aliased, then mapped through
+    the contour; drawn outward (Drop Shadow, Outer Glow), a contour whose output at 0 is not 0
+    fades out linearly below 23/255 so that it does not fill the canvas. Satin's blurred shape
+    goes through its contour before the difference. `bevel` may have `"gloss_contour"` and
+    `"gloss_anti_aliased"` (how much the surface faces the light goes through it, the flat
+    plane's too) and `"contour": { "enabled", "curve", "anti_aliased", "range" }` (its Contour
+    element: when enabled, the height goes through it). Absent: linear, not anti-aliased, a
+    glow's range 100, a bevel's Contour off; each is written only when it differs from what its
+    absence reads. Written at the node's version otherwise: a reader that does not know them
+    draws linear contours, as effects were drawn before.
   - v9 (schema 0.18) is v8 with `outer_glow`, `inner_shadow` or `inner_glow` in the style: only
     those nodes are written at v9, so that readers of v8 refuse them rather than drop these
     effects.

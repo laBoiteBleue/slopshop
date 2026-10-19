@@ -1948,6 +1948,145 @@ fn gradient_overlays_and_satins_round_trip_on_every_kind_of_layer() {
 }
 
 #[test]
+fn layer_style_contours_round_trip_and_older_styles_read_linear() {
+    use slopshop_core::contour::{Contour, ContourPoint, ContourPreset};
+    use slopshop_core::style::{BevelEmboss, DropShadow, Glow, LayerStyle, Satin};
+    let custom = Contour::new(&[
+        ContourPoint {
+            x: 0,
+            y: 30,
+            corner: false,
+        },
+        ContourPoint {
+            x: 100,
+            y: 220,
+            corner: true,
+        },
+        ContourPoint {
+            x: 255,
+            y: 0,
+            corner: false,
+        },
+    ])
+    .unwrap();
+    let style = LayerStyle {
+        drop_shadow: Some(DropShadow {
+            contour: ContourPreset::Cone.contour(),
+            anti_aliased: true,
+            ..DropShadow::default()
+        }),
+        inner_shadow: Some(DropShadow {
+            contour: custom,
+            ..DropShadow::default()
+        }),
+        outer_glow: Some(Glow {
+            contour: ContourPreset::HalfRound.contour(),
+            range: 20.0,
+            ..Glow::default()
+        }),
+        inner_glow: Some(Glow {
+            anti_aliased: true,
+            range: 100.0,
+            ..Glow::default()
+        }),
+        satin: Some(Satin::default()),
+        bevel: Some(BevelEmboss {
+            gloss_contour: ContourPreset::RingDouble.contour(),
+            gloss_anti_aliased: true,
+            contour_enabled: true,
+            contour: ContourPreset::CoveDeep.contour(),
+            contour_range: 80.0,
+            ..BevelEmboss::default()
+        }),
+        ..LayerStyle::default()
+    };
+    let json = super::style::to_json(&style, &|_| None);
+    assert_eq!(
+        super::style::from_json(&json, &|_| None),
+        Some(style.clone())
+    );
+    // Through a file too.
+    let mut doc = Document::new(Size::new(8, 8));
+    let id = push(
+        &mut doc,
+        "fill",
+        LayerContent::Fill {
+            color: LinearRgba::new(0.2, 0.4, 0.6, 1.0),
+        },
+        1.0,
+    );
+    Edit::SetLayerStyle {
+        id: slopshop_core::LayerId::from_raw(id),
+        style: Some(Box::new(style.clone())),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("contours.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    let layer = loaded.layer(slopshop_core::LayerId::from_raw(id)).unwrap();
+    assert_eq!(layer.style.as_ref().unwrap().settings(), &style);
+    fs::remove_file(&path).ok();
+
+    // A linear contour, not anti-aliased, writes nothing more than before; a glow's range is
+    // written unless it covers the whole fade.
+    let plain = LayerStyle {
+        drop_shadow: Some(DropShadow::default()),
+        inner_glow: Some(Glow {
+            range: 100.0,
+            ..Glow::default()
+        }),
+        bevel: Some(BevelEmboss::default()),
+        ..LayerStyle::default()
+    };
+    let json = super::style::to_json(&plain, &|_| None);
+    for (effect, key) in [
+        ("drop_shadow", "contour"),
+        ("drop_shadow", "anti_aliased"),
+        ("inner_glow", "range"),
+        ("bevel", "contour"),
+        ("bevel", "gloss_contour"),
+    ] {
+        assert_eq!(json[effect].get(key), None, "{effect} {key}");
+    }
+
+    // Before contours: linear, not anti-aliased, glows over their whole fade.
+    let before = serde_json::json!({ "fill_opacity": 1.0,
+        "outer_glow": { "enabled": true, "color": [1, 1, 0.5], "mode": "screen",
+            "opacity": 0.75, "spread": 0, "size": 5 },
+        "satin": { "enabled": true, "color": [0, 0, 0], "mode": "multiply", "opacity": 0.5,
+            "angle": 19, "distance": 11, "size": 14, "invert": true } });
+    let read = super::style::from_json(&before, &|_| None).unwrap();
+    let glow = read.outer_glow.unwrap();
+    assert_eq!(
+        (glow.contour, glow.anti_aliased, glow.range),
+        (Contour::LINEAR, false, 100.0)
+    );
+    let satin = read.satin.unwrap();
+    assert_eq!(
+        (satin.contour, satin.anti_aliased),
+        (Contour::LINEAR, false)
+    );
+
+    // Malformed contours are refused: one point, inputs going back, a value out of 0-255, a
+    // range out of 1-100.
+    for contour in [
+        serde_json::json!([[0, 0, false]]),
+        serde_json::json!([[200, 0, false], [100, 255, false]]),
+        serde_json::json!([[0, 0, false], [256, 255, false]]),
+        serde_json::json!([[0, 0], [255, 255]]),
+    ] {
+        let mut bad = before.clone();
+        bad["satin"]["contour"] = contour.clone();
+        assert_eq!(super::style::from_json(&bad, &|_| None), None, "{contour}");
+    }
+    let mut bad = before.clone();
+    bad["outer_glow"]["range"] = serde_json::json!(0);
+    assert_eq!(super::style::from_json(&bad, &|_| None), None);
+}
+
+#[test]
 fn hidden_entries_round_trip() {
     let mut doc = golden_document();
     let (id, stack) = doc
