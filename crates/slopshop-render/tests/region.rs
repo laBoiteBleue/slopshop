@@ -1725,6 +1725,32 @@ fn gpu_new_adjustments_match_the_cpu_reference_compositor() {
     }
 }
 
+/// A 3D lookup table of `size` points a side over `domain`, curved and mixing the channels.
+fn lut_3d(size: u32, domain: [[f32; 3]; 2]) -> Arc<slopshop_core::lut::ColorLut> {
+    let last = (size - 1) as f32;
+    let mut values = Vec::new();
+    for b in 0..size {
+        for g in 0..size {
+            for r in 0..size {
+                let [r, g, b] = [r, g, b].map(|v| v as f32 / last);
+                values.extend([
+                    (r * r * 0.8 + 0.2 * b).min(1.0),
+                    (g * 0.6 + r * 0.3 + (b * 6.0).sin() * 0.1).clamp(0.0, 1.0),
+                    1.0 - b * g,
+                ]);
+            }
+        }
+    }
+    slopshop_core::lut::ColorLut::new(
+        "test",
+        slopshop_core::lut::LutDimension::Three,
+        size,
+        domain,
+        values,
+    )
+    .unwrap()
+}
+
 #[test]
 fn gpu_adjustments_of_many_parameters_match_the_cpu_reference_compositor() {
     use slopshop_core::adjust::Adjustment;
@@ -1775,6 +1801,31 @@ fn gpu_adjustments_of_many_parameters_match_the_cpu_reference_compositor() {
                 red: Curve::new(&[[0, 0], [128, 170], [255, 255]]).unwrap(),
                 green: Curve::IDENTITY,
                 blue: Curve::new(&[[40, 0], [200, 255]]).unwrap(),
+            },
+            // Color Lookup: none chosen; a curved 3D table over a domain of its own; 1D tables.
+            Adjustment::ColorLookup { lut: None },
+            Adjustment::ColorLookup {
+                lut: Some(lut_3d(17, [[0.1, 0.0, -0.2], [0.9, 1.2, 1.0]])),
+            },
+            Adjustment::ColorLookup {
+                lut: Some(lut_3d(2, slopshop_core::lut::ColorLut::UNIT_DOMAIN)),
+            },
+            Adjustment::ColorLookup {
+                lut: Some(
+                    slopshop_core::lut::ColorLut::new(
+                        "1d",
+                        slopshop_core::lut::LutDimension::One,
+                        64,
+                        slopshop_core::lut::ColorLut::UNIT_DOMAIN,
+                        (0..64 * 3)
+                            .map(|i| {
+                                let t = (i / 3) as f32 / 63.0;
+                                [t * t, 1.0 - t, t.sqrt()][i % 3]
+                            })
+                            .collect(),
+                    )
+                    .unwrap(),
+                ),
             },
         ] {
             let mut s = Session::new(Document::new(size));

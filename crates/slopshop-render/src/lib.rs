@@ -1173,6 +1173,7 @@ impl Renderer {
             count: 1,
             bytes: Vec::new(),
             tile_table: Vec::new(),
+            luts: Vec::new(),
         };
         // A mask with no tile in view (or none planned) reads 0: all of the view is tinted.
         let [r, g, b] = pass.tint;
@@ -1304,7 +1305,15 @@ struct PreparedLayers {
     bytes: Vec<u8>,
     /// Cache slots of the visible raster tiles, per layer range.
     tile_table: Vec<u32>,
+    /// The lookup tables Color Lookups read (see [`LutRef`]).
+    luts: Vec<LutRef>,
 }
+
+/// A Color Lookup's table: the word of the tile table that holds where its values start in
+/// the tile table, written when the buffers are made (`Renderer::layer_buffers`), which put
+/// each table once after everything else. A frame's fills share their tables that way: a
+/// table is uploaded once a dispatch, not once a tile.
+type LutRef = (usize, Arc<slopshop_core::lut::ColorLut>);
 
 impl Renderer {
     /// Encode the visible layers bottom to top, making the raster tiles they need resident.
@@ -1376,6 +1385,7 @@ impl Renderer {
                 usage: wgpu::BufferUsages::STORAGE,
             });
         let mut table = prepared.tile_table;
+        resolve_luts(&mut table, &prepared.luts);
         if table.is_empty() {
             table.push(NO_TILE);
         }
@@ -1616,6 +1626,7 @@ fn encode_layers(
         count: 0,
         bytes: Vec::new(),
         tile_table: Vec::new(),
+        luts: Vec::new(),
     };
     let perceptual = if blend_space == BlendSpace::Perceptual {
         FLAG_PERCEPTUAL
@@ -1689,6 +1700,7 @@ fn encode_layers(
                     1.0,
                     perceptual,
                     &mut prepared.tile_table,
+                    &mut prepared.luts,
                 );
                 fields.kind = KIND_STACK_EFFECT;
                 if let Some(mask) = mask_plan {
@@ -1708,8 +1720,13 @@ fn encode_layers(
                 if mask.is_some() && mask_plan.is_none() {
                     continue;
                 }
-                let mut fields =
-                    adjustment_fields(adjustment, *opacity, perceptual, &mut prepared.tile_table);
+                let mut fields = adjustment_fields(
+                    adjustment,
+                    *opacity,
+                    perceptual,
+                    &mut prepared.tile_table,
+                    &mut prepared.luts,
+                );
                 if let Some(mask) = mask_plan {
                     set_mask_fields(&mut fields, mask, &mut prepared.tile_table, mask_table);
                 }
@@ -1901,12 +1918,13 @@ fn set_raster_fields(
 
 /// The fields of an adjustment (an adjustment layer at `opacity`, or a stack's effect): its
 /// 20 parameters in fields it has no other use for, Curves' lookup tables appended to
-/// `tile_table`.
+/// `tile_table`; Color Lookup's table referred to from it (`luts`, see [`LutRef`]).
 fn adjustment_fields(
     adjustment: &Adjustment,
     opacity: f32,
     flags: u32,
     tile_table: &mut Vec<u32>,
+    luts: &mut Vec<LutRef>,
 ) -> LayerFields {
     let mut p = adjustment.params();
     if let Adjustment::PhotoFilter { color, .. } = adjustment {
@@ -1934,7 +1952,40 @@ fn adjustment_fields(
         fields.table_offset = tile_table.len() as u32;
         tile_table.extend_from_slice(&table);
     }
+    // Color Lookup (`color_lookup` in composite.wgsl): the dimension (0 without a table) and
+    // size, the domain, and the word where its values start.
+    if let Some(lut) = adjustment.lut() {
+        let dimension = match lut.dimension() {
+            slopshop_core::lut::LutDimension::One => 1.0,
+            slopshop_core::lut::LutDimension::Three => 3.0,
+        };
+        let [lo, hi] = lut.domain();
+        fields.color = [dimension, lut.size() as f32, 0.0, 0.0];
+        fields.transfer = [lo[0], lo[1], lo[2], 0.0];
+        fields.transfer2 = [hi[0], hi[1], hi[2], 0.0];
+        fields.table_offset = tile_table.len() as u32;
+        luts.push((tile_table.len(), Arc::clone(lut)));
+        tile_table.push(0);
+    }
     fields
+}
+
+/// Put each table of `luts` once at the end of `table`, and where it starts in its words
+/// (see [`LutRef`]).
+fn resolve_luts(table: &mut Vec<u32>, luts: &[LutRef]) {
+    let mut placed: Vec<(slopshop_core::lut::LutId, u32)> = Vec::new();
+    for (word, lut) in luts {
+        let start = match placed.iter().find(|(id, _)| *id == lut.id()) {
+            Some(&(_, start)) => start,
+            None => {
+                let start = table.len() as u32;
+                table.extend(lut.values().iter().map(|v| v.to_bits()));
+                placed.push((lut.id(), start));
+                start
+            }
+        };
+        table[*word] = start;
+    }
 }
 
 /// What an adjustment reads from the tile table: Curves' lookup tables (composite, red, green,

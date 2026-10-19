@@ -222,6 +222,77 @@ fn the_gpu_shows_a_stack_as_the_cpu_evaluates_it() {
 }
 
 #[test]
+fn the_gpu_shows_color_lookups_of_a_stack_as_the_cpu_evaluates_them() {
+    use slopshop_core::lut::{ColorLut, LutDimension};
+    if renderer().is_none() {
+        return;
+    }
+    // Two tables, one of them used twice: each is put once in a dispatch, the display cache's
+    // fills sharing them.
+    let table = |size: u32, f: fn([f32; 3]) -> [f32; 3]| {
+        let last = (size - 1) as f32;
+        let mut values = Vec::new();
+        for b in 0..size {
+            for g in 0..size {
+                for r in 0..size {
+                    values.extend(f([r, g, b].map(|v| v as f32 / last)));
+                }
+            }
+        }
+        ColorLut::new(
+            "t",
+            LutDimension::Three,
+            size,
+            ColorLut::UNIT_DOMAIN,
+            values,
+        )
+        .unwrap()
+    };
+    let warm = table(9, |[r, g, b]| [(r * 1.2).min(1.0), g * g, b * 0.7]);
+    let swap = table(5, |[r, g, b]| [b, r, g]);
+    let original = image(PixelFormat::RGBA8_SRGB, |x, y| {
+        vec![(x * 255 / W) as u8, (y * 255 / H) as u8, 140, 255]
+    });
+    let selection = image(SELECTION_FORMAT, |x, _| {
+        let v: u16 = if x < 300 { u16::MAX } else { 0 };
+        v.to_ne_bytes().to_vec()
+    });
+    let lookup = |lut: &Arc<ColorLut>, selection: Option<Selection>| Effect {
+        adjustment: Adjustment::ColorLookup {
+            lut: Some(Arc::clone(lut)),
+        },
+        selection,
+        to_document: Affine::IDENTITY.into(),
+        space: BlendSpace::Perceptual,
+    };
+    let stack = LayerStack::new(original)
+        .with_effect(lookup(&warm, None))
+        .unwrap()
+        .with_effect(lookup(&swap, Selection::new(selection)))
+        .unwrap()
+        .with_effect(lookup(&warm, None))
+        .unwrap();
+    let gpu = document(&stack, false);
+    let cpu = document(&stack, true);
+    for cached in [true, false] {
+        let r = Renderer::new()
+            .unwrap()
+            .with_display_cache(cached)
+            .with_stack_evaluation(false);
+        let view = ViewTransform {
+            origin: [0.0, 0.0],
+            scale: 1.0,
+        };
+        let a = r.render_view(&gpu, view, Size::new(W, H)).unwrap();
+        let b = r.render_view(&cpu, view, Size::new(W, H)).unwrap();
+        let (worst, _) = differences(&a, &b);
+        // The CPU rounds to 8 bits after each entry.
+        assert!(worst <= 3, "cached {cached}: {worst}");
+    }
+    assert!(pending(&gpu));
+}
+
+#[test]
 fn frames_showing_a_stack_ask_again_until_its_pixels_are_there() {
     let Some(r) = renderer() else { return };
     let gpu = document(&stack(), false);

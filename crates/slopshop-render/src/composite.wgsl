@@ -1034,6 +1034,7 @@ const ADJUST_CHANNEL_MIXER: u32 = 11u;
 const ADJUST_CURVES: u32 = 12u;
 const ADJUST_GRADIENT_MAP: u32 = 13u;
 const ADJUST_SELECTIVE_COLOR: u32 = 14u;
+const ADJUST_COLOR_LOOKUP: u32 = 15u;
 
 // A curve's lookup table at `v` (clamped to [0, 1]), linearly interpolated (curve::lookup).
 fn curve_at(offset: u32, v: f32) -> f32 {
@@ -1192,6 +1193,79 @@ fn selective_color(c: vec3<f32>, table: u32) -> vec3<f32> {
     return out;
 }
 
+// Entry `entry` of a Color Lookup table whose values start at word `start` of the tile table.
+fn lut_entry(start: u32, entry: u32) -> vec3<f32> {
+    let at = start + 3u * entry;
+    return vec3<f32>(
+        bitcast<f32>(tile_table[at]),
+        bitcast<f32>(tile_table[at + 1u]),
+        bitcast<f32>(tile_table[at + 2u]),
+    );
+}
+
+// Color Lookup (slopshop_core::lut::ColorLut::apply): `p` its dimension (0: no table, the color
+// as it is) and size, `lo` and `hi` its domain; the word `table` of the tile table says where
+// its values start (absolute: the tables are after every fill's own words). 1D: each channel
+// interpolated linearly in its column; 3D: tetrahedrally, in the same tetrahedra as the CPU.
+fn color_lookup(c: vec3<f32>, p: vec4<f32>, lo: vec3<f32>, hi: vec3<f32>, table: u32) -> vec3<f32> {
+    let dimension = u32(p.x);
+    if dimension == 0u {
+        return c;
+    }
+    let n = u32(p.y);
+    let start = tile_table[table_base + table];
+    let x = clamp((c - lo) / (hi - lo), vec3<f32>(0.0), vec3<f32>(1.0)) * f32(n - 1u);
+    let base = min(vec3<u32>(floor(x)), vec3<u32>(n - 2u));
+    let f = x - vec3<f32>(base);
+    if dimension == 1u {
+        var out: vec3<f32>;
+        for (var i = 0u; i < 3u; i++) {
+            let a = lut_entry(start, base[i])[i];
+            let b = lut_entry(start, base[i] + 1u)[i];
+            out[i] = a + (b - a) * f[i];
+        }
+        return out;
+    }
+    var w: vec3<f32>;
+    var s1: vec3<u32>;
+    var s2: vec3<u32>;
+    if f.r > f.g {
+        if f.g > f.b {
+            w = vec3<f32>(f.r, f.g, f.b);
+            s1 = vec3<u32>(1u, 0u, 0u);
+            s2 = vec3<u32>(1u, 1u, 0u);
+        } else if f.r > f.b {
+            w = vec3<f32>(f.r, f.b, f.g);
+            s1 = vec3<u32>(1u, 0u, 0u);
+            s2 = vec3<u32>(1u, 0u, 1u);
+        } else {
+            w = vec3<f32>(f.b, f.r, f.g);
+            s1 = vec3<u32>(0u, 0u, 1u);
+            s2 = vec3<u32>(1u, 0u, 1u);
+        }
+    } else if f.b > f.g {
+        w = vec3<f32>(f.b, f.g, f.r);
+        s1 = vec3<u32>(0u, 0u, 1u);
+        s2 = vec3<u32>(0u, 1u, 1u);
+    } else if f.b > f.r {
+        w = vec3<f32>(f.g, f.b, f.r);
+        s1 = vec3<u32>(0u, 1u, 0u);
+        s2 = vec3<u32>(0u, 1u, 1u);
+    } else {
+        w = vec3<f32>(f.g, f.r, f.b);
+        s1 = vec3<u32>(0u, 1u, 0u);
+        s2 = vec3<u32>(1u, 1u, 0u);
+    }
+    let v0 = lut_entry(start, (base.b * n + base.g) * n + base.r);
+    let c1 = base + s1;
+    let v1 = lut_entry(start, (c1.b * n + c1.g) * n + c1.r);
+    let c2 = base + s2;
+    let v2 = lut_entry(start, (c2.b * n + c2.g) * n + c2.r);
+    let c3 = base + vec3<u32>(1u);
+    let v3 = lut_entry(start, (c3.b * n + c3.g) * n + c3.r);
+    return v0 + w.x * (v1 - v0) + w.y * (v2 - v1) + w.z * (v3 - v2);
+}
+
 fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, p4: vec4<f32>, table: u32, c: vec3<f32>) -> vec3<f32> {
     switch kind {
         case ADJUST_EXPOSURE: {
@@ -1303,6 +1377,9 @@ fn adjust_color(kind: u32, p: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<
         case ADJUST_SELECTIVE_COLOR: {
             return selective_color(c, table);
         }
+        case ADJUST_COLOR_LOOKUP: {
+            return color_lookup(c, p, p1.xyz, p2.xyz, table);
+        }
         case ADJUST_GRADIENT_MAP: {
             // The gradient's color at the luminance (Rec. 601 weights).
             let n = CURVE_LUT;
@@ -1339,7 +1416,8 @@ fn adjust_layer(layer: Layer, below: vec4<f32>, coverage: f32) -> vec4<f32> {
     } else {
         // Gradient Map and Selective Color work on sRGB-encoded values whatever the blend
         // space.
-        let space = perceptual || kind == ADJUST_GRADIENT_MAP || kind == ADJUST_SELECTIVE_COLOR;
+        let space = perceptual || kind == ADJUST_GRADIENT_MAP || kind == ADJUST_SELECTIVE_COLOR
+            || kind == ADJUST_COLOR_LOOKUP;
         let encoded = to_blend(straight, space);
         adjusted = from_blend(adjust_color(kind, p0, p1, p2, p3, p4, layer.table_offset, encoded), space);
     }
