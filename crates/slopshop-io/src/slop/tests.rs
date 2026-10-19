@@ -2231,7 +2231,7 @@ fn layers_in_perspective_round_trip_at_node_version_11() {
 
 #[test]
 fn warped_layers_round_trip_at_node_version_18() {
-    use slopshop_core::warp::{Warp, WarpPreset, WarpStyle};
+    use slopshop_core::warp::{Grid, WarpPreset, WarpStyle};
     let mut doc = golden_document();
     let (id, size) = doc
         .all_layers()
@@ -2246,7 +2246,7 @@ fn warped_layers_round_trip_at_node_version_18() {
         bend: -0.35,
         vertical: true,
     };
-    let warp = std::sync::Arc::new(Warp::from_preset(frame, preset).unwrap());
+    let warp = std::sync::Arc::new(Grid::from_preset(frame, preset).unwrap().into());
     Edit::SetLayerWarp {
         id,
         warp: Some(std::sync::Arc::clone(&warp)),
@@ -2259,9 +2259,9 @@ fn warped_layers_round_trip_at_node_version_18() {
     assert_same(&doc, &loaded);
     assert_eq!(loaded.layer(id).unwrap().warp.as_ref(), Some(&warp));
     // A grid edited point by point (Custom: no style), of another size.
-    let mut points = Warp::identity(frame, 5, 2).unwrap().points().to_vec();
+    let mut points = Grid::identity(frame, 5, 2).unwrap().points().to_vec();
     points[7] = (0.1 + points[7].0, -1.0 / 3.0);
-    let custom = std::sync::Arc::new(Warp::new(frame, 5, 2, points, None).unwrap());
+    let custom = std::sync::Arc::new(Grid::new(frame, 5, 2, points, None).unwrap().into());
     Edit::SetLayerWarp {
         id,
         warp: Some(std::sync::Arc::clone(&custom)),
@@ -2333,6 +2333,48 @@ fn vector_masks_round_trip_at_node_version_19() {
     slopshop_core::composite::composite_region(&doc, region, &mut before).unwrap();
     slopshop_core::composite::composite_region(&loaded, region, &mut after).unwrap();
     assert_eq!(before, after);
+}
+
+#[test]
+fn perspective_warped_layers_round_trip_at_node_version_20() {
+    use slopshop_core::warp::Planes;
+    let mut doc = golden_document();
+    let (id, size) = doc
+        .all_layers()
+        .find_map(|l| match &l.content {
+            LayerContent::Raster { image, .. } => Some((l.id, image.size())),
+            _ => None,
+        })
+        .expect("a pixel layer");
+    let (w, h) = (f64::from(size.width), f64::from(size.height));
+    let frame = [0.0, 0.0, w, h];
+    // Two planes joined along their middle edge, their corners moved by thirds of a pixel.
+    let layout = vec![
+        (0.0, 0.0),
+        (w / 2.0, 0.0),
+        (w / 2.0, h),
+        (0.0, h),
+        (w, 0.0),
+        (w, h),
+    ];
+    let warped: Vec<(f64, f64)> = layout
+        .iter()
+        .enumerate()
+        .map(|(k, &(x, y))| (x + k as f64 / 3.0, y - 1.0 / 3.0))
+        .collect();
+    let planes = Planes::new(frame, layout, warped, vec![[0, 1, 2, 3], [1, 4, 5, 2]]).unwrap();
+    let warp = std::sync::Arc::new(planes.into());
+    Edit::SetLayerWarp {
+        id,
+        warp: Some(std::sync::Arc::clone(&warp)),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let path = temp_path("perspective-warp.slop");
+    SlopFile::create(&path, &doc).unwrap();
+    let (loaded, _) = SlopFile::open(&path).unwrap();
+    assert_same(&doc, &loaded);
+    assert_eq!(loaded.layer(id).unwrap().warp.as_ref(), Some(&warp));
     fs::remove_file(&path).ok();
 }
 

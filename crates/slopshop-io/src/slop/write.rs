@@ -23,7 +23,7 @@ use super::manifest::{
     NODE_VERSION, NODE_VERSION_BEVEL, NODE_VERSION_CLIPPED, NODE_VERSION_GLOWS,
     NODE_VERSION_GRADIENT_OVERLAY, NODE_VERSION_HIDDEN, NODE_VERSION_PAINTED, NODE_VERSION_PATTERN,
     NODE_VERSION_PATTERN_OVERLAY, NODE_VERSION_PERSPECTIVE, NODE_VERSION_SATIN, NODE_VERSION_STACK,
-    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NODE_VERSION_VECTOR_MASK,
+    NODE_VERSION_STYLED, NODE_VERSION_TRANSFORMED, NODE_VERSION_VECTOR, NODE_VERSION_VECTOR_MASK, NODE_VERSION_PERSPECTIVE_WARP,
     NODE_VERSION_WARP, NodeDto, PYRAMID_ALGORITHM, SCHEMA_MAJOR, SCHEMA_MINOR, SavedSelectionDto,
     Schema, ShapeDto, SourceDto, Writer,
 };
@@ -535,24 +535,37 @@ fn numbers(transform: slopshop_core::Projective) -> Vec<f64> {
     }
 }
 
-/// A layer's warp as written (node version 18, ADR 0044).
+/// A layer's warp as written (ADR 0044): a grid (node version 18) or planes (version 19).
 fn warp_json(warp: &slopshop_core::warp::Warp) -> Value {
-    let points: Vec<f64> = warp.points().iter().flat_map(|&(x, y)| [x, y]).collect();
-    let mut value = json!({
-        "kind": "grid",
-        "frame": warp.frame(),
-        "columns": warp.columns(),
-        "rows": warp.rows(),
-        "points": points,
-    });
-    if let Some(preset) = warp.preset() {
-        value["preset"] = json!({
-            "style": preset.style.id(),
-            "bend": preset.bend,
-            "vertical": preset.vertical,
-        });
+    use slopshop_core::warp::Warp;
+    let flat =
+        |points: &[(f64, f64)]| -> Vec<f64> { points.iter().flat_map(|&(x, y)| [x, y]).collect() };
+    match warp {
+        Warp::Grid(grid) => {
+            let mut value = json!({
+                "kind": "grid",
+                "frame": grid.frame(),
+                "columns": grid.columns(),
+                "rows": grid.rows(),
+                "points": flat(grid.points()),
+            });
+            if let Some(preset) = grid.preset() {
+                value["preset"] = json!({
+                    "style": preset.style.id(),
+                    "bend": preset.bend,
+                    "vertical": preset.vertical,
+                });
+            }
+            value
+        }
+        Warp::Planes(planes) => json!({
+            "kind": "planes",
+            "frame": planes.frame(),
+            "layout": flat(planes.layout()),
+            "warped": flat(planes.warped()),
+            "planes": planes.planes(),
+        }),
     }
-    value
 }
 
 /// Whether `layer` or a step of its stack is placed by a projective map (node version 11).
@@ -796,7 +809,9 @@ fn build_manifest(
             id.to_string(),
             NodeDto {
                 kind: kind.to_owned(),
-                version: if layer.vector_mask.is_some() {
+                version: if layer.warp.as_ref().is_some_and(|w| w.planes().is_some()) {
+                    NODE_VERSION_PERSPECTIVE_WARP
+                } else if layer.vector_mask.is_some() {
                     NODE_VERSION_VECTOR_MASK
                 } else if layer.warp.is_some() {
                     NODE_VERSION_WARP
