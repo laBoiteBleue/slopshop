@@ -339,3 +339,21 @@ Point 4, as built:
    it into their pixels. `.slop` 0.40 writes it as `params.vector_mask` at node version 19;
    PSD export writes it into the layer's pixel mask (Photoshop's `vmsk` import and export,
    Rasterize > Vector Mask and a Density setting are left for later).
+
+## Amendment: text, part 3 (2026-10-19)
+
+Status: accepted (2026-10-19, under the maintainer's delegation; to review).
+
+1. **The Type menu**, between Layer and Select as in Photoshop. Rasterize Type Layer is not
+   repeated there: Layer > Bake to Pixels > Rasterize does it (no redundant controls).
+2. **Type > Convert to Shape** makes the text layers selected vector layers of their glyph
+   outlines (`Edit::convert_to_shape`): the source's outlines, a non-zero path, become a plain
+   shape source filled with the text's own color, through the same edit as any shape change,
+   so that every linked copy follows (ADR 0040) and names, styles, masks and transforms stay.
+   A text in several colors becomes one fill, as a Photoshop shape layer has one. A text being
+   typed is committed first. No format change.
+3. **Type > Paste Lorem Ipsum** types one paragraph of the classic placeholder text in place of
+   the characters selected, while a text is typed (it is content, the same in every
+   language). Photoshop fills a paragraph box to its end; one paragraph is enough to see a
+   layout, and filling would need the layout's overflow first.
+4. **Type > Create Work Path** waits for the Paths panel (a work path to hold the outlines).

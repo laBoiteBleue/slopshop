@@ -498,6 +498,8 @@ Raised on 2026-10-05, to schedule:
           as they are typed, several colors drawn by color), the Character settings in
           Properties (family, style, size, leading, tracking, color, alignment) and the options
           bar on the characters selected while typing, else the whole text; `.slop` 0.41
+    - [x] Part 3a, the Type menu: Convert to Shape (the glyph outlines as a vector layer,
+          linked copies following), Paste Lorem Ipsum while typing
     - [ ] Next: Photoshop's pending style at a caret, Type > Convert to Point/Paragraph Text,
           justified paragraphs, embedded fonts, PSD editable text
 - [ ] Patterns (ADR 0042)

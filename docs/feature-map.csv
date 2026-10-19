@@ -300,17 +300,17 @@ Menu,Type > Orientation,,open,text layers are not started
 Menu,Type > OpenType,,open,text layers are not started
 Menu,Type > Extrude to 3D,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)
 Menu,Type > Create Work Path,,open,text layers are not started
-Menu,Type > Convert to Shape,,open,text layers are not started
-Menu,Type > Rasterize Type Layer,,done,Layer > Bake to Pixels > Rasterize (no Type menu yet)
-Menu,Type > Convert to Paragraph Text,,open,paragraph text exists (a drag with the Type tool); no conversion and no Type menu yet
+Menu,Type > Convert to Shape,,done,"the text layers selected become vector layers of their glyph outlines (a path in the text's own color, one fill as a shape layer has), their linked copies too; styles, masks and transforms kept"
+Menu,Type > Rasterize Type Layer,,done,Layer > Bake to Pixels > Rasterize; not repeated in the Type menu (no redundant controls)
+Menu,Type > Convert to Paragraph Text,,open,paragraph text exists (a drag with the Type tool); no conversion yet
 Menu,Type > Warp Text,,open,text layers are not started
 Menu,Type > Match Font,,open,text layers are not started
 Menu,Type > Font Preview Size,,open,text layers are not started
 Menu,Type > Language Options,,open,text layers are not started
 Menu,Type > Update All Text Layers,,open,text layers are not started
 Menu,Type > Replace All Missing Fonts,,open,text layers are not started
-Menu,Type > Paste Lorem Ipsum,,open,text layers are not started
-Menu,Type > Panels > Character,,partial,"the Character settings in the Properties panel (family, style, size, leading, tracking, color) on the characters selected or the whole text layer; no separate panel and no Type menu yet; not yet: kerning, scaling, baseline shift, faux styles, OpenType"
+Menu,Type > Paste Lorem Ipsum,,done,"while a text is typed: one paragraph of Lorem Ipsum in place of the characters selected (a box is not filled to its end)"
+Menu,Type > Panels > Character,,partial,"the Character settings in the Properties panel (family, style, size, leading, tracking, color) on the characters selected or the whole text layer; no separate panel; not yet: kerning, scaling, baseline shift, faux styles, OpenType"
 Menu,Type > Panels > Paragraph,,partial,"alignment (left, center, right) in the Character settings and the options bar; not yet: justification, indents, spacing"
 Menu,Type > Panels > Character Styles,,open,text layers are not started
 Menu,Type > Panels > Paragraph Styles,,open,text layers are not started
