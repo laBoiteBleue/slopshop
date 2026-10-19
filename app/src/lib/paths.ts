@@ -133,8 +133,9 @@ export function penEditable(
 }
 
 /**
- * Where a path the Pen finished goes: added to the chosen document path, to the vector mask
- * edited, a new Work Path (Path mode), or a new shape layer (Shape mode).
+ * Where a path the Pen finished goes: to the vector mask edited (either mode, as Photoshop's
+ * Pen in a targeted vector mask); in Path mode, added to the chosen document path, else a new
+ * Work Path; in Shape mode, a new shape layer.
  */
 export type PenDestination =
   | { kind: "path"; id: number }
@@ -143,9 +144,10 @@ export type PenDestination =
   | { kind: "shapeLayer" };
 
 export function penDestination(editable: EditablePath | null, mode: PenMode): PenDestination {
-  if (editable?.pathId !== undefined) return { kind: "path", id: editable.pathId };
   if (editable?.vectorMask) return { kind: "vectorMask" };
-  return mode === "path" ? { kind: "workPath" } : { kind: "shapeLayer" };
+  if (mode === "shape") return { kind: "shapeLayer" };
+  if (editable?.pathId !== undefined) return { kind: "path", id: editable.pathId };
+  return { kind: "workPath" };
 }
 
 /** `path`'s subpaths with those of `drawn` (document pixels) after them. */
