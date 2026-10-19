@@ -367,8 +367,13 @@ paint is a painted image sharing the untouched tiles, removable as a whole.
       Generators, Wavelength and Amplitude Min/Max, Scale, Type Sine/Triangle/Square, Undefined
       Areas Wrap Around/Repeat Edge Pixels, Randomize: a new seed), ZigZag (Amount -100 to 100,
       Ridges 1 to 20, Around Center/Out From Center/Pond Ripples) and Spherize's Horizontal Only and
-      Vertical Only modes, sampled as the distortions are; CPU and GPU (looks). Not yet: Shear and
-      Displace
+      Vertical Only modes, sampled as the distortions are; CPU and GPU (looks). Not yet: Displace
+- [x] Distort > Shear: Photoshop's curve editor (a grid with the vertical line through 2 to 16
+      points: a press adds one and drags it, the top and bottom ones move along their row, one
+      dragged off the grid is removed, Default straightens the line; arrows and Delete on a point
+      focused), each row of the frame moved sideways by the smooth curve through them (a natural
+      cubic spline, the grid's edge half the frame's width), Undefined Areas Wrap Around/Repeat
+      Edge Pixels; the points are the entry's values; CPU and GPU (looks)
 - [x] Filter > Render > Clouds and Difference Clouds (no dialog: soft fractal noise between the
       foreground and background colors of when they were applied, kept by the entry with a seed;
       Difference Clouds blended in Difference, each pixel keeping its opacity) and Fibers
