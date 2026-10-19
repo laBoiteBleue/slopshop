@@ -184,7 +184,7 @@ Menu,Layer > Layer Style > Inner Shadow,,done,"non-destructive, with PSD import 
 Menu,Layer > Layer Style > Inner Glow,,done,"non-destructive, with PSD import and export (ADR 0032); contour (Photoshop's contours) and Anti-aliased, Range; not yet: noise, jitter, gradient glows, Precise, Source Center, a custom contour editor"
 Menu,Layer > Layer Style > Satin,,done,"color, mode, opacity, angle, distance, size, invert, contour (Gaussian by default, as Photoshop) and Anti-aliased, CPU and GPU; PSD import and export; not yet: a custom contour editor"
 Menu,Layer > Layer Style > Color Overlay,,done,"non-destructive, with PSD import and export (ADR 0032)"
-Menu,Layer > Layer Style > Gradient Overlay,,partial,"Linear and Radial, angle, scale, reverse, aligned with the layer or the canvas, CPU and GPU; PSD import and export; not yet: Angle, Reflected and Diamond styles, an offset, transparency stops"
+Menu,Layer > Layer Style > Gradient Overlay,,partial,"Photoshop's five styles (Linear, Radial, Angle, Reflected, Diamond), angle, scale, reverse, aligned with the layer or the canvas, CPU and GPU; PSD import and export; not yet: an offset, transparency stops, Dither"
 Menu,Layer > Layer Style > Pattern Overlay,,done,"a library pattern within the shape: scale, angle, Link with Layer, mode, opacity (ADR 0042); not written to PSD yet"
 Menu,Layer > Layer Style > Outer Glow,,done,"non-destructive, with PSD import and export (ADR 0032); contour (Photoshop's contours) and Anti-aliased, Range; not yet: noise, jitter, gradient glows, Precise, Source Center, a custom contour editor"
 Menu,Layer > Layer Style > Drop Shadow,,done,"non-destructive, with PSD import and export (ADR 0032); contour (Photoshop's contours) and Anti-aliased; not yet: noise, a custom contour editor"
@@ -196,7 +196,7 @@ Menu,Layer > Layer Style > Create Layers,,open,layer styles exist (ADR 0032); de
 Menu,Layer > Layer Style > Hide All Effects,,done,"and Show All Effects; each layer's effects hidden as by the eye of its Effects row (PSD masterFXSwitch, .slop 0.36), each effect keeping its own"
 Menu,Layer > Layer Style > Scale Effects,,done,"1 to 1000 %, live, on the selected styled layers: sizes and distances in whole pixels, the overlays' scale"
 Menu,Layer > New Fill Layer > Solid Color,,done,
-Menu,Layer > New Fill Layer > Gradient,,done,editable in the Properties panel
+Menu,Layer > New Fill Layer > Gradient,,done,"editable in the Properties panel: the gradient, Photoshop's five styles (Linear, Radial, Angle, Reflected, Diamond), angle, scale, Reverse"
 Menu,Layer > New Fill Layer > Pattern,,done,"a library pattern repeated across the canvas; scale, angle and pattern in Properties (ADR 0042); Link with Layer: always"
 Menu,Layer > New Adjustment Layer > Brightness/Contrast,,done,with PSD import and export
 Menu,Layer > New Adjustment Layer > Levels,,done,with PSD import and export
@@ -635,7 +635,7 @@ Tool,Tools panel > History > Art History Brush,,wont,dated
 Tool,Tools panel > Eraser > Eraser,,done,"erases as paint, the original kept; hides on masks; the Restore Eraser brings pixels back"
 Tool,Tools panel > Eraser > Background Eraser,,open,"the Eraser exists (ADR 0027): erasing is paint, the original kept"
 Tool,Tools panel > Eraser > Magic Eraser,,open,"the Magic Wand and the Eraser exist (ADR 0024, ADR 0027)"
-Tool,Tools panel > Fill > Gradient,,done,
+Tool,Tools panel > Fill > Gradient,,done,"Photoshop's five styles in the options bar (Linear, Radial, Angle, Reflected, Diamond), its first presets, Reverse, Opacity; not yet: editing the stops for the tool, Dither"
 Tool,Tools panel > Fill > Paint Bucket,,done,
 Tool,Tools panel > Fill > 3D Material Drop,,wont,3D is out of scope (Adobe retired Photoshop's 3D features)
 Tool,Tools panel > Blur > Blur,,done,"as paint in the layer's stack, the original kept"

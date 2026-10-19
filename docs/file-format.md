@@ -410,12 +410,14 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     them; nine numbers on a node of an earlier version are refused.
   - v12 (schema 0.27) is a raster, fill or group node whose style has a Gradient Overlay:
     `params.style.gradient_overlay` holds `enabled`, `gradient` (stops as Gradient Map's,
-    `[location 0–4096, r, g, b]` sRGB-encoded), `reverse`, `shape` (`linear` or `radial`),
+    `[location 0–4096, r, g, b]` sRGB-encoded), `reverse`, `shape` (`linear` or `radial`; from
+    schema 0.42 also `angle`, `reflected` or `diamond`, see `slopshop.gradientFill`),
     `angle` (degrees, counterclockwise from the right: at 90 the gradient starts at the bottom),
     `scale` (10 to 150, percent), `align` (across the box of the layer's pixels, else the
     canvas), `mode` and `opacity`. Linear, the gradient runs through the box's center along the
     angle from edge to edge (`(w·|cos| + h·|sin|) × scale`); radial, from the center out to half
-    the box's longer side × scale. It fills the layer's shape, under a Color Overlay. Only those
+    the box's longer side × scale; reflected, from the center to the edge along the angle (half
+    the linear length); angle and diamond, from the center along the angle, as radial. It fills the layer's shape, under a Color Overlay. Only those
     nodes are written at v12, so that older readers refuse them rather than drop the effect.
   - v13 (schema 0.28) is a raster, fill or group node whose style has a Satin:
     `params.style.satin` holds `enabled`, `color`, `mode`, `opacity`, `angle` (degrees,
@@ -525,14 +527,18 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     SlopShop. No `inputs`.
   - `slopshop.gradientFill` (schema 0.24): a gradient fill layer, with the versions and the
     parameters of `slopshop.fill` (blend mode, mask, clipping, transform, style) but for its
-    color: `params.gradient`, stops as Gradient Map's; `params.shape`, `linear` or `radial`;
+    color: `params.gradient`, stops as Gradient Map's; `params.shape`, `linear` or `radial`, and
+    from schema 0.42 `angle`, `reflected` or `diamond` (another comes from a newer SlopShop);
     `params.from` and `params.to`, two different points `[x, y]` (finite) of the node's content
     (placed by its transform); `params.alpha`, the opacity `[start, end]` in [0, 1]. Point `p`
-    of the content is at `t` along the gradient: linear, the projection of `p − from` on
-    `to − from` divided by its squared length; radial, `|p − from| / |to − from|`; `t` clamped
-    to [0, 1]. Its color is the gradient's at `t` (sRGB-encoded), its opacity interpolated
-    linearly between the two. It covers the whole canvas, like a fill. Older readers refuse the
-    unknown type.
+    of the content is at `t` along the gradient: with `v = p − from`, `d = to − from`,
+    `u = (v · d) / |d|²` and `w = (d.x·v.y − d.y·v.x) / |d|²`: linear, `u`; radial,
+    `|v| / |d|`; angle, the angle from `d` to `v` counterclockwise as seen (y going down:
+    `atan2(d.y·v.x − d.x·v.y, v · d)`) over a full turn, in [0, 1); reflected, `|u|`; diamond,
+    `|u| + |w|`; `t` clamped to [0, 1]. Its color is the gradient's at `t` (sRGB-encoded), its
+    opacity interpolated linearly between the two. It covers the whole canvas, like a fill.
+    Older readers refuse the unknown type; readers before schema 0.42 refuse the three newer
+    shapes, here and in a Gradient Overlay, as invalid.
   - `slopshop.patternFill` v16 (schema 0.31, [ADR 0042](adr/0042-patterns.md)): a pattern fill
     layer, `params.source` the index of its pattern in `document.sources` (an image source,
     as a raster node's), `params.scale` (layer pixels per pattern pixel, 0.01 to 10) and
