@@ -17,6 +17,7 @@ mod info;
 mod ipc;
 mod layer_style;
 mod liquify;
+mod maps;
 mod move_pixels;
 mod paint;
 mod patterns;
@@ -158,8 +159,9 @@ struct OpenDocument {
     /// Layers whose pixels are being composited (Layer > Bake to Pixels, ADR 0031): a merge's
     /// group, shown as the layer it becomes until its pixels replace it.
     baking: std::collections::HashSet<LayerId>,
-    /// Library patterns loaded for this document (`patterns::load_pattern`, ADR 0042), by
-    /// source id: what a Pattern Overlay being set may name before a layer shows it.
+    /// Library patterns loaded for this document (`patterns::load_pattern`, ADR 0042) and
+    /// displacement maps (`maps::load_displacement_map`), by source id: what a Pattern Overlay
+    /// or a Displace being set may name before a layer keeps it.
     loaded_patterns: HashMap<u64, Arc<slopshop_core::Source>>,
 }
 
@@ -2587,6 +2589,7 @@ pub fn run() {
             patterns::add_pattern_fill,
             patterns::replace_pattern,
             patterns::load_pattern,
+            maps::load_displacement_map,
             paint::patch_selection,
             move_snap_targets,
             warp_grid,
