@@ -72,7 +72,11 @@ with ag-psd and psd-tools as structure oracles. It comes in stages, each one use
    ranges, Gradient Map's smoothness, midpoints and transparency, legacy Brightness/Contrast, the Black & White tint, Photo
    Filter colors other than RGB or Lab (and version 3's XYZ) and blend modes other than normal
    are approximated and reported; Photo Filter colors are kept within sRGB; Colorize, drawn
-   ("map") curves, curves of more than 16 points and Color Lookup are left out for now.
+   ("map") curves and curves of more than 16 points are left out for now. Color Lookup layers
+   become Color Lookup adjustment layers when their embedded table is a `.cube` or `.3dl`
+   file (or when none is chosen), Dither reported as approximated; Abstract and Device Link
+   profiles and `.look` and `.csp` tables are left out. Export writes the table as an
+   embedded `.cube` file.
    Then text as rasterized pixels plus its parameters, smart
    objects as embedded documents.
 

@@ -132,7 +132,7 @@ Menu,Image > Adjustments > Color Balance,,done,"an editable entry of the layer's
 Menu,Image > Adjustments > Black & White,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
 Menu,Image > Adjustments > Photo Filter,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
 Menu,Image > Adjustments > Channel Mixer,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
-Menu,Image > Adjustments > Color Lookup,,open,as an adjustment layer
+Menu,Image > Adjustments > Color Lookup,,partial,".cube (3D and 1D) and .3dl tables, an editable entry of the layer's stack (ADR 0034), or an adjustment layer; Abstract and Device Link (ICC profiles), .look and .csp files and Dither left out"
 Menu,Image > Adjustments > Invert,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
 Menu,Image > Adjustments > Posterize,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
 Menu,Image > Adjustments > Threshold,,done,"an editable entry of the layer's stack (ADR 0034), or an adjustment layer"
@@ -208,7 +208,7 @@ Menu,Layer > New Adjustment Layer > Color Balance,,done,with PSD import and expo
 Menu,Layer > New Adjustment Layer > Black & White,,done,with PSD import and export
 Menu,Layer > New Adjustment Layer > Photo Filter,,done,with PSD import and export
 Menu,Layer > New Adjustment Layer > Channel Mixer,,done,with PSD import and export
-Menu,Layer > New Adjustment Layer > Color Lookup,,open,
+Menu,Layer > New Adjustment Layer > Color Lookup,,partial,".cube and .3dl tables, with PSD import and export (the table embedded); Abstract and Device Link profiles and Dither left out"
 Menu,Layer > New Adjustment Layer > Invert,,done,with PSD import and export
 Menu,Layer > New Adjustment Layer > Posterize,,done,with PSD import and export
 Menu,Layer > New Adjustment Layer > Threshold,,done,with PSD import and export

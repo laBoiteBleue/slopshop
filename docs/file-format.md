@@ -538,7 +538,8 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     layer. `params.adjustment` is `exposure`, `hueSaturation`, `levels`, `brightnessContrast`,
     `vibrance`, `invert`, `posterize` or `threshold`, and from schema 0.8 `blackWhite`,
     `colorBalance`, `photoFilter` or `channelMixer`, from schema 0.9 `curves`, and from schema
-    0.14 `gradientMap`, from schema 0.15 `selectiveColor`. `params.values` holds its parameters in
+    0.14 `gradientMap`, from schema 0.15 `selectiveColor`, from schema 0.43 `colorLookup`.
+    `params.values` holds its parameters in
     this order: exposure, offset, gamma; hue, saturation, lightness; input black, input
     white, gamma, output black, output white; brightness, contrast; vibrance, saturation;
     nothing (invert); levels (posterize); level in [0, 1] (threshold); the reds, yellows,
@@ -564,6 +565,22 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
     From schema 0.15, at most 37 values: `selectiveColor` has the cyan, magenta, yellow and
     black (integers, −100 to 100 %) of the reds, yellows, greens, cyans, blues, magentas,
     whites, neutrals and blacks, then the method (flag: absolute).
+    From schema 0.43, `colorLookup` has no values of its own but, once a table is chosen,
+    `params.lut`: `name` (the file's), `dimension` (3: a 3D table; 1: three 1D tables),
+    `size` (points a side, 2 to 129 for 3D, 2 to 65536 for 1D), `domain` (`[[r, g, b], [r, g,
+    b]]`, finite, the inputs mapped to the first and the last point, each minimum below its
+    maximum) and `table`, the key of an image of the values, in the format gray + `f32` (linear
+    sRGB, straight: the samples are the values, never converted, only stored), 256 pixels
+    wide, the values row by row, the last row padded with zeros: `size³ × 3` values for 3D,
+    the colors of the points red changing fastest, then green, then blue, `size × 3` for 1D,
+    the three channels' outputs at each point; finite, within 1e6. A color goes through the
+    table on its sRGB-encoded values (sRGB primaries and transfer, whatever the blend space),
+    clamped to the domain then scaled to the points; 3D tables are interpolated
+    tetrahedrally (in the cell holding the color, from its first corner to the opposite one
+    along the channels in decreasing order of their fractions; on ties either order gives the
+    same color), 1D ones linearly. Absent: no table, colors unchanged. A table that is not valid,
+    or whose image is missing or of another size, makes the file invalid. A stack's effect
+    (Image > Adjustments) stores it the same way.
     Parameters out of range make the file invalid; an unknown adjustment comes from a newer
     SlopShop. No `inputs`.
   - `slopshop.gradientFill` (schema 0.24): a gradient fill layer, with the versions and the
