@@ -1,6 +1,7 @@
 //! Layer > Layer Style > Copy Layer Style and Paste Layer Style (ADR 0032), as Photoshop's: the
 //! style copied is kept by the app, not by a document, so that it pastes into any open document
-//! (a Pattern Overlay's pattern going with it, as the source it names).
+//! (a Pattern Overlay's pattern going with it, as the source it names). And the contours the
+//! Layer Style dialog offers.
 
 use slopshop_core::LayerId;
 use slopshop_core::edit::Edit;
@@ -8,7 +9,14 @@ use slopshop_core::session::HistoryLabel;
 use tauri::State;
 
 use crate::AppState;
-use crate::ipc::DocumentView;
+use crate::ipc::{ContourPresetView, DocumentView};
+
+/// Photoshop's contours, for the Layer Style dialog's Contour pickers (each with its curve
+/// sampled for its thumbnail).
+#[tauri::command]
+pub fn contour_presets() -> Vec<ContourPresetView> {
+    crate::ipc::contour_presets()
+}
 
 /// Layer `layer_id`'s style copied (its effects, Fill Opacity and whether its effects show), in
 /// place of the one copied before. An error when it has none (the menu then offers nothing).

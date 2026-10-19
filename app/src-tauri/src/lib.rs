@@ -2526,6 +2526,7 @@ pub fn run() {
             clipboard::paste,
             layer_style::copy_layer_style,
             layer_style::paste_layer_style,
+            layer_style::contour_presets,
             clipboard::copy,
             bake::bake_layers,
             clipboard::clipboard_size,
@@ -4632,6 +4633,62 @@ mod tests {
         let bad = json.replace("\"multiply\"", "\"nope\"");
         let request: EditRequest = serde_json::from_str(&bad).unwrap();
         assert!(request.into_edit(&mut s).is_err());
+    }
+
+    #[test]
+    fn layer_style_contours_go_through_the_ipc() {
+        use slopshop_core::contour::{Contour, ContourPreset};
+        let mut s = blank_session();
+        let id = s.document().layers()[0].id.get();
+        let cone =
+            serde_json::to_string(&ipc::ContourDto::new(&ContourPreset::Cone.contour())).unwrap();
+        let json = format!(
+            r#"{{"kind":"setLayerStyle","id":{id},"style":{{"fillOpacity":1,
+            "dropShadow":{{"enabled":true,"color":[0,0,0],"mode":"multiply","opacity":0.75,
+              "angle":120,"distance":5,"spread":0,"size":5,"contour":{cone},"antiAliased":true}},
+            "outerGlow":{{"enabled":true,"color":[1,1,0.75],"mode":"screen","opacity":0.75,
+              "spread":0,"size":5,"range":30}},
+            "satin":{{"enabled":true,"color":[0,0,0],"mode":"multiply","opacity":0.5,
+              "angle":19,"distance":11,"size":14,"invert":true}},
+            "colorOverlay":null,"stroke":null}}}}"#
+        );
+        let request: EditRequest = serde_json::from_str(&json).unwrap();
+        let edit = request.into_edit(&mut s).unwrap();
+        s.perform(edit).unwrap();
+        let layer = &s.document().layers()[0];
+        let style = layer.style.as_ref().unwrap().settings();
+        let shadow = style.drop_shadow.unwrap();
+        assert_eq!(shadow.contour, ContourPreset::Cone.contour());
+        assert!(shadow.anti_aliased);
+        // Absent: linear, not anti-aliased; Satin's, Photoshop's Gaussian anti-aliased.
+        let glow = style.outer_glow.unwrap();
+        assert_eq!(
+            (glow.contour, glow.anti_aliased, glow.range),
+            (Contour::LINEAR, false, 30.0)
+        );
+        let satin = style.satin.unwrap();
+        assert_eq!(satin.contour, ContourPreset::Gaussian.contour());
+        assert!(satin.anti_aliased);
+        // Back to the UI with its points and its curve sampled.
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let back = view.layers[0].style.clone().unwrap();
+        let contour = back.drop_shadow.unwrap().contour.unwrap();
+        assert_eq!(
+            contour.points,
+            vec![(0, 0, false), (128, 255, true), (255, 0, false)]
+        );
+        assert_eq!(contour.samples.len(), 65);
+        assert_eq!((contour.samples[0], contour.samples[64]), (0.0, 0.0));
+        assert!((contour.samples[32] - 1.0).abs() < 0.01);
+        // A contour going back is refused.
+        let bad = json.replace(&cone, r#"{"points":[[200,0,false],[100,255,false]]}"#);
+        let request: EditRequest = serde_json::from_str(&bad).unwrap();
+        assert!(request.into_edit(&mut s).is_err());
+        // The presets, in Photoshop's order.
+        let presets = ipc::contour_presets();
+        assert_eq!(presets.len(), 12);
+        assert_eq!((presets[0].id, presets[5].id), ("linear", "gaussian"));
+        assert!(presets.iter().all(|p| p.contour.samples.len() == 65));
     }
 
     #[test]
