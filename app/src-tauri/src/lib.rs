@@ -5360,6 +5360,87 @@ mod tests {
     }
 
     #[test]
+    fn character_styles_go_over_the_ipc_on_texts_and_spans() {
+        let mut s = blank_session();
+        let perform = |s: &mut slopshop_core::Session, json: String| {
+            let request: EditRequest = serde_json::from_str(&json).unwrap();
+            let edit = request.into_edit(s).unwrap();
+            s.perform(edit).unwrap();
+        };
+        perform(
+            &mut s,
+            format!(
+                r#"{{"kind":"addText","text":{{"content":"Hi you","family":"{}","weight":400,"italic":false,"size":20,"color":[0,0,0,1],"align":"left","position":[20,30],"underline":true,"ligatures":false}}}}"#,
+                slopshop_text::DEFAULT_FAMILY
+            ),
+        );
+        let id = DocumentView::new(&s, &meta(), Vec::new()).layers[1].id;
+        perform(
+            &mut s,
+            format!(
+                r#"{{"kind":"styleText","id":{id},"range":[3,6],"style":{{"case":"smallCaps","baseline":"superscript","fauxBold":true,"fauxItalic":true,"strikethrough":true,"underline":false}}}}"#
+            ),
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let text = view.layers[1].text.as_ref().unwrap();
+        assert!(text.underline && !text.ligatures && !text.faux_bold);
+        assert_eq!(text.case, text::TextCaseDto::Normal);
+        let style = &text.spans[0].style;
+        assert_eq!(
+            (style.case, style.baseline),
+            (
+                Some(text::TextCaseDto::SmallCaps),
+                Some(text::TextBaselineDto::Superscript)
+            )
+        );
+        assert_eq!(
+            (
+                style.faux_bold,
+                style.faux_italic,
+                style.strikethrough,
+                style.underline
+            ),
+            (Some(true), Some(true), Some(true), Some(false))
+        );
+        // As the UI reads them: camelCase, absent when not set.
+        let json = serde_json::to_value(text).unwrap();
+        assert_eq!(json["case"], "normal");
+        assert_eq!(json["spans"][0]["style"]["baseline"], "superscript");
+        assert!(json["spans"][0]["style"].get("ligatures").is_none());
+        // A text sent without them has the defaults, Standard Ligatures on.
+        let request: EditRequest = serde_json::from_str(&format!(
+            r#"{{"kind":"addText","text":{{"content":"x","family":"{}","weight":400,"italic":false,"size":20,"color":[0,0,0,1],"align":"left","position":[0,0]}}}}"#,
+            slopshop_text::DEFAULT_FAMILY
+        ))
+        .unwrap();
+        let crate::ipc::EditRequest::AddText { text, .. } = request else {
+            panic!("an addText request")
+        };
+        assert!(text.ligatures && !text.underline);
+        // A character typed in a style chosen at the caret (the pending style): set so, over
+        // what it takes from the character before it.
+        perform(
+            &mut s,
+            format!(
+                r#"{{"kind":"setText","id":{id},"text":{{"content":"Hi! you","family":"{}","weight":400,"italic":false,"size":20,"color":[0,0,0,1],"align":"left","position":[20,30],"underline":true,"ligatures":false}},"typed":{{"range":[2,3],"style":{{"size":30}}}}}}"#,
+                slopshop_text::DEFAULT_FAMILY
+            ),
+        );
+        let view = DocumentView::new(&s, &meta(), Vec::new());
+        let spans = &view.layers[1].text.as_ref().unwrap().spans;
+        let typed: Vec<_> = spans
+            .iter()
+            .map(|s| (s.start, s.end, s.style.size))
+            .collect();
+        assert_eq!(typed[0], (2, 3, Some(30.0)), "{spans:?}");
+        assert_eq!(
+            (spans[1].start, spans[1].end),
+            (4, 7),
+            "the span after it moved"
+        );
+    }
+
+    #[test]
     fn a_text_converted_to_a_shape_is_a_vector_layer_of_its_outlines() {
         let mut s = blank_session();
         let json = format!(
