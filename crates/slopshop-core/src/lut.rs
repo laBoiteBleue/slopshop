@@ -321,7 +321,7 @@ fn image_size(count: usize) -> Size {
 /// fractions in decreasing order and the corners after the first and the second step (offsets
 /// in red, green, blue). On ties either order gives the same color (the tetrahedra share that
 /// face).
-/// The GPU's `lut_tetrahedron` in composite.wgsl makes the same choices.
+/// `color_lookup` in composite.wgsl makes the same choices.
 fn tetrahedron(f: [f64; 3]) -> (f64, f64, f64, [[usize; 3]; 2]) {
     let [fr, fg, fb] = f;
     if fr > fg {
