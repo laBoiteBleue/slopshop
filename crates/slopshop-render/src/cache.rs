@@ -360,6 +360,8 @@ struct Fills {
     layers: Vec<u8>,
     layer_count: u32,
     table: Vec<u32>,
+    /// The Color Lookup tables the fills read, their words in `table`.
+    luts: Vec<super::LutRef>,
     /// One `Fill` of composite.wgsl a tile.
     headers: Vec<u8>,
     count: u32,
@@ -381,6 +383,12 @@ impl Fills {
         self.layer_count += prepared.count;
         self.layers.extend(prepared.bytes);
         self.table.extend(prepared.tile_table);
+        self.luts.extend(
+            prepared
+                .luts
+                .into_iter()
+                .map(|(word, lut)| (word + table_base as usize, lut)),
+        );
         self.count += 1;
     }
 
@@ -695,6 +703,7 @@ impl Renderer {
             count: fills.layer_count,
             bytes: fills.layers,
             tile_table: fills.table,
+            luts: fills.luts,
         });
         let headers = buffer("fills", &fills.headers, wgpu::BufferUsages::STORAGE);
         let bind_group = self.bind_group(
@@ -855,6 +864,10 @@ fn step_key(
         .flat_map(|v| v.to_le_bytes())
         .collect();
     hasher.write(&table);
+    // Color Lookup's tables: immutable, told by their identity.
+    for (_, lut) in &encoded.luts {
+        hasher.write_u64(lut.id().get());
+    }
     // The planned level, and what decides how far a tile budget may coarsen it and how the
     // tiles' bytes read: the image's size and storage. (The fields hold the rest.)
     for plan in plans.iter().flatten() {
