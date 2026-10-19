@@ -1369,9 +1369,23 @@ fn gradient_color(layer: Layer, p: vec2<f32>) -> vec4<f32> {
     let start = layer.color.xy;
     let span = layer.color.zw - start;
     let length2 = dot(span, span);
-    var t = dot(content - start, span) / length2;
-    if layer.transfer.z != 0.0 {
-        t = length(content - start) / sqrt(length2);
+    let v = content - start;
+    // Along the line and square to it, in lengths of the line.
+    let along = dot(v, span) / length2;
+    let across = (span.x * v.y - span.y * v.x) / length2;
+    // The shape: 0 linear, 1 radial, 2 angle, 3 reflected, 4 diamond (`set_gradient_fields`).
+    let shape = layer.transfer.z;
+    var t = along;
+    if shape == 1.0 {
+        t = length(v) / sqrt(length2);
+    } else if shape == 2.0 {
+        // Counterclockwise on screen (y goes down), from the line through the end.
+        let turn = atan2(span.y * v.x - span.x * v.y, dot(v, span)) / 6.2831855;
+        t = select(turn, turn + 1.0, turn < 0.0);
+    } else if shape == 3.0 {
+        t = abs(along);
+    } else if shape == 4.0 {
+        t = abs(along) + abs(across);
     }
     // NaN (no span) is 0, as in core.
     t = select(0.0, clamp(t, 0.0, 1.0), t == t);

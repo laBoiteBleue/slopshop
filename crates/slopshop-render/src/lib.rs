@@ -1851,9 +1851,13 @@ fn set_gradient_fields(
     fields.resample[1] = [b, d, f, 0.0];
     fields.resample[2] = [g, h, i, 0.0];
     fields.color = [field.from[0], field.from[1], field.to[0], field.to[1]].map(|v| v as f32);
+    // `gradient_color`'s codes in composite.wgsl.
     let shape = match field.shape {
         slopshop_core::gradient::GradientShape::Linear => 0.0,
         slopshop_core::gradient::GradientShape::Radial => 1.0,
+        slopshop_core::gradient::GradientShape::Angle => 2.0,
+        slopshop_core::gradient::GradientShape::Reflected => 3.0,
+        slopshop_core::gradient::GradientShape::Diamond => 4.0,
     };
     fields.transfer = [alpha[0], alpha[1], shape, 0.0];
     fields.matrix = matrix_rows(&ColorSpace::LINEAR_SRGB.matrix_to(&WORKING_SPACE));

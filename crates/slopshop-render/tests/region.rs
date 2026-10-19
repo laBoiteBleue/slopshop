@@ -438,6 +438,23 @@ fn gpu_gradient_fills_match_the_cpu_reference_compositor() {
         },
     ])
     .unwrap();
+    // Angle's sweep ends where it starts: the same color at both ends, so that a pixel on the
+    // seam (where f32 and f64 may fall on either side) agrees.
+    let looped = Gradient::new(&[
+        GradientStop {
+            location: 0,
+            color: [20, 40, 200],
+        },
+        GradientStop {
+            location: 1800,
+            color: [250, 200, 10],
+        },
+        GradientStop {
+            location: 4096,
+            color: [20, 40, 200],
+        },
+    ])
+    .unwrap();
     for (shape, alpha, transform) in [
         (GradientShape::Linear, [1.0, 1.0], Affine::IDENTITY),
         (GradientShape::Linear, [1.0, 0.0], Affine::rotation(0.4)),
@@ -446,7 +463,19 @@ fn gpu_gradient_fills_match_the_cpu_reference_compositor() {
             [0.3, 1.0],
             Affine::rotation(-0.7).then(Affine::translation(60.0, -15.0)),
         ),
+        (GradientShape::Angle, [1.0, 1.0], Affine::rotation(0.3)),
+        (GradientShape::Reflected, [0.2, 0.9], Affine::IDENTITY),
+        (
+            GradientShape::Diamond,
+            [1.0, 0.5],
+            Affine::rotation(-0.5).then(Affine::translation(20.0, 10.0)),
+        ),
     ] {
+        let gradient = if shape == GradientShape::Angle {
+            looped
+        } else {
+            gradient
+        };
         let mut s = Session::new(Document::new(size));
         let base = image(size, PixelFormat::RGBA8_SRGB, |x, y| {
             vec![(x * 255 / 199) as u8, (y * 255 / 159) as u8, 128, 255]
