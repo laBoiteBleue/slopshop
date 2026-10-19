@@ -286,7 +286,13 @@ UTF-8 JSON, compressed by SlopShop with zstd level 3 and no filter. Example (has
   height are hidden; absent: point text), "spans" (from 0.41: characters set otherwise, sorted
   and apart: `{ "start", "end" }` in UTF-8 bytes of `content` on character boundaries, and
   what they set, among "family", "weight", "italic", "size", "color", "tracking" and
-  "leading" (null: automatic); each sets something; absent: none) }`. A reader older than 0.38
+  "leading" (null: automatic), and from 0.44 the character styles below; each sets something;
+  absent: none), and from 0.44 the character styles: "faux_bold", "faux_italic", "underline",
+  "strikethrough" (booleans), "ligatures" (the font's standard ligatures, `liga` and `clig`;
+  absent from a text: true), "case" ("normal", "all_caps", "small_caps") and "baseline"
+  ("normal", "superscript", "subscript"); a text writes them when they are not the defaults,
+  a span when it sets them }`. A reader older than 0.44 draws them from the outlines and,
+  edited, drops them. A reader older than 0.38
   draws paragraph text from its outlines and, edited, takes it as point text. A text in several
   colors (0.41) also has `paints` beside its `shape`: its glyphs by color, each a `path` filled
   with its color, drawn instead of `shape` (which keeps them all in the text's own color, what

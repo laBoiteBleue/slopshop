@@ -505,7 +505,11 @@ Raised on 2026-10-05, to schedule:
           bar on the characters selected while typing, else the whole text; `.slop` 0.41
     - [x] Part 3a, the Type menu: Convert to Shape (the glyph outlines as a vector layer,
           linked copies following), Paste Lorem Ipsum while typing
-    - [ ] Next: Photoshop's pending style at a caret, Type > Convert to Point/Paragraph Text,
+    - [x] Part 3b, character styles: Faux Bold, Faux Italic, All Caps, Small Caps,
+          Superscript, Subscript, Underline, Strikethrough and Standard Ligatures in the
+          Character settings (drawn into the outlines), the pending style at a caret;
+          `.slop` 0.44
+    - [ ] Next: Type > Create Work Path (with the Paths panel), Convert to Point/Paragraph Text,
           justified paragraphs, embedded fonts, PSD editable text
 - [ ] Patterns (ADR 0042)
   - [x] Pattern fill layers: an image source repeated across the plane, scaled and turned,
