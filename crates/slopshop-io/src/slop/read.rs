@@ -1053,11 +1053,28 @@ fn raster_content(
                     _ => return Err(FileError::UnknownNodeType(format!("filter {id}"))),
                 };
                 let (selection, to_document) = placement_of(params, "filter")?;
+                // Displace's map: a source of the document's list.
+                let map = match params.get("map") {
+                    None | Some(Value::Null) => None,
+                    Some(index) => Some(
+                        index
+                            .as_u64()
+                            .and_then(|i| usize::try_from(i).ok())
+                            .and_then(|i| sources.listed_at(i))
+                            .ok_or_else(|| corrupt("a filter with a missing map"))?,
+                    ),
+                };
+                if kind.takes_map() != map.is_some() {
+                    return Err(corrupt(
+                        "a filter with a map it does not take, or without its map",
+                    ));
+                }
                 filter.push(Arc::new(FilterStep {
                     filter: kind,
                     selection,
                     to_document,
                     space: space_of(params.get("space"))?,
+                    map,
                 }));
             }
             for step in filter {
