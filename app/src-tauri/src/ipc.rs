@@ -76,6 +76,8 @@ pub struct DocumentView {
     /// What the pixel layers show (ADR 0040), in the order the layers first show them: the
     /// Sources panel.
     pub sources: Vec<SourceView>,
+    /// The Paths panel's paths (ADR 0041): saved paths and the Work Path, in its order.
+    pub paths: Vec<crate::paths::PathView>,
 }
 
 /// A source (ADR 0040): content kept once, shown by one layer or more.
@@ -830,6 +832,7 @@ impl DocumentView {
                 })
                 .collect(),
             guides: doc.guides().iter().map(GuideView::from).collect(),
+            paths: doc.paths().iter().map(crate::paths::PathView::of).collect(),
             global_light: [doc.global_light().angle, doc.global_light().altitude],
             sources: doc
                 .sources()
@@ -1695,6 +1698,40 @@ pub enum EditRequest {
         mask: String,
         #[serde(default)]
         from: Option<u64>,
+        /// With `mask` `path` (the Paths panel's Add a Mask): document path `path`.
+        #[serde(default)]
+        path: Option<u64>,
+    },
+    /// The Pen in Path mode, no path chosen in the Paths panel: a new Work Path of `path`
+    /// (document pixels), in place of the one there was (ADR 0041).
+    SetWorkPath {
+        path: crate::shape::GeometryDto,
+    },
+    /// Document path `id` drawn in or edited (the Pen), document pixels.
+    SetPathGeometry {
+        id: u64,
+        path: crate::shape::GeometryDto,
+    },
+    /// The Paths panel's New Path: an empty path, last.
+    NewPath {
+        name: String,
+    },
+    RenamePath {
+        id: u64,
+        name: String,
+    },
+    /// Save Path: the Work Path kept as `name`.
+    SavePath {
+        id: u64,
+        name: String,
+    },
+    /// Duplicate Path: a saved path of `from`'s subpaths (a layer's placed in the document).
+    DuplicatePath {
+        from: crate::paths::PathRef,
+        name: String,
+    },
+    DeletePath {
+        id: u64,
     },
     /// A vector mask's path (the Pen), in the layer's space.
     SetVectorMaskPath {
@@ -1820,6 +1857,13 @@ impl EditRequest {
             Self::Trim { .. } => HistoryLabel::new("trim"),
             Self::RemoveLayerMask { .. } => HistoryLabel::new("deleteMask"),
             Self::AddVectorMask { .. } => HistoryLabel::new("addVectorMask"),
+            Self::SetWorkPath { .. } => HistoryLabel::new("workPath"),
+            Self::SetPathGeometry { .. } => HistoryLabel::new("editPath"),
+            Self::NewPath { .. } => HistoryLabel::new("newPath"),
+            Self::RenamePath { .. } => HistoryLabel::new("renamePath"),
+            Self::SavePath { .. } => HistoryLabel::new("savePath"),
+            Self::DuplicatePath { .. } => HistoryLabel::new("duplicatePath"),
+            Self::DeletePath { .. } => HistoryLabel::new("deletePath"),
             Self::SetVectorMaskEnabled { .. } => HistoryLabel::new("vectorMaskEnabled"),
             Self::RemoveVectorMask { .. } => HistoryLabel::new("deleteVectorMask"),
             Self::Batch { edits } => return edits.first()?.history_label(),
@@ -2669,9 +2713,29 @@ impl EditRequest {
                 id: LayerId::from_raw(id),
                 mask: None,
             },
-            EditRequest::AddVectorMask { ids, mask, from } => {
-                add_vector_masks(session.document(), &ids, &mask, from)?
+            EditRequest::AddVectorMask {
+                ids,
+                mask,
+                from,
+                path,
+            } => add_vector_masks(session.document(), &ids, &mask, from, path)?,
+            EditRequest::SetWorkPath { path } => crate::paths::set_work_path(session, &path)?,
+            EditRequest::SetPathGeometry { id, path } => {
+                crate::paths::set_path_geometry(session.document(), id, &path)?
             }
+            EditRequest::NewPath { name } => crate::paths::new_path(session, name),
+            EditRequest::RenamePath { id, name } => {
+                crate::paths::rename_path(session.document(), id, name)?
+            }
+            EditRequest::SavePath { id, name } => {
+                crate::paths::save_path(session.document(), id, name)?
+            }
+            EditRequest::DuplicatePath { from, name } => {
+                crate::paths::duplicate_path(session, from, name)?
+            }
+            EditRequest::DeletePath { id } => Edit::RemovePath {
+                id: slopshop_core::PathId::from_raw(id),
+            },
             EditRequest::SetVectorMaskPath { id, path } => {
                 let id = LayerId::from_raw(id);
                 let geometry = path.geometry()?;
@@ -2733,16 +2797,23 @@ fn vector_mask_of(
 
 /// Layer > Vector Mask > Reveal All, Hide All or Current Path (`mask`) on each of `ids` that
 /// has no vector mask yet, as one edit; Current Path takes vector layer `from`'s path, placed in
-/// each layer's space where it shows (ADR 0041).
+/// each layer's space where it shows (ADR 0041); `path` (the Paths panel's Add a Mask) takes
+/// document path `path`'s.
 fn add_vector_masks(
     doc: &slopshop_core::Document,
     ids: &[u64],
     mask: &str,
     from: Option<u64>,
+    path: Option<u64>,
 ) -> Result<Edit, String> {
     use slopshop_core::shape::VectorMask;
     let path = match mask {
         "revealAll" | "hideAll" => None,
+        "path" => {
+            let id = slopshop_core::PathId::from_raw(path.ok_or("no path to mask with")?);
+            let found = doc.path(id).ok_or("unknown path")?;
+            Some((found.geometry.clone(), slopshop_core::Projective::IDENTITY))
+        }
         "currentPath" => {
             let from = LayerId::from_raw(from.ok_or("no path to mask with")?);
             let source = doc.layer(from).ok_or("unknown layer")?;
