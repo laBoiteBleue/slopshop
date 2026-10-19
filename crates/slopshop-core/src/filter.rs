@@ -49,6 +49,86 @@ pub const MAX_EMBOSS_AMOUNT: f32 = 500.0;
 pub const MIN_MOSAIC_CELL: f32 = 2.0;
 pub const MAX_MOSAIC_CELL: f32 = 200.0;
 
+/// Crystallize's and Pointillize's cell size range in whole pixels (Photoshop's).
+pub const MIN_CRYSTAL_CELL: f32 = 3.0;
+pub const MAX_CRYSTAL_CELL: f32 = 300.0;
+
+/// Pointillize's dots' radius range, in parts of a cell: drawn for each dot.
+const DOT_RADIUS: [f64; 2] = [0.5, 0.69];
+
+/// What Crystallize's points and Pointillize's dots are drawn with besides the seed (each
+/// takes a few salts from these).
+const CRYSTAL_SALT: u32 = 0xc710;
+const DOT_SALT: u32 = 0x9d10;
+
+/// Color Halftone's Max Radius range in whole pixels (Photoshop's): a dot's radius where its
+/// channel is full, when it covers its whole cell (a square of `√2 radius` a side).
+pub const MIN_HALFTONE_RADIUS: f32 = 4.0;
+pub const MAX_HALFTONE_RADIUS: f32 = 127.0;
+
+/// Color Halftone's Screen Angles range in degrees, either way (Photoshop's).
+pub const MAX_SCREEN_ANGLE: f32 = 360.0;
+
+/// Below this Max Radius in pixels of a reduced level (a look), Color Halftone's dots are
+/// smaller than a pixel: the look shows the layer as it is (their coverage keeps its tone).
+const HALFTONE_FROM: f64 = 1.5;
+
+/// How far apart Fragment's four copies are from the pixel, diagonally, in pixels on each
+/// axis.
+pub const FRAGMENT_OFFSET: f64 = 4.0;
+
+/// Facet's Kuwahara radius, in the layer's pixels.
+const FACET_RADIUS: f64 = 2.0;
+
+/// Mezzotint's Type (Photoshop's): the random pattern each channel is thresholded against,
+/// dots (of a pixel, of clumps of about 2 pixels, of clumps and specks, of clumps of about 4),
+/// horizontal lines or diagonal strokes (of 4, 12 or 32 pixels and 4, 8 or 16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MezzotintType {
+    FineDots,
+    MediumDots,
+    GrainyDots,
+    CoarseDots,
+    ShortLines,
+    MediumLines,
+    LongLines,
+    ShortStrokes,
+    MediumStrokes,
+    LongStrokes,
+}
+
+impl MezzotintType {
+    /// Every type, in Photoshop's order (its index is its parameter).
+    pub const ALL: [Self; 10] = [
+        Self::FineDots,
+        Self::MediumDots,
+        Self::GrainyDots,
+        Self::CoarseDots,
+        Self::ShortLines,
+        Self::MediumLines,
+        Self::LongLines,
+        Self::ShortStrokes,
+        Self::MediumStrokes,
+        Self::LongStrokes,
+    ];
+
+    /// Its parameter: its index in [`Self::ALL`].
+    pub fn index(self) -> u32 {
+        Self::ALL.iter().position(|&t| t == self).unwrap_or(0) as u32
+    }
+
+    /// The type of parameter `v`, `None` when it is not one.
+    fn of(v: f32) -> Option<Self> {
+        (v.fract() == 0.0 && v >= 0.0)
+            .then(|| Self::ALL.get(v as usize).copied())
+            .flatten()
+    }
+}
+
+/// Up to this many of the layer's pixels a side, Mezzotint's look of a reduced level counts
+/// each of them under a pixel; beyond, this many evenly spaced.
+const MEZZOTINT_SAMPLES: usize = 4;
+
 /// Offset's range in pixels, either way (Photoshop's).
 pub const MAX_OFFSET: f32 = 30000.0;
 
@@ -416,6 +496,42 @@ pub enum Filter {
     /// Photoshop's Mosaic: square cells of `cell` pixels, from the layer's origin, each the
     /// average of its pixels.
     Mosaic { cell: f32 },
+    /// Photoshop's Color Halftone: each channel a screen of dots, a dot to a square cell of
+    /// `√2 radius` pixels (a grid from the layer's origin turned by that channel's `angles`
+    /// degrees, red, green, blue), the channel full in the dots, none outside. A dot's size
+    /// grows with the channel's average around its center: it covers as much of its cell as
+    /// the channel's value (the tone is kept), all of it at full, where its radius is `radius`
+    /// (4 to 127). Each pixel keeps its opacity.
+    ColorHalftone { radius: f32, angles: [f32; 3] },
+    /// Photoshop's Crystallize: polygons, each the cell of a point drawn from `seed` in each
+    /// square of `cell` pixels (3 to 300) from the layer's origin (the pixels closer to it than
+    /// to any other), the color of the layer at that point: sampled as the distortions are.
+    Crystallize { cell: f32, seed: u32 },
+    /// Photoshop's Facet: like-colored pixels clumped into flat blocks (a Kuwahara filter of
+    /// [`FACET_RADIUS`]). `reduction` as Diffuse's: the radius shrinks by it.
+    Facet { reduction: f32 },
+    /// Photoshop's Fragment: four copies of the layer, [`FRAGMENT_OFFSET`] pixels from it
+    /// diagonally, averaged. `reduction` as Diffuse's: the offset shrinks by it.
+    Fragment { reduction: f32 },
+    /// Photoshop's Mezzotint: each channel full or none, against a random pattern of `kind`
+    /// drawn from `seed` and the layer's pixel (the channel's value its odds of being full),
+    /// each pixel keeping its opacity. `reduction` as Diffuse's: a pixel of a reduced level
+    /// shows the share of the layer's pixels under it that are full.
+    Mezzotint {
+        kind: MezzotintType,
+        seed: u32,
+        reduction: f32,
+    },
+    /// Photoshop's Pointillize: dots, one drawn from `seed` in each square of `cell` pixels (3
+    /// to 300) from the layer's origin, of a radius of half a cell to 0.69 of one, each the
+    /// color of the layer at its center, later ones (row by row) over earlier ones;
+    /// `background` (sRGB-encoded, the background color of when it was applied) between them.
+    /// Sampled as the distortions are.
+    Pointillize {
+        cell: f32,
+        background: [u8; 3],
+        seed: u32,
+    },
     /// Photoshop's Offset: the layer's pixels moved by `horizontal`, `vertical` pixels, `edge`
     /// what comes in.
     Offset {
@@ -588,7 +704,7 @@ pub enum Filter {
 impl Filter {
     /// Every filter's identifier, in menu order.
     /// Shadows/Highlights last: it is in Image > Adjustments, not in the Filter menu.
-    pub const IDS: [&'static str; 36] = [
+    pub const IDS: [&'static str; 42] = [
         "gaussianBlur",
         "motionBlur",
         "boxBlur",
@@ -607,7 +723,13 @@ impl Filter {
         "findEdges",
         "emboss",
         "solarize",
+        "colorHalftone",
+        "crystallize",
+        "facet",
+        "fragment",
+        "mezzotint",
         "mosaic",
+        "pointillize",
         "offset",
         "twirl",
         "pinch",
@@ -645,6 +767,12 @@ impl Filter {
             Self::FindEdges => "findEdges",
             Self::Emboss { .. } => "emboss",
             Self::Mosaic { .. } => "mosaic",
+            Self::ColorHalftone { .. } => "colorHalftone",
+            Self::Crystallize { .. } => "crystallize",
+            Self::Facet { .. } => "facet",
+            Self::Fragment { .. } => "fragment",
+            Self::Mezzotint { .. } => "mezzotint",
+            Self::Pointillize { .. } => "pointillize",
             Self::Offset { .. } => "offset",
             Self::Twirl { .. } => "twirl",
             Self::Pinch { .. } => "pinch",
@@ -706,6 +834,15 @@ impl Filter {
                 amount,
             } => vec![angle, height, amount],
             Self::Mosaic { cell } => vec![cell],
+            Self::ColorHalftone { radius, angles } => [[radius].as_slice(), &angles].concat(),
+            Self::Crystallize { cell, seed } => vec![cell, seed as f32],
+            Self::Facet { .. } | Self::Fragment { .. } => Vec::new(),
+            Self::Mezzotint { kind, seed, .. } => vec![kind.index() as f32, seed as f32],
+            Self::Pointillize {
+                cell,
+                background,
+                seed,
+            } => vec![cell, packed(background), seed as f32],
             Self::Offset {
                 horizontal,
                 vertical,
@@ -931,6 +1068,26 @@ impl Filter {
                 amount,
             }),
             ("mosaic", &[cell]) => Some(Self::Mosaic { cell }),
+            ("colorHalftone", &[radius, a1, a2, a3]) => Some(Self::ColorHalftone {
+                radius,
+                angles: [a1, a2, a3],
+            }),
+            ("crystallize", &[cell, seed]) => Some(Self::Crystallize {
+                cell,
+                seed: whole_seed(seed)?,
+            }),
+            ("facet", &[]) => Some(Self::Facet { reduction: 1.0 }),
+            ("fragment", &[]) => Some(Self::Fragment { reduction: 1.0 }),
+            ("mezzotint", &[kind, seed]) => Some(Self::Mezzotint {
+                kind: MezzotintType::of(kind)?,
+                seed: whole_seed(seed)?,
+                reduction: 1.0,
+            }),
+            ("pointillize", &[cell, background, seed]) => Some(Self::Pointillize {
+                cell,
+                background: unpacked(background)?,
+                seed: whole_seed(seed)?,
+            }),
             ("offset", &[horizontal, vertical, edge]) => Some(Self::Offset {
                 horizontal,
                 vertical,
@@ -1183,6 +1340,27 @@ impl Filter {
                 amount: 100.0,
             }),
             "mosaic" => Some(Self::Mosaic { cell: 10.0 }),
+            "colorHalftone" => Some(Self::ColorHalftone {
+                radius: 8.0,
+                angles: [108.0, 162.0, 90.0],
+            }),
+            "crystallize" => Some(Self::Crystallize {
+                cell: 10.0,
+                seed: 0,
+            }),
+            "facet" => Some(Self::Facet { reduction: 1.0 }),
+            "fragment" => Some(Self::Fragment { reduction: 1.0 }),
+            "mezzotint" => Some(Self::Mezzotint {
+                kind: MezzotintType::FineDots,
+                seed: 0,
+                reduction: 1.0,
+            }),
+            // Photoshop's default background color, white.
+            "pointillize" => Some(Self::Pointillize {
+                cell: 5.0,
+                background: [255; 3],
+                seed: 0,
+            }),
             "offset" => Some(Self::Offset {
                 horizontal: 0.0,
                 vertical: 0.0,
@@ -1379,6 +1557,24 @@ impl Filter {
             Self::Mosaic { cell } => {
                 cell.fract() == 0.0 && (MIN_MOSAIC_CELL..=MAX_MOSAIC_CELL).contains(&cell)
             }
+            Self::ColorHalftone { radius, angles } => {
+                radius.fract() == 0.0
+                    && (MIN_HALFTONE_RADIUS..=MAX_HALFTONE_RADIUS).contains(&radius)
+                    && angles.iter().all(|a| {
+                        a.fract() == 0.0 && (-MAX_SCREEN_ANGLE..=MAX_SCREEN_ANGLE).contains(a)
+                    })
+            }
+            Self::Crystallize { cell, seed } | Self::Pointillize { cell, seed, .. } => {
+                cell.fract() == 0.0
+                    && (MIN_CRYSTAL_CELL..=MAX_CRYSTAL_CELL).contains(&cell)
+                    && seed < NOISE_SEEDS
+            }
+            Self::Facet { reduction } | Self::Fragment { reduction } => {
+                reduction.is_finite() && reduction >= 1.0
+            }
+            Self::Mezzotint {
+                seed, reduction, ..
+            } => seed < NOISE_SEEDS && reduction.is_finite() && reduction >= 1.0,
             Self::Offset {
                 horizontal,
                 vertical,
@@ -1513,6 +1709,12 @@ impl Filter {
             | Self::FindEdges
             | Self::Emboss { .. }
             | Self::Mosaic { .. }
+            | Self::ColorHalftone { .. }
+            | Self::Crystallize { .. }
+            | Self::Facet { .. }
+            | Self::Fragment { .. }
+            | Self::Mezzotint { .. }
+            | Self::Pointillize { .. }
             | Self::Offset { .. }
             | Self::Twirl { .. }
             | Self::Pinch { .. }
@@ -1622,6 +1824,26 @@ impl Filter {
             Self::Mosaic { cell } => Self::Mosaic {
                 cell: (cell / factor).max(1.0),
             },
+            // Dots in pixels of the reduced layer, from the same origin.
+            Self::ColorHalftone { radius, angles } => Self::ColorHalftone {
+                radius: radius / factor,
+                angles,
+            },
+            Self::Facet { reduction } => Self::Facet {
+                reduction: reduction * factor,
+            },
+            Self::Fragment { reduction } => Self::Fragment {
+                reduction: reduction * factor,
+            },
+            Self::Mezzotint {
+                kind,
+                seed,
+                reduction,
+            } => Self::Mezzotint {
+                kind,
+                seed,
+                reduction: reduction * factor,
+            },
             Self::SurfaceBlur { radius, threshold } => Self::SurfaceBlur {
                 radius: (radius / factor).round().max(MIN_SURFACE_RADIUS),
                 threshold,
@@ -1653,7 +1875,9 @@ impl Filter {
             | Self::Clouds { .. }
             | Self::DifferenceClouds { .. }
             | Self::Fibers { .. }
-            | Self::Tiles { .. } => *self,
+            | Self::Tiles { .. }
+            | Self::Crystallize { .. }
+            | Self::Pointillize { .. } => *self,
             // Lines of a pixel: as thin on a reduced layer.
             Self::TraceContour { .. } => *self,
             Self::Diffuse {
@@ -1740,6 +1964,15 @@ impl Filter {
             Self::FindEdges => 2.0,
             Self::Emboss { height, .. } => f64::from(height) + 2.0,
             Self::Mosaic { cell } => f64::from(cell) + 2.0,
+            Self::ColorHalftone { .. }
+            | Self::Facet { .. }
+            | Self::Fragment { .. }
+            | Self::Mezzotint { .. } => self.plan().kernel.reach() as f64 + 2.0,
+            // A pixel reads its cell's point (at most a cell's diagonal away), its dot's center
+            // (at most a cell away): in the layer's pixels, as many as a reduced level needs at
+            // most.
+            Self::Crystallize { cell, .. } => f64::from(cell) * std::f64::consts::SQRT_2 + 3.0,
+            Self::Pointillize { cell, .. } => f64::from(cell) + 3.0,
             Self::SurfaceBlur { radius, .. } | Self::SmartBlur { radius, .. } => {
                 f64::from(radius).ceil() + 2.0
             }
@@ -1902,6 +2135,54 @@ impl Filter {
                 factor: 1,
                 kernel: Kernel::Cells(f64::from(cell)),
             },
+            Self::ColorHalftone { radius, angles } => Plan {
+                factor: 1,
+                kernel: if f64::from(radius) < HALFTONE_FROM {
+                    Kernel::Identity
+                } else {
+                    Kernel::Halftone(Halftone::new(f64::from(radius), angles))
+                },
+            },
+            // A Kuwahara filter: Oil Paint's strokes, unlit.
+            Self::Facet { reduction } => {
+                let radius = (FACET_RADIUS / f64::from(reduction)).round() as usize;
+                Plan {
+                    factor: 1,
+                    kernel: if radius == 0 {
+                        Kernel::Identity
+                    } else {
+                        Kernel::Oil(Oil {
+                            radius,
+                            clean: 0.0,
+                            bristle: 0.0,
+                            grain: 1.0,
+                            light: None,
+                            relief: 0.0,
+                        })
+                    },
+                }
+            }
+            Self::Fragment { reduction } => Plan {
+                factor: 1,
+                kernel: Kernel::Fragment(FRAGMENT_OFFSET / f64::from(reduction)),
+            },
+            Self::Mezzotint {
+                kind,
+                seed,
+                reduction,
+            } => Plan {
+                factor: 1,
+                kernel: Kernel::Mezzotint {
+                    kind,
+                    seed,
+                    reduction: reduction.round().max(1.0) as usize,
+                },
+            },
+            // Sampled where [`Self::source`] says.
+            Self::Crystallize { .. } | Self::Pointillize { .. } => Plan {
+                factor: 1,
+                kernel: Kernel::Identity,
+            },
             Self::SurfaceBlur { radius, threshold } => Plan {
                 factor: 1,
                 kernel: Kernel::Surface {
@@ -1960,13 +2241,18 @@ impl Filter {
                 | Self::ZigZag { .. }
                 | Self::PolarCoordinates { .. }
                 | Self::Tiles { .. }
+                | Self::Crystallize { .. }
+                | Self::Pointillize { .. }
         )
     }
 
-    /// What a distortion brings in where [`Self::source`] reads nothing: transparency, or
-    /// Tiles' fill, from `original` (the pixel's own premultiplied value) and `colors` (the
-    /// filter's colors in the blend space, see [`Self::render`]).
+    /// What a distortion brings in where [`Self::source`] reads nothing: transparency, Tiles'
+    /// fill, or Pointillize's background, from `original` (the pixel's own premultiplied value)
+    /// and `colors` (the filter's colors in the blend space, see [`Self::render`]).
     pub fn gap(&self, original: [f64; 4], colors: Option<[[f64; 4]; 2]>) -> [f64; 4] {
+        if let (Self::Pointillize { .. }, Some(colors)) = (self, colors) {
+            return colors[1];
+        }
         let Self::Tiles { fill, .. } = *self else {
             return [0.0; 4];
         };
@@ -2260,6 +2546,34 @@ impl Filter {
                 }
                 found
             }
+            // The color at the closest of the cells' points, from the layer's origin whatever
+            // the frame.
+            Self::Crystallize { cell, seed } => {
+                let c = f64::from(cell);
+                let square = nearest_square(p, c, seed, CRYSTAL_SALT, 1.0);
+                Some(pixel_center(
+                    cell_point(square, c, seed, CRYSTAL_SALT, 1.0),
+                    layer,
+                ))
+            }
+            // The center of the last dot over `p`: a dot is less than a cell across, so only
+            // those of the squares around can be.
+            Self::Pointillize { cell, seed, .. } => {
+                let c = f64::from(cell);
+                let (ci, cj) = ((p[0] / c).floor() as i64, (p[1] / c).floor() as i64);
+                let mut found = None;
+                for j in cj - 1..=cj + 1 {
+                    for i in ci - 1..=ci + 1 {
+                        let q = cell_point([i, j], c, seed, DOT_SALT, 1.0);
+                        let [low, high] = DOT_RADIUS;
+                        let r = c * (low + (high - low) * draw([i, j], seed, DOT_SALT + 2));
+                        if (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) <= r * r {
+                            found = Some(q);
+                        }
+                    }
+                }
+                found.map(|q| pixel_center(q, layer))
+            }
             Self::PolarCoordinates { to_polar } => {
                 let tau = std::f64::consts::TAU;
                 if w <= 0.0 || h <= 0.0 || radius <= 0.0 {
@@ -2309,6 +2623,12 @@ impl Filter {
                 | Self::Tiles { .. }
                 | Self::TraceContour { .. }
                 | Self::OilPaint { .. }
+                | Self::ColorHalftone { .. }
+                | Self::Crystallize { .. }
+                | Self::Facet { .. }
+                | Self::Fragment { .. }
+                | Self::Mezzotint { .. }
+                | Self::Pointillize { .. }
         )
     }
 
@@ -2321,8 +2641,8 @@ impl Filter {
         )
     }
 
-    /// The colors a filter stores (a drawing filter's, Tiles'), foreground then background,
-    /// sRGB-encoded.
+    /// The colors a filter stores (a drawing filter's, Tiles', Pointillize's), foreground then
+    /// background, sRGB-encoded.
     pub fn colors(&self) -> Option<[[u8; 3]; 2]> {
         match *self {
             Self::Clouds {
@@ -2345,6 +2665,8 @@ impl Filter {
                 background,
                 ..
             } => Some([foreground, background]),
+            // Its background only.
+            Self::Pointillize { background, .. } => Some([background; 2]),
             _ => None,
         }
     }
@@ -2410,7 +2732,13 @@ impl Filter {
             | Self::Wind { .. }
             | Self::Tiles { .. }
             | Self::TraceContour { .. }
-            | Self::OilPaint { .. } => blurred,
+            | Self::OilPaint { .. }
+            | Self::ColorHalftone { .. }
+            | Self::Crystallize { .. }
+            | Self::Facet { .. }
+            | Self::Fragment { .. }
+            | Self::Mezzotint { .. }
+            | Self::Pointillize { .. } => blurred,
             // Each channel the difference of the pixel's color and the clouds' (`blurred`,
             // opaque), its own opacity.
             Self::DifferenceClouds { .. } => color(&|o, b| (o - b).abs()),
@@ -2895,7 +3223,56 @@ pub(crate) enum Kernel {
         upper: bool,
     },
     Oil(Oil),
+    /// Color Halftone's dots (see [`halftone`]), cells from the layer's origin.
+    Halftone(Halftone),
+    /// Fragment's four copies this many pixels from each pixel diagonally (read bilinearly),
+    /// averaged.
+    Fragment(f64),
+    /// Mezzotint's pattern of `kind` drawn from `seed` (see [`mezzotint`]), each pixel
+    /// `reduction` of the layer's a side.
+    Mezzotint {
+        kind: MezzotintType,
+        seed: u32,
+        reduction: usize,
+    },
     Identity,
+}
+
+/// Color Halftone's computation (see [`halftone`]): each channel's screen, square cells of
+/// `side` pixels along `axes` (unit vectors), the dots read from the layer blurred by a box of
+/// `blur` pixels (about half a cell).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Halftone {
+    side: f64,
+    axes: [[[f64; 2]; 2]; 3],
+    blur: usize,
+}
+
+impl Halftone {
+    /// Dots of Max Radius `radius` (pixels), the screens turned by `angles` degrees
+    /// (counterclockwise, up being negative y).
+    fn new(radius: f64, angles: [f32; 3]) -> Self {
+        let side = radius * std::f64::consts::SQRT_2;
+        Self {
+            side,
+            axes: angles.map(|a| {
+                let (sin, cos) = f64::from(a).to_radians().sin_cos();
+                [[cos, -sin], [sin, cos]]
+            }),
+            blur: (side / 2.0).round() as usize,
+        }
+    }
+
+    /// The largest dot's radius, in pixels: one covering its cell.
+    fn radius(&self) -> f64 {
+        self.side * std::f64::consts::FRAC_1_SQRT_2
+    }
+
+    /// A pixel reads the dots whose center is within the largest radius (and half a pixel),
+    /// each read between pixels from the layer blurred.
+    fn reach(&self) -> usize {
+        (self.radius() + 0.5).ceil() as usize + self.blur + 2
+    }
 }
 
 /// Oil Paint's computation (see [`oil`]): a Kuwahara filter of `radius`, a Gaussian blur of
@@ -2931,6 +3308,9 @@ impl Kernel {
             Self::Diffuse { .. } | Self::Contour { .. } => 1,
             Self::Wind { length, .. } => *length,
             Self::Oil(oil) => oil.reach(),
+            Self::Halftone(halftone) => halftone.reach(),
+            Self::Fragment(offset) => offset.ceil() as usize + 1,
+            Self::Mezzotint { .. } => 0,
             Self::Sobel => 1,
             Self::Relief { offset } => offset[0].abs().max(offset[1].abs()).ceil() as usize + 1,
             Self::Cells(cell) => cell.ceil() as usize,
@@ -2968,6 +3348,12 @@ impl Kernel {
                 origin,
             ),
             Self::Oil(oil) => self::oil(region, width, height, oil, origin),
+            Self::Halftone(screen) => halftone(region, width, height, screen, origin),
+            &Self::Mezzotint {
+                kind,
+                seed,
+                reduction,
+            } => mezzotint(region, width, height, kind, seed, reduction, origin),
             _ => self.region(region, width, height),
         }
     }
@@ -2998,9 +3384,14 @@ impl Kernel {
                 taps,
                 mode,
             } => smart(region, width, height, radius, threshold, taps, mode),
-            Self::Diffuse { .. } | Self::Wind { .. } | Self::Oil(_) => {
+            Self::Diffuse { .. }
+            | Self::Wind { .. }
+            | Self::Oil(_)
+            | Self::Halftone(_)
+            | Self::Mezzotint { .. } => {
                 self.region_at(region, width, height, [0, 0], [width, height]);
             }
+            &Self::Fragment(offset) => fragment(region, width, height, offset),
             &Self::Contour { level, upper } => contour(region, width, height, level, upper),
             Self::Identity => {}
         }
@@ -3021,7 +3412,10 @@ impl Kernel {
             | Self::Diffuse { .. }
             | Self::Wind { .. }
             | Self::Contour { .. }
-            | Self::Oil(_) => {
+            | Self::Oil(_)
+            | Self::Halftone(_)
+            | Self::Fragment(_)
+            | Self::Mezzotint { .. } => {
                 let mut image = image;
                 self.region(&mut image, width, height);
                 image
@@ -3105,19 +3499,11 @@ fn sobel(region: &mut [[f32; 4]], width: usize, height: usize) {
 /// `region` (`width` × `height`) in place: the pixel at `offset` after each one minus the one
 /// as far before it, read bilinearly, the edges repeating outward.
 fn relief(region: &mut [[f32; 4]], width: usize, height: usize, offset: [f64; 2]) {
+    if width == 0 || height == 0 {
+        return;
+    }
     let source = region.to_vec();
-    let at = |x: f64, y: f64| -> [f64; 4] {
-        let x = x.clamp(0.0, (width - 1) as f64);
-        let y = y.clamp(0.0, (height - 1) as f64);
-        let (x0, y0) = (x.floor() as usize, y.floor() as usize);
-        let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
-        let (a, b) = (x - x0 as f64, y - y0 as f64);
-        let px = |x: usize, y: usize| source[y * width + x].map(f64::from);
-        let (p00, p10, p01, p11) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
-        std::array::from_fn(|c| {
-            (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b) + (p01[c] * (1.0 - a) + p11[c] * a) * b
-        })
-    };
+    let at = |x: f64, y: f64| between(&source, width, height, x, y);
     let [dx, dy] = offset;
     for y in 0..height {
         for x in 0..width {
@@ -3126,6 +3512,301 @@ fn relief(region: &mut [[f32; 4]], width: usize, height: usize, offset: [f64; 2]
             region[y * width + x] = std::array::from_fn(|c| (after[c] - before[c]) as f32);
         }
     }
+}
+
+/// `source` (`width` × `height`, not empty) at (`x`, `y`) between its pixels' centers (whole
+/// numbers), bilinearly, its edges repeating outward.
+fn between(source: &[[f32; 4]], width: usize, height: usize, x: f64, y: f64) -> [f64; 4] {
+    let x = x.clamp(0.0, (width - 1) as f64);
+    let y = y.clamp(0.0, (height - 1) as f64);
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
+    let (a, b) = (x - x0 as f64, y - y0 as f64);
+    let px = |x: usize, y: usize| source[y * width + x].map(f64::from);
+    let (p00, p10, p01, p11) = (px(x0, y0), px(x1, y0), px(x0, y1), px(x1, y1));
+    std::array::from_fn(|c| {
+        (p00[c] * (1.0 - a) + p10[c] * a) * (1.0 - b) + (p01[c] * (1.0 - a) + p11[c] * a) * b
+    })
+}
+
+/// `region` (`width` × `height`) in place: Fragment ([`Kernel::Fragment`]), each pixel the
+/// average of the four pixels `offset` from it diagonally, read bilinearly, the edges repeating
+/// outward.
+fn fragment(region: &mut [[f32; 4]], width: usize, height: usize, offset: f64) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let source = region.to_vec();
+    let d = offset;
+    for y in 0..height {
+        for x in 0..width {
+            let (fx, fy) = (x as f64, y as f64);
+            let mut sum = [0.0f64; 4];
+            for [sx, sy] in [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]] {
+                let v = between(&source, width, height, fx + sx * d, fy + sy * d);
+                for c in 0..4 {
+                    sum[c] += v[c];
+                }
+            }
+            region[y * width + x] = sum.map(|v| (v / 4.0) as f32);
+        }
+    }
+}
+
+/// How many steps of a channel's value Color Halftone's table of dot radii has.
+const DOT_STEPS: usize = 256;
+
+/// Color Halftone's dot radius for each value of [`DOT_STEPS`], in parts of its cell's side:
+/// the disk centered in the unit square that covers `value` of it (computed once).
+fn dot_radii() -> &'static [f64; DOT_STEPS + 1] {
+    static RADII: std::sync::OnceLock<[f64; DOT_STEPS + 1]> = std::sync::OnceLock::new();
+    RADII.get_or_init(|| {
+        // The part of the unit square the centered disk of radius `r` covers.
+        let covered = |r: f64| {
+            if r <= 0.5 {
+                std::f64::consts::PI * r * r
+            } else if r < std::f64::consts::FRAC_1_SQRT_2 {
+                // The disk less its four caps beyond the square's sides.
+                let cap = r * r * (0.5 / r).acos() - 0.5 * (r * r - 0.25).sqrt();
+                std::f64::consts::PI * r * r - 4.0 * cap
+            } else {
+                1.0
+            }
+        };
+        std::array::from_fn(|i| {
+            let value = i as f64 / DOT_STEPS as f64;
+            // None, or the whole square (its corners: the disk through them).
+            if i == 0 {
+                return 0.0;
+            } else if i == DOT_STEPS {
+                return std::f64::consts::FRAC_1_SQRT_2;
+            }
+            let (mut low, mut high) = (0.0, std::f64::consts::FRAC_1_SQRT_2);
+            for _ in 0..48 {
+                let mid = (low + high) / 2.0;
+                if covered(mid) < value {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            high
+        })
+    })
+}
+
+/// The dot radius for `value` (0 to 1), in parts of its cell's side (see [`dot_radii`]).
+fn dot_radius(value: f64) -> f64 {
+    let radii = dot_radii();
+    let v = value.clamp(0.0, 1.0) * DOT_STEPS as f64;
+    let i = (v.floor() as usize).min(DOT_STEPS - 1);
+    radii[i] + (radii[i + 1] - radii[i]) * (v - i as f64)
+}
+
+/// `region` (`width` × `height`, its first pixel pixel `origin` of the layer) in place: Color
+/// Halftone ([`Kernel::Halftone`]), the edges repeating outward.
+///
+/// For each channel, the screen's cells around the pixel (its own and the eight around it, the
+/// screen's cells being the Voronoi cells of their centers): each one's dot of the radius
+/// covering as much of its cell as the channel's value at its center (the layer blurred by a
+/// box of about half a cell), anti-aliased over a pixel; the channel full where a dot covers
+/// the pixel, none elsewhere, the pixel keeping its opacity.
+fn halftone(
+    region: &mut [[f32; 4]],
+    width: usize,
+    height: usize,
+    screen: &Halftone,
+    origin: [i64; 2],
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let mut blurred = region.to_vec();
+    Blur::Boxes([screen.blur, 0, 0]).region(&mut blurred, width, height);
+    let side = screen.side;
+    let farthest = screen.radius() + 0.5;
+    for y in 0..height {
+        for x in 0..width {
+            let i = y * width + x;
+            let alpha = region[i][3];
+            if alpha <= 0.0 {
+                continue;
+            }
+            // The pixel's center from the layer's origin.
+            let p = [
+                (origin[0] + x as i64) as f64 + 0.5,
+                (origin[1] + y as i64) as f64 + 0.5,
+            ];
+            let mut out = [0.0f32; 3];
+            for (ch, v) in out.iter_mut().enumerate() {
+                let [e1, e2] = screen.axes[ch];
+                let u = ((p[0] * e1[0] + p[1] * e1[1]) / side).floor();
+                let w = ((p[0] * e2[0] + p[1] * e2[1]) / side).floor();
+                let mut full = 0.0f64;
+                for dj in -1..=1 {
+                    for di in -1..=1 {
+                        let (a, b) = (u + f64::from(di) + 0.5, w + f64::from(dj) + 0.5);
+                        let c = [
+                            side * (a * e1[0] + b * e2[0]),
+                            side * (a * e1[1] + b * e2[1]),
+                        ];
+                        let d = ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt();
+                        if d >= farthest {
+                            continue;
+                        }
+                        let at = between(
+                            &blurred,
+                            width,
+                            height,
+                            c[0] - 0.5 - origin[0] as f64,
+                            c[1] - 0.5 - origin[1] as f64,
+                        );
+                        let value = if at[3] > 0.0 { at[ch] / at[3] } else { 0.0 };
+                        // A full dot covers its whole cell, the pixel's own (its corners too,
+                        // where the dots only touch).
+                        if value >= 1.0 && di == 0 && dj == 0 {
+                            full = 1.0;
+                            break;
+                        }
+                        let r = dot_radius(value) * side;
+                        // Over a pixel, no more than the dot's area (a speck stays faint).
+                        let k = (r + 0.5 - d)
+                            .clamp(0.0, 1.0)
+                            .min(std::f64::consts::PI * r * r);
+                        full = full.max(k);
+                    }
+                }
+                *v = full as f32;
+            }
+            region[i] = [out[0] * alpha, out[1] * alpha, out[2] * alpha, alpha];
+        }
+    }
+}
+
+/// `region` (`width` × `height`, its first pixel pixel `origin` of a level whose pixels are
+/// `reduction` of the layer's a side) in place: Mezzotint ([`Kernel::Mezzotint`]). Each
+/// channel of each of the layer's pixels full where its value is above the pattern's
+/// threshold there, none elsewhere; a pixel of a reduced level the share of the layer's pixels
+/// under it (up to [`MEZZOTINT_SAMPLES`] a side) that are full; each pixel keeping its opacity.
+fn mezzotint(
+    region: &mut [[f32; 4]],
+    width: usize,
+    height: usize,
+    kind: MezzotintType,
+    seed: u32,
+    reduction: usize,
+    origin: [i64; 2],
+) {
+    let n = reduction.clamp(1, MEZZOTINT_SAMPLES);
+    let r = reduction.max(1) as i64;
+    let samples = (n * n) as f32;
+    for y in 0..height {
+        for x in 0..width {
+            let i = y * width + x;
+            let own = region[i];
+            let alpha = own[3];
+            if alpha <= 0.0 {
+                continue;
+            }
+            let (lx, ly) = ((origin[0] + x as i64) * r, (origin[1] + y as i64) * r);
+            let mut out = [0.0f32; 3];
+            for (ch, v) in out.iter_mut().enumerate() {
+                let value = f64::from(own[ch] / alpha);
+                let mut full = 0;
+                for sy in 0..n {
+                    for sx in 0..n {
+                        // Evenly spaced over the pixel's square of the layer.
+                        let at = [
+                            lx + (sx as i64 * r) / n as i64,
+                            ly + (sy as i64 * r) / n as i64,
+                        ];
+                        full += usize::from(value > threshold(kind, at, seed, ch as u32));
+                    }
+                }
+                *v = full as f32 / samples;
+            }
+            region[i] = [out[0] * alpha, out[1] * alpha, out[2] * alpha, alpha];
+        }
+    }
+}
+
+/// Mezzotint's threshold (0 to 1, uniform) for channel `channel` of layer pixel `at`: drawn for
+/// each pixel (Fine Dots), for clumps of about 2 or 4 pixels (Medium, Coarse), for either
+/// (Grainy, half and half), for runs of a row (Lines: 4, 12 or 32 pixels, each row's runs
+/// starting at a place of their own) or of a diagonal down to the right (Strokes: 4, 8 or 16).
+fn threshold(kind: MezzotintType, at: [i64; 2], seed: u32, channel: u32) -> f64 {
+    use MezzotintType as T;
+    let salt = 0x3e20 + channel * 16;
+    let [x, y] = at;
+    let clump = |size: f64| {
+        let p = [x as f64 + 0.5, y as f64 + 0.5];
+        // The point's draws take `salt + 6` and `salt + 7`.
+        draw(nearest_square(p, size, seed, salt + 6, 0.5), seed, salt + 8)
+    };
+    let run = |length: i64| {
+        let shift = (draw([0, y], seed, salt + 2) * length as f64) as i64;
+        draw([(x + shift).div_euclid(length), y], seed, salt + 3)
+    };
+    let stroke = |length: i64| {
+        let diagonal = x - y;
+        let shift = (draw([diagonal, 0], seed, salt + 4) * length as f64) as i64;
+        draw([diagonal, (y + shift).div_euclid(length)], seed, salt + 5)
+    };
+    match kind {
+        T::FineDots => draw(at, seed, salt),
+        T::MediumDots => clump(2.0),
+        T::GrainyDots => {
+            if draw(at, seed, salt + 1) < 0.5 {
+                draw(at, seed, salt)
+            } else {
+                clump(2.0)
+            }
+        }
+        T::CoarseDots => clump(4.0),
+        T::ShortLines => run(4),
+        T::MediumLines => run(12),
+        T::LongLines => run(32),
+        T::ShortStrokes => stroke(4),
+        T::MediumStrokes => stroke(8),
+        T::LongStrokes => stroke(16),
+    }
+}
+
+/// The point drawn from `seed` and `salt` in square `square` of `cell` pixels from the layer's
+/// origin (Crystallize's, Pointillize's, Mezzotint's clumps): anywhere in it (`jitter` 1), or
+/// within its middle (`jitter` 0.5: half of it on each axis).
+fn cell_point(square: [i64; 2], cell: f64, seed: u32, salt: u32, jitter: f64) -> [f64; 2] {
+    let along = |axis: usize| {
+        let u = 0.5 + (draw(square, seed, salt + axis as u32) - 0.5) * jitter;
+        (square[axis] as f64 + u) * cell
+    };
+    [along(0), along(1)]
+}
+
+/// The square whose [`cell_point`] is closest to `p` (layer pixels), ties to the first row by
+/// row. Exact: with points anywhere in their squares, the closest is no farther than the one of
+/// `p`'s own square (a square's diagonal), so within two squares of it; with points in their
+/// middle (`jitter` 0.5), within one.
+fn nearest_square(p: [f64; 2], cell: f64, seed: u32, salt: u32, jitter: f64) -> [i64; 2] {
+    let span = if jitter > 0.5 { 2 } else { 1 };
+    let (ci, cj) = ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64);
+    let mut best = (f64::MAX, [ci, cj]);
+    for j in cj - span..=cj + span {
+        for i in ci - span..=ci + span {
+            let q = cell_point([i, j], cell, seed, salt, jitter);
+            let d = (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2);
+            if d < best.0 {
+                best = (d, [i, j]);
+            }
+        }
+    }
+    best.1
+}
+
+/// The center of the layer pixel `q` (layer pixels) lies in, within the layer of `layer`
+/// pixels.
+fn pixel_center(q: [f64; 2], layer: [f64; 2]) -> [f64; 2] {
+    std::array::from_fn(|i| q[i].floor().clamp(0.0, (layer[i] - 1.0).max(0.0)) + 0.5)
 }
 
 /// `region` (`width` × `height`, its first pixel pixel `origin` of a layer of `layer` pixels) in
@@ -5688,5 +6369,329 @@ mod tests {
             [0, 0],
         );
         assert!(grained.iter().any(|p| (p[0] - 0.5).abs() > 0.001));
+    }
+
+    #[test]
+    fn pixelate_settings_are_photoshops_ranges() {
+        // Photoshop's defaults.
+        assert_eq!(
+            Filter::defaults("colorHalftone").unwrap().params(),
+            [8.0, 108.0, 162.0, 90.0]
+        );
+        assert_eq!(
+            Filter::defaults("crystallize").unwrap().params(),
+            [10.0, 0.0]
+        );
+        assert_eq!(
+            Filter::defaults("pointillize").unwrap().params(),
+            [5.0, 0xffffff as f32, 0.0]
+        );
+        assert_eq!(Filter::defaults("mezzotint").unwrap().params(), [0.0, 0.0]);
+        assert!(Filter::defaults("facet").unwrap().params().is_empty());
+        assert!(Filter::defaults("fragment").unwrap().params().is_empty());
+        let halftone = |radius, angle| Filter::ColorHalftone {
+            radius,
+            angles: [angle, 162.0, 90.0],
+        };
+        assert!(halftone(4.0, -360.0).is_valid() && halftone(127.0, 360.0).is_valid());
+        for wrong in [
+            halftone(3.0, 0.0),
+            halftone(128.0, 0.0),
+            halftone(8.5, 0.0),
+            halftone(8.0, 361.0),
+            halftone(8.0, 0.5),
+        ] {
+            assert!(!wrong.is_valid(), "{wrong:?}");
+        }
+        let crystallize = |cell| Filter::Crystallize { cell, seed: 0 };
+        let pointillize = |cell| Filter::Pointillize {
+            cell,
+            background: [255; 3],
+            seed: 0,
+        };
+        assert!(crystallize(3.0).is_valid() && crystallize(300.0).is_valid());
+        assert!(pointillize(3.0).is_valid() && pointillize(300.0).is_valid());
+        for cell in [2.0, 301.0, 10.5] {
+            assert!(!crystallize(cell).is_valid() && !pointillize(cell).is_valid());
+        }
+        // Mezzotint's ten types, in Photoshop's order.
+        for (i, kind) in MezzotintType::ALL.iter().enumerate() {
+            let filter = Filter::from_params("mezzotint", &[i as f32, 7.0]).unwrap();
+            assert_eq!(
+                filter,
+                Filter::Mezzotint {
+                    kind: *kind,
+                    seed: 7,
+                    reduction: 1.0
+                }
+            );
+            assert_eq!(
+                Filter::from_params("mezzotint", &filter.params()),
+                Some(filter)
+            );
+        }
+        assert_eq!(Filter::from_params("mezzotint", &[10.0, 0.0]), None);
+        assert_eq!(Filter::from_params("mezzotint", &[1.5, 0.0]), None);
+        assert_eq!(Filter::from_params("facet", &[1.0]), None);
+        // Looks of reduced levels: smaller dots, Facet's radius down to nothing, Fragment's
+        // offset; Crystallize's and Pointillize's cells stay in the layer's pixels.
+        let dots = halftone(8.0, 108.0);
+        assert_eq!(dots.scaled(2.0), halftone(4.0, 108.0));
+        assert!(dots.scaled(2.0).reach() < dots.reach());
+        assert!(matches!(dots.scaled(8.0).plan().kernel, Kernel::Identity));
+        let facet = Filter::defaults("facet").unwrap();
+        assert!(matches!(
+            facet.plan().kernel,
+            Kernel::Oil(Oil { radius: 2, .. })
+        ));
+        assert!(matches!(
+            facet.scaled(2.0).plan().kernel,
+            Kernel::Oil(Oil { radius: 1, .. })
+        ));
+        assert!(matches!(facet.scaled(8.0).plan().kernel, Kernel::Identity));
+        let fragment = Filter::defaults("fragment").unwrap();
+        assert!(matches!(
+            fragment.scaled(4.0).plan().kernel,
+            Kernel::Fragment(d) if d == 1.0
+        ));
+        for id in ["crystallize", "pointillize"] {
+            let f = Filter::defaults(id).unwrap();
+            assert!(
+                f.samples() && f.scaled(4.0) == f && !f.reads_original(),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn crystallize_reads_each_pixel_at_its_closest_point() {
+        let (w, h) = (90.0, 70.0);
+        let layer = [w, h];
+        let frame = [0.0, 0.0, w, h];
+        let cell = 10.0;
+        let filter = Filter::Crystallize {
+            cell: 10.0,
+            seed: 3,
+        };
+        // Every square's point, brute force.
+        let points: Vec<[f64; 2]> = (-1..10)
+            .flat_map(|j| (-1..11).map(move |i| [i, j]))
+            .map(|square| cell_point(square, cell, 3, CRYSTAL_SALT, 1.0))
+            .collect();
+        let distance = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+        let mut sources = std::collections::BTreeSet::new();
+        for y in 0..70 {
+            for x in 0..90 {
+                let p = [x as f64 + 0.5, y as f64 + 0.5];
+                let q = filter.source(p, frame, layer).expect("a point");
+                let closest = points
+                    .iter()
+                    .copied()
+                    .min_by(|a, b| distance(*a, p).total_cmp(&distance(*b, p)))
+                    .expect("points");
+                assert_eq!(q, pixel_center(closest, layer), "({x}, {y})");
+                // A pixel's center within the layer, within a cell's diagonal of the pixel.
+                assert!(q[0] > 0.0 && q[1] > 0.0 && q[0] < w && q[1] < h);
+                assert!(distance(q, p) <= cell * 1.5 + 1.0);
+                sources.insert([q[0] as i64, q[1] as i64]);
+            }
+        }
+        // About a polygon a square, wherever the frame is.
+        assert!((50..=90).contains(&sources.len()), "{}", sources.len());
+        let p = [33.5, 21.5];
+        assert_eq!(
+            filter.source(p, [20.0, 10.0, 40.0, 30.0], layer),
+            filter.source(p, frame, layer)
+        );
+        // Another seed, other polygons.
+        let other = Filter::Crystallize {
+            cell: 10.0,
+            seed: 4,
+        };
+        let moved = (0..90)
+            .filter(|&x| {
+                let p = [x as f64 + 0.5, 30.5];
+                other.source(p, frame, layer) != filter.source(p, frame, layer)
+            })
+            .count();
+        assert!(moved > 45, "{moved}");
+    }
+
+    #[test]
+    fn pointillize_draws_dots_of_the_layer_on_its_background() {
+        let layer = [120.0, 80.0];
+        let frame = [0.0, 0.0, 120.0, 80.0];
+        let cell = 8.0;
+        let filter = Filter::Pointillize {
+            cell: 8.0,
+            background: [10, 20, 30],
+            seed: 5,
+        };
+        let mut background = 0;
+        for y in 0..80 {
+            for x in 0..120 {
+                let p = [x as f64 + 0.5, y as f64 + 0.5];
+                // The last dot over the pixel, row by row, brute force.
+                let mut last = None;
+                for j in -1..11 {
+                    for i in -1..16 {
+                        let q = cell_point([i, j], cell, 5, DOT_SALT, 1.0);
+                        let [low, high] = DOT_RADIUS;
+                        let r = cell * (low + (high - low) * draw([i, j], 5, DOT_SALT + 2));
+                        if (q[0] - p[0]).hypot(q[1] - p[1]) <= r {
+                            last = Some(pixel_center(q, layer));
+                        }
+                    }
+                }
+                let source = filter.source(p, frame, layer);
+                assert_eq!(source, last, "({x}, {y})");
+                background += usize::from(source.is_none());
+            }
+        }
+        // Dots over most of the layer, the background between them.
+        let share = background as f64 / (120.0 * 80.0);
+        assert!((0.15..0.5).contains(&share), "{share}");
+        let colors = Some([[0.1, 0.1, 0.1, 1.0], [0.2, 0.3, 0.4, 1.0]]);
+        assert_eq!(filter.gap([0.5; 4], colors), [0.2, 0.3, 0.4, 1.0]);
+        assert_eq!(filter.colors(), Some([[10, 20, 30]; 2]));
+    }
+
+    #[test]
+    fn color_halftone_dots_cover_as_much_as_each_channel_and_keep_its_tone() {
+        // The radius covering a value of the unit square, from none to the whole of it.
+        assert_eq!(dot_radius(0.0), 0.0);
+        assert!((dot_radius(1.0) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-9);
+        for v in [0.1, 0.5, 0.7] {
+            let r = dot_radius(v);
+            let n = 400;
+            let mut count = 0;
+            for j in 0..n {
+                for i in 0..n {
+                    let (x, y) = ((i as f64 + 0.5) / n as f64, (j as f64 + 0.5) / n as f64);
+                    count += usize::from((x - 0.5).hypot(y - 0.5) <= r);
+                }
+            }
+            let covered = count as f64 / (n * n) as f64;
+            assert!((covered - v).abs() < 0.01, "{v}: {covered}");
+        }
+        // A flat color: each channel's dots cover about its share, half-transparent pixels kept
+        // so.
+        let (w, h) = (160, 120);
+        let flat = [0.2 * 0.5, 0.5 * 0.5, 0.9 * 0.5, 0.5];
+        let screen = Halftone::new(6.0, [108.0, 162.0, 90.0]);
+        let mut out = vec![flat; w * h];
+        halftone(&mut out, w, h, &screen, [0, 0]);
+        let reach = screen.reach();
+        for (c, value) in [0.2, 0.5, 0.9].into_iter().enumerate() {
+            let (mut sum, mut n) = (0.0, 0.0);
+            for y in reach..h - reach {
+                for x in reach..w - reach {
+                    let px = out[y * w + x];
+                    assert_eq!(px[3], 0.5);
+                    sum += f64::from(px[c] / px[3]);
+                    n += 1.0;
+                }
+            }
+            assert!((sum / n - value).abs() < 0.03, "channel {c}: {}", sum / n);
+        }
+        let mut black = vec![[0.0, 0.0, 0.0, 1.0]; w * h];
+        halftone(&mut black, w, h, &screen, [0, 0]);
+        assert!(black.iter().all(|p| *p == [0.0, 0.0, 0.0, 1.0]));
+        let mut white = vec![[1.0; 4]; w * h];
+        halftone(&mut white, w, h, &screen, [0, 0]);
+        assert!(white.iter().all(|p| *p == [1.0; 4]));
+        // A part of the layer, from its place: the same dots.
+        let image: Vec<[f32; 4]> = (0..w * h)
+            .map(|i| {
+                let v = (i % w) as f32 / w as f32;
+                [v, 1.0 - v, 0.5, 1.0]
+            })
+            .collect();
+        let mut whole = image.clone();
+        halftone(&mut whole, w, h, &screen, [0, 0]);
+        let (ox, oy, rw, rh) = (37usize, 21usize, 90usize, 80usize);
+        let mut part: Vec<[f32; 4]> = (0..rw * rh)
+            .map(|i| image[(oy + i / rw) * w + ox + i % rw])
+            .collect();
+        halftone(&mut part, rw, rh, &screen, [ox as i64, oy as i64]);
+        for y in reach..rh - reach {
+            for x in reach..rw - reach {
+                assert_eq!(part[y * rw + x], whole[(oy + y) * w + ox + x], "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn fragment_averages_four_copies_diagonally_apart() {
+        let (w, h) = (20, 20);
+        let mut point = vec![[0.0f32; 4]; w * h];
+        point[10 * w + 10] = [1.0; 4];
+        fragment(&mut point, w, h, FRAGMENT_OFFSET);
+        for y in 0..h {
+            for x in 0..w {
+                let copy = [6, 14].contains(&x) && [6, 14].contains(&y);
+                let v = if copy { 0.25 } else { 0.0 };
+                assert_eq!(at(&point, w, x, y), [v; 4], "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn mezzotint_makes_each_channel_full_or_none_as_often_as_its_value() {
+        let (w, h) = (128, 128);
+        let flat = [0.3 * 0.5, 0.6 * 0.5, 0.0, 0.5];
+        for kind in MezzotintType::ALL {
+            let mut out = vec![flat; w * h];
+            mezzotint(&mut out, w, h, kind, 2, 1, [0, 0]);
+            for (c, value) in [0.3, 0.6, 0.0].into_iter().enumerate() {
+                assert!(
+                    out.iter()
+                        .all(|p| (p[c] == 0.5 || p[c] == 0.0) && p[3] == 0.5)
+                );
+                let full = out.iter().filter(|p| p[c] == 0.5).count();
+                let share = full as f64 / (w * h) as f64;
+                assert!(
+                    (share - value).abs() < 0.06,
+                    "{kind:?} channel {c}: {share}"
+                );
+            }
+            // A part of the layer, from its place: the same pattern.
+            let mut part = vec![flat; 40 * 30];
+            mezzotint(&mut part, 40, 30, kind, 2, 1, [50, 60]);
+            for y in 0..30 {
+                for x in 0..40 {
+                    assert_eq!(at(&part, 40, x, y), at(&out, w, 50 + x, 60 + y), "{kind:?}");
+                }
+            }
+        }
+        // Lines run along the rows, strokes along the diagonals: a channel changes less often
+        // that way than across; clumps less often than single dots.
+        let changes = |kind, step: [usize; 2]| {
+            let mut out = vec![[0.5, 0.5, 0.5, 1.0]; w * h];
+            mezzotint(&mut out, w, h, kind, 2, 1, [0, 0]);
+            (0..h - 1)
+                .flat_map(|y| (0..w - 1).map(move |x| (x, y)))
+                .filter(|&(x, y)| at(&out, w, x, y)[0] != at(&out, w, x + step[0], y + step[1])[0])
+                .count()
+        };
+        let long = MezzotintType::LongLines;
+        assert!(changes(long, [1, 0]) * 4 < changes(long, [0, 1]));
+        let strokes = MezzotintType::LongStrokes;
+        assert!(changes(strokes, [1, 1]) * 4 < changes(strokes, [1, 0]));
+        assert!(
+            changes(MezzotintType::CoarseDots, [1, 0]) * 2
+                < changes(MezzotintType::FineDots, [1, 0])
+        );
+        // A reduced level: the share of the layer's pixels under each, about the value.
+        let mut reduced = vec![flat; 32 * 32];
+        mezzotint(&mut reduced, 32, 32, MezzotintType::FineDots, 2, 4, [0, 0]);
+        let mean = reduced.iter().map(|p| f64::from(p[0] / p[3])).sum::<f64>() / 1024.0;
+        assert!((mean - 0.3).abs() < 0.03, "{mean}");
+        assert!(
+            reduced
+                .iter()
+                .all(|p| ((p[0] / p[3]) * 16.0).fract().abs() < 1e-4)
+        );
+        assert!(reduced.iter().any(|p| p[0] > 0.0 && p[0] < p[3]));
     }
 }
