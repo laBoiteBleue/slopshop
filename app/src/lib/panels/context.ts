@@ -10,6 +10,7 @@ import type {
   FontsView,
   LayerView,
   PathRef,
+  LutView,
   SelectionMode,
   TextAlign,
   TextDto,
@@ -37,6 +38,9 @@ export type PanelContext = {
   pickShapeColor(layer: LayerView, which: "fill" | "stroke"): void;
   /** Another library pattern chosen for a pattern fill layer (ADR 0042). */
   pickPattern(layer: LayerView): void;
+  /** Color Lookup's Load 3D LUT: a `.cube` or `.3dl` file chosen and read (null: cancelled or
+   * refused, the error shown). */
+  loadColorLookup(): Promise<LutView | null>;
   /** The active text layer being typed: its text as typed and the characters selected. */
   readonly typedText: {
     text: TextDto;

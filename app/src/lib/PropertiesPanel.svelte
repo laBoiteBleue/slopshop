@@ -11,6 +11,7 @@
     EditRequest,
     FontsView,
     LayerView,
+    LutView,
     TextAlign,
     TextDto,
   } from "./engine";
@@ -49,6 +50,7 @@
     onstyletext,
     onaligntext,
     ontextcolor,
+    loadLut,
   }: {
     documentId: number;
     /** An adjustment or a fill layer. */
@@ -84,6 +86,8 @@
     onaligntext?: (align: TextAlign) => void;
     /** The text's color swatch was clicked: the app lets a color be chosen. */
     ontextcolor?: () => void;
+    /** Color Lookup's Load 3D LUT: a file chosen and read (null: cancelled or refused). */
+    loadLut?: () => Promise<LutView | null>;
     onedit: (documentId: number, edit: EditRequest) => void;
     onlive: (documentId: number, edit: EditRequest) => void;
     ongestureend: (documentId: number) => void;
@@ -96,16 +100,23 @@
   );
   let fields = $state<AdjustmentFields | null>(null);
 
-  /** The edit with these settings (Gradient Map: its stops, these or the layer's). */
-  function request(values: number[], gradient?: number[][]): EditRequest | null {
+  /** The edit with these settings (Gradient Map: its stops, these or the layer's; Color
+   * Lookup: its table, this one, none for null, or the layer's). */
+  function request(
+    values: number[],
+    gradient?: number[][],
+    lut?: number | null,
+  ): EditRequest | null {
     if (!adjustment) return null;
     const stops = gradient ?? adjustment.gradient ?? undefined;
+    const table = lut === undefined ? (adjustment.lut?.id ?? null) : lut;
     return {
       kind: "setAdjustment",
       id: layer.id,
       adjustment: adjustment.id,
       values,
       ...(stops ? { gradient: stops } : {}),
+      ...(adjustment.id === "colorLookup" && table !== null ? { lut: table } : {}),
     };
   }
 
@@ -114,13 +125,13 @@
     return { kind: "setAdjustment", id: layer.id, adjustment: "curves", values: [], curves };
   }
 
-  function live(values: number[], gradient?: number[][]) {
-    const edit = request(values, gradient);
+  function live(values: number[], gradient?: number[][], lut?: number | null) {
+    const edit = request(values, gradient, lut);
     if (edit) onlive(documentId, edit);
   }
 
-  function apply(values: number[], gradient?: number[][]) {
-    const edit = request(values, gradient);
+  function apply(values: number[], gradient?: number[][], lut?: number | null) {
+    const edit = request(values, gradient, lut);
     if (edit) onedit(documentId, edit);
   }
 
@@ -323,6 +334,7 @@
       onend={() => ongestureend(documentId)}
       oncurveslive={(curves) => onlive(documentId, curvesRequest(curves))}
       oncurvesapply={(curves) => onedit(documentId, curvesRequest(curves))}
+      {loadLut}
     />
   </section>
 {/if}
