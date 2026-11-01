@@ -25,7 +25,7 @@ install = ["dep:ureq", "dep:sha2", "dep:flate2"]
 # linked or downloaded at build time; the runtime library is opened from a path at start.
 # `api-24`: ONNX Runtime 1.24, the last DirectML release (ADR 0025). Release candidate: the 2.0
 # API is the one maintained.
-ort = { version = "=2.0.0-rc.13", default-features = false, optional = true, features = [
+ort = { version = "=2.0.0-rc.15", default-features = false, optional = true, features = [
     "std",
     "load-dynamic",
     "api-24",
