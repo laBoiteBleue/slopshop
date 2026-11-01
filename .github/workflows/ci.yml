@@ -144,7 +144,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ env.AI_ROOT }}
           key: ai-${{ matrix.os }}-${{ hashFiles('crates/slopshop-ai/src/manifest.rs') }}
